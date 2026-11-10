@@ -6,8 +6,13 @@
 import registerRfs from './rfs.js';
 import registerBom from './bom.js';
 import registerTraffic from './traffic.js';
+import registerInterstateRoads from './interstateRoads.js';
 import registerBeach from './beach.js';
 import registerWeather from './weather.js';
+import { registerWeatherGridSource } from './weatherGridSource.js';
+import { registerMarineGridSource } from './weatherMarineSource.js';
+import { registerFloodGridSource } from './weatherFloodSource.js';
+import { registerAirGridSource } from './weatherAirSource.js';
 import registerPager from './pager.js';
 import registerAviation from './aviation.js';
 import registerFirms from './firms.js';
@@ -20,13 +25,19 @@ import registerQldFire from './qldFire.js';
 import registerVicEmergency from './vicEmergency.js';
 import registerWaEmergency from './waEmergency.js';
 import registerSaFire from './saFire.js';
+import registerDorsal from './dorsal.js';
 
 export function registerAllSources(): void {
   registerRfs();
   registerBom();
   registerTraffic();
+  registerInterstateRoads();
   registerBeach();
   registerWeather();
+  registerWeatherGridSource();
+  registerMarineGridSource();
+  registerFloodGridSource();
+  registerAirGridSource();
   registerPager();
   registerAviation();
   registerFirms();
@@ -39,4 +50,5 @@ export function registerAllSources(): void {
   registerVicEmergency();
   registerWaEmergency();
   registerSaFire();
+  registerDorsal();
 }

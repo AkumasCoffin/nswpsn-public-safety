@@ -38,9 +38,10 @@
   <link rel="manifest" href="./site.webmanifest">
 
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
-  <script src="livetraffic-vocab.js?v=1"></script>
+  <script src="livetraffic-vocab.js?v=3"></script>
   <script src="fire-vocab.js?v=3"></script>
   <script src="auth-common.js"></script>
+  <script src="api-session.js"></script>
   <script src="ui-dialogs.js"></script>
 </head>
 <body>
@@ -372,7 +373,6 @@
   <script>
     // === CONFIG ===
     const API_BASE = 'https://api.forcequit.xyz';
-    let API_KEY = '';
     let pageSize = 20; // configurable — keep low so each list query is cheap
     const LOGS_PAGE_ID = 'logs_' + Math.random().toString(36).substr(2, 9);
     const LOGS_PAGE_TYPE = 'logs';
@@ -483,36 +483,21 @@
     }
     
     // === API HELPERS ===
+    // Every call carries the page's browser session token (api-session.js):
+    // it mints on first use, refreshes itself and retries one 401. When no
+    // token can be had the promise rejects, so the caller's catch sees a real
+    // error instead of a confusing 401.
     async function apiFetch(url) {
-      // Never fire a request with an empty/missing key — that silently goes
-      // out as `api_key=` (unauthenticated) and the failure is opaque. Try
-      // to (re)load config first; if it still isn't there, surface a real
-      // error so the caller's catch handles it instead of a confusing 401.
-      if (!API_KEY) await loadApiConfig();
-      if (!API_KEY) throw new Error('API key unavailable — /api/config failed to load');
-      return fetch(url, { headers: { 'Authorization': `Bearer ${API_KEY}` } });
+      return AusApi.fetch(url);
     }
 
-    let _apiConfigPromise = null;
+    // Warm the token before the first page of results.
     async function loadApiConfig() {
-      // Cache the in-flight load so concurrent callers share one request,
-      // but DROP the cache if we still don't have a key, so a transient
-      // /api/config failure can be retried on the next call rather than
-      // permanently leaving every request unauthenticated.
-      if (API_KEY) return;
-      if (_apiConfigPromise) return _apiConfigPromise;
-      _apiConfigPromise = (async () => {
-        try {
-          const res = await fetch(`${API_BASE}/api/config`);
-          const config = await res.json();
-          if (config && config.apiKey) API_KEY = config.apiKey;
-        } catch (e) {
-          console.error('Failed to load API config:', e);
-        } finally {
-          if (!API_KEY) _apiConfigPromise = null;
-        }
-      })();
-      return _apiConfigPromise;
+      try {
+        await AusApi.token();
+      } catch (e) {
+        console.error('Failed to get an API session:', e);
+      }
     }
     
     // === HEARTBEAT ===
@@ -564,9 +549,9 @@
     async function loadFilters() {
       try {
         const hours = getHoursParam();
-        const url = hours ? `${API_BASE}/api/data/history/filters?hours=${hours}` : `${API_BASE}/api/data/history/filters`;
+        const url = hours ? `${API_BASE}/api/v1/history/filters?hours=${hours}` : `${API_BASE}/api/v1/history/filters`;
         const res = await apiFetch(url);
-        const data = await res.json();
+        const data = (await res.json()).data;
 
         // Add provider options (icon from API is just the name like 'car', we add 'fa-' prefix)
         // Providers used to be matched against a hardcoded name->icon map
@@ -641,8 +626,8 @@
           const opt = document.createElement('div');
           opt.className = 'custom-dropdown-option';
           opt.dataset.value = p.name;
-          const iconName = p.icon || 'circle';
-          const iconColor = p.color || '#64748b';
+          const iconName = safeIconName(p.icon, 'circle');
+          const iconColor = safeIconColor(p.color, '#64748b');
           opt.dataset.icon = iconName;
           opt.dataset.color = iconColor;
           opt.innerHTML = `<i class="fa-solid fa-${iconName}" style="color: ${iconColor};"></i><span>${escapeHtml(p.name)}</span><span class="option-count">${p.count.toLocaleString()}</span>`;
@@ -684,9 +669,9 @@
       
       // Update displayed selection (icon is just the name like 'car', we add 'fa-' prefix)
       const selectedEl = document.querySelector('#provider-dropdown .custom-dropdown-selected');
-      const iconName = icon || 'circle';
-      const iconColor = color || '#64748b';
-      selectedEl.innerHTML = `<i class="fa-solid fa-${iconName} provider-icon" style="color: ${iconColor};"></i><span id="provider-selected-text">${text}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
+      const iconName = safeIconName(icon, 'circle');
+      const iconColor = safeIconColor(color, '#64748b');
+      selectedEl.innerHTML = `<i class="fa-solid fa-${iconName} provider-icon" style="color: ${iconColor};"></i><span id="provider-selected-text">${escapeHtml(text)}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
       
       // Update selected state in options
       document.querySelectorAll('#provider-options .custom-dropdown-option').forEach(opt => {
@@ -751,9 +736,9 @@
       
       // Update displayed selection
       const selectedEl = document.querySelector('#type-dropdown .custom-dropdown-selected');
-      const iconName = icon || 'layer-group';
-      const iconColor = color || '#64748b';
-      selectedEl.innerHTML = `<i class="fa-solid fa-${iconName} provider-icon" style="color: ${iconColor};"></i><span id="type-selected-text">${text}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
+      const iconName = safeIconName(icon, 'layer-group');
+      const iconColor = safeIconColor(color, '#64748b');
+      selectedEl.innerHTML = `<i class="fa-solid fa-${iconName} provider-icon" style="color: ${iconColor};"></i><span id="type-selected-text">${escapeHtml(text)}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
       
       // Update selected state in options
       document.querySelectorAll('#type-options .custom-dropdown-option').forEach(opt => {
@@ -793,9 +778,9 @@
       
       // Update displayed selection
       const selectedEl = document.querySelector('#subcategory-dropdown .custom-dropdown-selected');
-      const iconName = icon || 'tags';
-      const iconColor = color || '#64748b';
-      selectedEl.innerHTML = `<i class="fa-solid fa-${iconName} provider-icon" style="color: ${iconColor};"></i><span id="subcategory-selected-text">${text}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
+      const iconName = safeIconName(icon, 'tags');
+      const iconColor = safeIconColor(color, '#64748b');
+      selectedEl.innerHTML = `<i class="fa-solid fa-${iconName} provider-icon" style="color: ${iconColor};"></i><span id="subcategory-selected-text">${escapeHtml(text)}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
       
       // Update selected state in options
       document.querySelectorAll('#subcategory-options .custom-dropdown-option').forEach(opt => {
@@ -810,7 +795,7 @@
       document.getElementById('filter-subcategory').value = '';
       const selectedEl = document.querySelector('#subcategory-dropdown .custom-dropdown-selected');
       if (selectedEl) {
-        selectedEl.innerHTML = `<i class="fa-solid fa-tags provider-icon"></i><span id="subcategory-selected-text">${labelText}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
+        selectedEl.innerHTML = `<i class="fa-solid fa-tags provider-icon"></i><span id="subcategory-selected-text">${escapeHtml(labelText)}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
       }
       const optionsContainer = document.getElementById('subcategory-options');
       if (optionsContainer) optionsContainer.innerHTML = '';
@@ -976,9 +961,9 @@
     function selectStatus(value, text, icon, color) {
       document.getElementById('filter-incident-status').value = value;
       const selectedEl = document.querySelector('#status-dropdown .custom-dropdown-selected');
-      const iconName = icon || 'clipboard-list';
-      const iconColor = color || '#64748b';
-      selectedEl.innerHTML = `<i class="fa-solid fa-${iconName} provider-icon" style="color: ${iconColor};"></i><span id="status-selected-text">${text}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
+      const iconName = safeIconName(icon, 'clipboard-list');
+      const iconColor = safeIconColor(color, '#64748b');
+      selectedEl.innerHTML = `<i class="fa-solid fa-${iconName} provider-icon" style="color: ${iconColor};"></i><span id="status-selected-text">${escapeHtml(text)}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
       document.querySelectorAll('#status-options .custom-dropdown-option').forEach(opt => {
         opt.classList.toggle('selected', opt.dataset.value === value);
       });
@@ -1018,9 +1003,9 @@
     function selectAlertLevel(value, text, icon, color) {
       document.getElementById('filter-alert-level').value = value;
       const selectedEl = document.querySelector('#alert-level-dropdown .custom-dropdown-selected');
-      const iconName = icon || 'bell';
-      const iconColor = color || '#64748b';
-      selectedEl.innerHTML = `<i class="fa-solid fa-${iconName} provider-icon" style="color: ${iconColor};"></i><span id="alert-level-selected-text">${text}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
+      const iconName = safeIconName(icon, 'bell');
+      const iconColor = safeIconColor(color, '#64748b');
+      selectedEl.innerHTML = `<i class="fa-solid fa-${iconName} provider-icon" style="color: ${iconColor};"></i><span id="alert-level-selected-text">${escapeHtml(text)}</span><i class="fa-solid fa-chevron-down dropdown-arrow"></i>`;
       document.querySelectorAll('#alert-level-options .custom-dropdown-option').forEach(opt => {
         opt.classList.toggle('selected', opt.dataset.value === value);
       });
@@ -1202,7 +1187,7 @@
         const hours = getHoursParam();
         const hoursParam = hours ? `&hours=${hours}` : '';
 
-        // The new /api/data/history/filters response is provider/type-nested:
+        // The /api/v1/history/filters response (in `data`) is provider/type-nested:
         //   { providers: [{ types: [{ alert_type, categories, subcategories,
         //                              statuses, severities, ... }] }] }
         // Older flat top-level keys are gone. flattenFilterResponse() walks the
@@ -1238,8 +1223,8 @@
           // Fetch from both endeavour sources and combine
           const sources = sourceToQuery.split(',');
           const flatResults = await Promise.all(
-            sources.map(s => apiFetch(`${API_BASE}/api/data/history/filters?source=${s.trim()}${hoursParam}`)
-              .then(r => r.json()).then(flattenFilterResponse))
+            sources.map(s => apiFetch(`${API_BASE}/api/v1/history/filters?source=${s.trim()}${hoursParam}`)
+              .then(r => r.json()).then(j => flattenFilterResponse(j.data)))
           );
 
           // Combine categories
@@ -1285,8 +1270,8 @@
             severities:    Array.from(sevMap.values()).sort((a, b) => b.count - a.count),
           };
         } else {
-          const res = await apiFetch(`${API_BASE}/api/data/history/filters?source=${sourceToQuery}${hoursParam}`);
-          data = flattenFilterResponse(await res.json());
+          const res = await apiFetch(`${API_BASE}/api/v1/history/filters?source=${sourceToQuery}${hoursParam}`);
+          data = flattenFilterResponse((await res.json()).data);
         }
         
         // State options for whatever this source actually covers.
@@ -1927,16 +1912,17 @@
       
       try {
         console.log('Searching with params:', params.toString());
-        const res = await apiFetch(`${API_BASE}/api/data/history?${params}`);
+        const res = await apiFetch(`${API_BASE}/api/v1/history?${params}`);
 
         if (res.status === 400) {
           // Server-side offset cap — only fires if cursor wasn't usable
           // (e.g. user typed a page number directly). Surface the
-          // backend's hint instead of a silent failure.
+          // backend's hint instead of a silent failure. On /api/v1/ it
+          // is a validation_failed that carries details.max_offset.
           let body = {};
           try { body = await res.json(); } catch (_) {}
-          if (body && body.error === 'offset_too_large') {
-            console.warn('offset cap hit:', body.message);
+          if (body && body.error && body.error.details && body.error.details.max_offset != null) {
+            console.warn('offset cap hit:', body.error.message);
             currentPage = previousPage;
             nextCursor = previousCursor;
             lastShownPage = previousShownPage;
@@ -1949,7 +1935,7 @@
           throw new Error(`API returned ${res.status}`);
         }
 
-        const data = await res.json();
+        const data = (await res.json()).data;
         console.log('API response:', { total: data.total, recordCount: data.records?.length });
 
         // The backend skips the COUNT on cursor pages and reports total=0
@@ -2084,7 +2070,12 @@
       let html = '';
       currentPageResults.forEach((item, idx) => {
         const data = item.data || {};
-        const icon = getSourceIcon(item.source, data.fireType || item.subcategory);
+        // Shark rows file the species in subcategory and the kind of report
+        // in category, and it's the kind of report the icon should show.
+        const icon = getSourceIcon(
+          item.source,
+          item.source === 'dorsal' ? (data.category || item.category) : (data.fireType || item.subcategory),
+        );
         const sourceName = formatSourceName(item.source);
         // Title fallback chain. The backend's formatted `title` only
         // gets populated for sources whose archiveItems extractor sets
@@ -2246,6 +2237,40 @@
           let details = [];
           if (suburb) details.push(`<span class="lg-tint" style="--c:#f9a8d4"><i class="fas fa-location-dot"></i> ${escapeHtml(suburb)}</span>`);
           if (called) details.push(`<span class="lg-dim"><i class="fas fa-phone"></i> ${escapeHtml(called)}</span>`);
+          if (details.length) extraDetails = details.join(' · ');
+        } else if (item.source === 'dorsal') {
+          const SHARK_CAT_LABELS = {
+            incident: ['Bite / bump', '#ef4444'],
+            closure: ['Beach closed', '#f59e0b'],
+            advisory: ['Warning', '#fbbf24'],
+            sighting: ['Sighting', '#2dd4bf'],
+            drone: ['Drone sighting', '#38bdf8'],
+            tagging: ['Tag & release', '#8b5cf6'],
+            carcass: ['Carcass', '#94a3b8'],
+            detection: ['Receiver detection', '#64748b'],
+          };
+          const cat = String(data.category || item.category || '').toLowerCase();
+          const [catLabel, catColor] = SHARK_CAT_LABELS[cat] || SHARK_CAT_LABELS.sighting;
+          extraInfo += `<span class="lg-badge" style="--badge:${catColor}">${escapeHtml(catLabel)}</span>`;
+          const species = data.species || item.subcategory || '';
+          if (species && species !== 'Unknown') {
+            extraInfo += `<span class="lg-badge-o" style="--badge:#5eead4">${escapeHtml(species)}</span>`;
+          }
+          // No Official/Community badge: Dorsal's `official` flag marks who
+          // posted the report, not that anyone verified it, and a badge saying
+          // Official reads as confirmation we cannot stand behind. The flag
+          // stays in the archived row for anyone querying it directly.
+          let details = [];
+          if (typeof data.shark_length_m === 'number') {
+            details.push(`<span class="lg-dim"><i class="fas fa-ruler-horizontal"></i> ${escapeHtml(String(data.shark_length_m))} m</span>`);
+          }
+          if (typeof data.distance_from_shore_m === 'number') {
+            details.push(`<span class="lg-dim"><i class="fas fa-water"></i> ${escapeHtml(String(data.distance_from_shore_m))} m from shore</span>`);
+          }
+          if (data.zone) details.push(`<span class="lg-dim"><i class="fas fa-map"></i> ${escapeHtml(data.zone)}</span>`);
+          if (data.comment) {
+            details.push(`<span class="lg-tint lg-quote" style="--c:#99f6e4">"${escapeHtml(data.comment)}"</span>`);
+          }
           if (details.length) extraDetails = details.join(' · ');
         } else if (item.source === 'pager') {
           const agency = data.agency || item.category || '';
@@ -2658,11 +2683,11 @@
         // latest snapshot, then bailed on `records.length <= 1`. An
         // ambulance job that went Pending -> On Route -> On Scene over 45
         // snapshots returned exactly one.
-        const url = `${API_BASE}/api/data/history?source=${item.source}&source_id=${encodeURIComponent(item.source_id)}&limit=50&order=desc&full=1&unique=0`;
+        const url = `${API_BASE}/api/v1/history?source=${item.source}&source_id=${encodeURIComponent(item.source_id)}&limit=50&order=desc&full=1&unique=0`;
         console.log('History URL:', url);
-        const res = await fetch(url, { headers: { 'Authorization': `Bearer ${API_KEY}` } });
+        const res = await AusApi.fetch(url);
         if (!res.ok) throw new Error(`API returned ${res.status}`);
-        const data = await res.json();
+        const data = (await res.json()).data;
 
         // Bail if the user switched incidents while this fetch was in flight.
         if (selectedIncident?.source_id !== requestToken) return;
@@ -2911,6 +2936,17 @@
       }
     }
     
+    // The stored-at window a nearby search covers: the day either side of the
+    // item, which is what its results are filtered to below (plus an hour for
+    // a row stored a poll after its own timestamp). A window counted back
+    // from now found nothing for an item more than a week old, and had the
+    // archive read every row of the week to test where each one was.
+    function nearbyWindow(timeMs) {
+      if (!timeMs) return 'hours=168';
+      const t = Math.floor(timeMs / 1000);
+      return `since=${t - 86400}&until=${t + 86400 + 3600}`;
+    }
+
     async function loadLinkedIncidents(item, requestToken) {
       const linkedSection = document.getElementById('linked-incidents-section');
       if (!linkedSection) return;
@@ -2941,8 +2977,8 @@
           // 1. Find other pager hits with same incident_id (if available)
           if (incidentId && !incidentId.startsWith('noid-')) {
             try {
-              const pagerUrl = `${API_BASE}/api/pager/hits?incident_id=${encodeURIComponent(incidentId)}&hours=72&limit=20`;
-              const pagerRes = await fetch(pagerUrl, { headers: { 'Authorization': `Bearer ${API_KEY}` } });
+              const pagerUrl = `${API_BASE}/api/v1/pager/hits?incident_id=${encodeURIComponent(incidentId)}&hours=72&limit=20`;
+              const pagerRes = await AusApi.fetch(pagerUrl);
               if (!pagerRes.ok) throw new Error(`API returned ${pagerRes.status}`);
               const pagerJson = await pagerRes.json();
               
@@ -2973,10 +3009,10 @@
               
               // ~20m radius, search all pagers (unique=0 explicit to
               // include ended ones — backend default is now unique=1)
-              const proximityUrl = `${API_BASE}/api/data/history?source=pager&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&unique=0&full=1`;
-              const proxRes = await fetch(proximityUrl, { headers: { 'Authorization': `Bearer ${API_KEY}` } });
+              const proximityUrl = `${API_BASE}/api/v1/history?source=pager&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&${nearbyWindow(pagerTime)}&limit=100&unique=0&full=1`;
+              const proxRes = await AusApi.fetch(proximityUrl);
               if (!proxRes.ok) throw new Error(`API returned ${proxRes.status}`);
-              const proxData = await proxRes.json();
+              const proxData = (await proxRes.json()).data;
               
               if (proxData.records && proxData.records.length > 0) {
                 const twentyFourHoursMs = 24 * 60 * 60 * 1000;
@@ -3034,10 +3070,10 @@
               
               // Search nearby (~20m radius), unique=0 explicit to
               // include ended incidents (backend default is now unique=1)
-              const incUrl = `${API_BASE}/api/data/history?source=rfs,traffic_incident,traffic_fire&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&unique=0&full=1`;
-              const incRes = await fetch(incUrl, { headers: { 'Authorization': `Bearer ${API_KEY}` } });
+              const incUrl = `${API_BASE}/api/v1/history?source=rfs,traffic_incident,traffic_fire&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&${nearbyWindow(pagerTime)}&limit=100&unique=0&full=1`;
+              const incRes = await AusApi.fetch(incUrl);
               if (!incRes.ok) throw new Error(`API returned ${incRes.status}`);
-              const incData = await incRes.json();
+              const incData = (await incRes.json()).data;
               
               // Filter by time - only incidents within 24 hours of pager time
               // Also deduplicate by source_id (keep most recent)
@@ -3157,10 +3193,10 @@
           
           // ~20m radius, search all pagers (unique=0 explicit to
           // include ended ones — backend default is now unique=1)
-          const url = `${API_BASE}/api/data/history?source=pager&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&hours=168&limit=100&unique=0&full=1`;
-          const res = await fetch(url, { headers: { 'Authorization': `Bearer ${API_KEY}` } });
+          const url = `${API_BASE}/api/v1/history?source=pager&lat=${item.latitude}&lon=${item.longitude}&radius=0.02&${nearbyWindow(incidentTime)}&limit=100&unique=0&full=1`;
+          const res = await AusApi.fetch(url);
           if (!res.ok) throw new Error(`API returned ${res.status}`);
-          const data = await res.json();
+          const data = (await res.json()).data;
 
           // Filter by time - only pagers within 24 hours of incident time
           // Also deduplicate by source_id (keep most recent)
@@ -3250,10 +3286,10 @@
         document.body.appendChild(toast);
         
         try {
-          const url = `${API_BASE}/api/data/history?source=${source}&source_id=${encodeURIComponent(sourceId)}&limit=1&unique=1`;
-          const res = await fetch(url, { headers: { 'Authorization': `Bearer ${API_KEY}` } });
+          const url = `${API_BASE}/api/v1/history?source=${source}&source_id=${encodeURIComponent(sourceId)}&limit=1&unique=1`;
+          const res = await AusApi.fetch(url);
           if (!res.ok) throw new Error(`API returned ${res.status}`);
-          const data = await res.json();
+          const data = (await res.json()).data;
 
           toast.remove();
 
@@ -3483,7 +3519,8 @@
         'act_ambulance': 'ACT Ambulance',
         'traffic_alpine': 'Alpine',
         'traffic_lga': 'Council Roads',
-        'traffic_works': 'Roadwork & Works'
+        'traffic_works': 'Roadwork & Works',
+        'dorsal': 'Shark Reports'
       };
       return names[source] || source;
     }
@@ -3562,7 +3599,8 @@
         'act_ambulance': { primary: '#ec4899', secondary: '#f472b6' },
         'traffic_alpine': { primary: '#7dd3fc', secondary: '#bae6fd' },
         'traffic_lga': { primary: '#a3e635', secondary: '#bef264' },
-        'traffic_works': { primary: '#fb923c', secondary: '#fdba74' }
+        'traffic_works': { primary: '#fb923c', secondary: '#fdba74' },
+        'dorsal': { primary: '#2dd4bf', secondary: '#5eead4' }
       };
       return colors[source] || { primary: '#64748b', secondary: '#94a3b8' };
     }
@@ -4045,6 +4083,25 @@
         if (sub.includes('light')) return '<i class="fas fa-car-side" style="color:#eab308"></i>';
       }
       
+      // Shark reports: the icon is the kind of report, not the species — a
+      // bite and a receiver ping are the same animal and very different
+      // events. `subcategory` here is the report category, passed by the
+      // caller instead of the species it normally sends.
+      if (source === 'dorsal') {
+        const sharkIcons = {
+          incident: ['fa-triangle-exclamation', '#ef4444'],
+          closure: ['fa-ban', '#f59e0b'],
+          advisory: ['fa-circle-exclamation', '#fbbf24'],
+          sighting: ['fa-fish-fins', '#2dd4bf'],
+          drone: ['fa-video', '#38bdf8'],
+          tagging: ['fa-tag', '#8b5cf6'],
+          carcass: ['fa-skull', '#94a3b8'],
+          detection: ['fa-tower-broadcast', '#64748b'],
+        };
+        const [ic, col] = sharkIcons[String(subcategory || '').toLowerCase()] || sharkIcons.sighting;
+        return `<i class="fa-solid ${ic}" style="color:${col}"></i>`;
+      }
+
       const icons = {
         'rfs': '<i class="fas fa-fire" style="color:#ef4444"></i>',
         'user_incident': '<i class="fas fa-user" style="color:#a855f7"></i>',
@@ -4275,7 +4332,7 @@
     // Strip a leading 'DD Month YYYY HH:MM:SS' / 'HH:MM:SS' dispatch date
     // from a pager body (new CAD lines embed one; each row already has its
     // own timestamp). Mirrors the backend's stripLeadingPagerDate — needed
-    // here because /api/data/history serves archived rows verbatim, including
+    // here because /api/v1/history serves archived rows verbatim, including
     // ones archived before the backend started stripping.
     function stripPagerDate(s) {
       return String(s || '')
@@ -4292,6 +4349,21 @@
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
+    }
+    /**
+     * A facet's icon and colour land in a class and in a style attribute, so
+     * escaping them is not enough on its own: a colour that survives as text
+     * is still free to carry more CSS. Both are held to the shape the
+     * dropdowns actually use — a Font Awesome glyph name, and a hex or named
+     * colour — and anything else falls back to the caller's default rather
+     * than reaching the attribute. The provider list is the one place these
+     * come from the API rather than a table in this file.
+     */
+    function safeIconName(icon, fallback) {
+      return /^[a-z0-9-]{1,40}$/.test(String(icon || '')) ? String(icon) : fallback;
+    }
+    function safeIconColor(color, fallback) {
+      return /^(?:#[0-9a-fA-F]{3,8}|[a-zA-Z]{3,20})$/.test(String(color || '')) ? String(color) : fallback;
     }
     /**
      * Escape a value for interpolation inside a QUOTED string in an inline
@@ -4500,10 +4572,10 @@
         }
         // -1 = all time, don't add any time filter
         
-        const res = await apiFetch(`${API_BASE}/api/data/history?${params}`);
+        const res = await apiFetch(`${API_BASE}/api/v1/history?${params}`);
         if (!res.ok) return;
 
-        const data = await res.json();
+        const data = (await res.json()).data;
 
         // Update counts (full query counts from backend). Cursor pages report
         // total=0 because the COUNT is skipped — keep the previous count.
@@ -4743,9 +4815,9 @@
       const container = document.getElementById('summaries-results');
       container.innerHTML = '<div class="lg-note">Loading…</div>';
       try {
-        const res = await apiFetch(`${API_BASE}/api/summaries?${qs}`);
+        const res = await apiFetch(`${API_BASE}/api/v1/summaries?${qs}`);
         if (!res.ok) throw new Error(`status ${res.status}`);
-        const data = await res.json();
+        const data = (await res.json()).data;
         summariesTotal = data.total || 0;
         renderSummaries(data.results || []);
       } catch (e) {

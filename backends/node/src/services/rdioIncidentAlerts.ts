@@ -391,19 +391,31 @@ export async function runRdioIncidentAlertsOnce(): Promise<void> {
     if (!rdio || !pool) return;
 
     const bursts = await detectBursts(rdio);
-    if (bursts.length === 0) return;
 
-    // Bootstrap: first tick after (re)start just records current bursts
-    // as on-cooldown so we don't alert mid-incident on a restart.
+    // Bootstrap: the first SUCCESSFUL detection after (re)start records
+    // whatever is already bursting as on-cooldown, so a restart does not push
+    // for an incident that was already under way.
+    //
+    // It has to be marked done on that first detection whether or not anything
+    // was bursting, which is why the empty-result return sits below it rather
+    // than above. Keyed on "the first tick that saw a burst", the flag instead
+    // stayed armed through every quiet tick after boot and then swallowed the
+    // first genuinely new incident — and put it on cooldown while it was at
+    // it, so re-detection was suppressed too. A deploy lands in a quiet moment
+    // most of the time, so that was the usual case rather than the edge one.
     if (!bootstrapped) {
       for (const b of bursts) await bumpCooldown(pool, b.system, b.talkgroup);
       bootstrapped = true;
-      log.info(
-        { bursts: bursts.length },
-        'rdio incident alerts: bootstrapped current bursts (no push)',
-      );
+      if (bursts.length > 0) {
+        log.info(
+          { bursts: bursts.length },
+          'rdio incident alerts: bootstrapped current bursts (no push)',
+        );
+      }
       return;
     }
+
+    if (bursts.length === 0) return;
 
     const onCooldown = await loadActiveCooldowns(pool);
     const requireKeyword = config.RDIO_ALERT_REQUIRE_KEYWORD;

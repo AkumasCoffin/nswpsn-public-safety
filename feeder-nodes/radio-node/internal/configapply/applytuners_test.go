@@ -2,13 +2,16 @@ package configapply
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/sdrctl"
 )
@@ -121,5 +124,83 @@ func TestApplyTunersWildcardIsPerTuner(t *testing.T) {
 	got := calls()
 	if len(got) != 1 || got[0] != "NEEDS" {
 		t.Fatalf("expected a samplerate change for NEEDS only, got %v", got)
+	}
+}
+
+// A control server that is not LISTENING yet must be waited out, not written
+// off. A cold JVM runs its first-run CPU calibration and installs JMBE before
+// the control server binds, and the three quick attempts this used to make
+// were all spent inside a few seconds of a reboot — so a config push that
+// arrived in that window failed at the "playlist" stage, and a failed stage is
+// neither persisted nor retried: the node went on running the previous config.
+func TestImportWaitsOutAColdControlServer(t *testing.T) {
+	// Reserve a port and release it, so the first attempts land on a closed
+	// port exactly as they do while the JVM is still starting.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve a port: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+
+	var imports atomic.Int32
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/config/import" {
+			imports.Add(1)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"channels":2}`))
+	})}
+	t.Cleanup(func() { _ = srv.Close() })
+
+	// Bind a moment later, as a slow JVM does.
+	go func() {
+		time.Sleep(1500 * time.Millisecond)
+		late, lerr := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		if lerr != nil {
+			return
+		}
+		_ = srv.Serve(late)
+	}()
+
+	d := Deps{SDR: sdrctl.New(port, "test-token")}
+	if err := d.importWithRetry([]byte(`{}`)); err != nil {
+		t.Fatalf("import gave up on a control server that was still starting: %v", err)
+	}
+	if got := imports.Load(); got != 1 {
+		t.Fatalf("want exactly one accepted import, got %d", got)
+	}
+}
+
+// A server that ANSWERS and refuses the body has given a settled answer, not a
+// start-up condition. It gets the three attempts and then reports, rather than
+// holding the apply lock for the full start-up budget.
+func TestImportStopsRetryingARefusedBody(t *testing.T) {
+	var attempts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	t.Cleanup(srv.Close)
+
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("parse test server url: %v", err)
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil {
+		t.Fatalf("test server port: %v", err)
+	}
+
+	d := Deps{SDR: sdrctl.New(port, "test-token")}
+	started := time.Now()
+	if err := d.importWithRetry([]byte(`{}`)); err == nil {
+		t.Fatal("a refused import must surface as an error")
+	}
+	if got := attempts.Load(); got != importAttempts {
+		t.Fatalf("want %d attempts against an answering server, got %d", importAttempts, got)
+	}
+	if elapsed := time.Since(started); elapsed >= importStartupWait {
+		t.Fatalf("a refused body waited out the start-up budget (%s)", elapsed)
 	}
 }

@@ -231,6 +231,16 @@ editorRouter.post('/api/editor-requests', async (c) => {
     typeof linkedUserIdRaw === 'string' && linkedUserIdRaw.length > 0
       ? linkedUserIdRaw
       : null;
+  // The address the provider says belongs to this account. Used to match an
+  // existing request and, when present, as the address we store — the body's
+  // is whatever was typed into a form.
+  const verifiedEmailRaw = c.get('userEmail');
+  const verifiedEmail =
+    typeof verifiedEmailRaw === 'string' ? verifiedEmailRaw.trim().toLowerCase() : '';
+  // What the row carries. A signed-in submitter's own address outranks the
+  // body's, so a request can't reach the queue showing somebody else's;
+  // Discord accounts that share no address fall back to what was typed.
+  const storedEmail = linkedUserId && verifiedEmail ? verifiedEmail : email;
 
   // Email identifies an ANONYMOUS request. A JWT-linked signup is identified by
   // its account instead, so email is optional there — Discord OAuth accounts
@@ -291,12 +301,26 @@ editorRouter.post('/api/editor-requests', async (c) => {
     // Find this person's existing request — their linked account first, then
     // email — preferring a pending one, so a re-submit updates it in place
     // rather than erroring/duplicating.
+    //
+    // SECURITY. The email used to match here came from the BODY, and nothing
+    // tied it to the caller: posting a victim's address with your own JWT
+    // matched their pending row, and the UPDATE below then re-pointed it at
+    // your account, so approval granted their roles to you. A signed-in
+    // submitter is matched on their account, plus — for the request they filed
+    // before confirming their address, which is the whole reason the email
+    // fallback exists — an UNLINKED row whose address the provider has
+    // verified as theirs. An anonymous submitter can still match by address,
+    // but only a row no account owns yet.
+    const claimableEmail = linkedUserId
+      ? (c.get('userEmailVerified') === true ? verifiedEmail : null)
+      : email;
     const existing = await pool.query<{ id: number; status: string }>(
       `SELECT id, status FROM editor_requests
-        WHERE ($1::text IS NOT NULL AND supabase_user_id = $1) OR email = $2
+        WHERE ($1::text IS NOT NULL AND supabase_user_id = $1)
+           OR ($2::text IS NOT NULL AND supabase_user_id IS NULL AND lower(email) = $2)
         ORDER BY (status = 'pending') DESC, created_at DESC
         LIMIT 1`,
-      [linkedUserId, email],
+      [linkedUserId, claimableEmail || null],
     );
     const existingRow = existing.rows[0];
 
@@ -307,15 +331,17 @@ editorRouter.post('/api/editor-requests', async (c) => {
            email = $1, discord_id = $2, website = $3, about = $4, request_type = $5,
            region = $6, background = $7, background_details = $8, has_existing_setup = $9,
            setup_details = $10, tech_experience = $11, experience_level = $12,
-           supabase_user_id = COALESCE($13, supabase_user_id),
+           -- Links an unlinked row to the submitting account; a row that
+           -- already belongs to an account is never re-pointed at another.
+           supabase_user_id = COALESCE(supabase_user_id, $13),
            referred_by = COALESCE(referred_by, $14),
            referred_by_name = COALESCE(referred_by_name, $15)
          WHERE id = $16`,
-        [email, discordId, website, about, requestTypeStr, region, background, backgroundDetails,
+        [storedEmail, discordId, website, about, requestTypeStr, region, background, backgroundDetails,
           hasExistingSetup, setupDetails, techExperienceStr, experienceLevel, linkedUserId,
           referredBy, referredByName, existingRow.id],
       );
-      log.info({ requestId: existingRow.id, email, requestType, linkedUserId }, 'Editor request updated');
+      log.info({ requestId: existingRow.id, email: storedEmail, requestType, linkedUserId }, 'Editor request updated');
       notifyStaff(pool, {
         kind: 'signup_request',
         event: 'new',
@@ -323,7 +349,7 @@ editorRouter.post('/api/editor-requests', async (c) => {
         title: prettyRequestType(requestTypeStr),
         subtitle: region ? `${region} · resubmitted` : 'resubmitted',
         fields: signupFields({
-          email, discordId, website, about, region, background, backgroundDetails,
+          email: storedEmail, discordId, website, about, region, background, backgroundDetails,
           hasExistingSetup, setupDetails, techExperienceStr, experienceLevel,
           referredByName,
         }),
@@ -338,12 +364,12 @@ editorRouter.post('/api/editor-requests', async (c) => {
          supabase_user_id, referred_by, referred_by_name)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'pending',$13,$14,$15,$16)
        RETURNING id`,
-      [email, discordId, website, about, requestTypeStr, region, background, backgroundDetails,
+      [storedEmail, discordId, website, about, requestTypeStr, region, background, backgroundDetails,
         hasExistingSetup, setupDetails, techExperienceStr, experienceLevel, createdAt,
         linkedUserId, referredBy, referredByName],
     );
     const requestId = inserted.rows[0]?.id;
-    log.info({ requestId, email, requestType, linkedUserId }, 'New editor request');
+    log.info({ requestId, email: storedEmail, requestType, linkedUserId }, 'New editor request');
     notifyStaff(pool, {
       kind: 'signup_request',
       event: 'new',
@@ -351,7 +377,7 @@ editorRouter.post('/api/editor-requests', async (c) => {
       title: prettyRequestType(requestTypeStr),
       subtitle: region || null,
       fields: signupFields({
-        email, discordId, website, about, region, background, backgroundDetails,
+        email: storedEmail, discordId, website, about, region, background, backgroundDetails,
         hasExistingSetup, setupDetails, techExperienceStr, experienceLevel,
         referredByName,
       }),

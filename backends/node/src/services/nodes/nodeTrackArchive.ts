@@ -6,15 +6,14 @@
  * since the backend last came up. The coverage envelope beside it was persisted
  * and looked healthy, which made the map read as broken rather than as young.
  *
- * Not a filter over the global adsb_tracks, which already stores every merged
- * track with its `sources`: those rows only exist for aircraft that reached the
+ * Not a filter over the global history (adsb_track_chunks), which stores every merged
+ * track with its `sources`: those only exist for aircraft that reached the
  * public merge, and a node whose feed is PAUSED contributes nothing to it. A
  * receiver's own diagnostics have to be built from its own uploads, which is
  * the same line the feed gate is drawn on everywhere else here.
  */
 import { getPool } from '../../db/pool.js';
 import { log } from '../../lib/log.js';
-import { sliceTrailByHour } from '../adsbTrackArchive.js';
 import { nodeTracesForArchive, type NodeArchivableTrack } from './adsbNodeStore.js';
 
 /** Same cadence as the daily counters and the coverage envelope: all three are
@@ -25,6 +24,57 @@ const FLUSH_INTERVAL_MS = 60_000;
 const BATCH_SIZE = 200;
 
 const HOUR_MS = 3_600_000;
+
+interface HourSlice {
+  hex: string;
+  hourMs: number;
+  firstMs: number;
+  lastMs: number;
+  /** [secondsIntoHour, lat, lon, altFt|null] */
+  points: Array<[number, number, number, number | null]>;
+}
+
+/**
+ * Cut one aircraft's trail into the hour slices worth writing.
+ *
+ * Only the current hour and the previous one. Earlier hours were written while
+ * they were current and are finished; rewriting them would serve no purpose
+ * and would let the upstream simplification — which progressively coarsens
+ * points older than ten minutes — degrade history that was already stored at
+ * full in-window resolution.
+ *
+ * The previous hour is included, rather than just the current one, because a
+ * flush landing shortly after the top of the hour would otherwise leave the
+ * hour that just closed missing its final seconds forever.
+ */
+export function sliceTrailByHour(
+  hex: string,
+  points: ReadonlyArray<readonly [number, number, number, number | null]>,
+  nowMs: number,
+): HourSlice[] {
+  const currentHour = Math.floor(nowMs / HOUR_MS) * HOUR_MS;
+  const previousHour = currentHour - HOUR_MS;
+  const byHour = new Map<number, HourSlice>();
+
+  for (const p of points) {
+    const t = p[0];
+    const hourMs = Math.floor(t / HOUR_MS) * HOUR_MS;
+    if (hourMs !== currentHour && hourMs !== previousHour) continue;
+    let slice = byHour.get(hourMs);
+    if (!slice) {
+      slice = { hex, hourMs, firstMs: t, lastMs: t, points: [] };
+      byHour.set(hourMs, slice);
+    }
+    slice.points.push([Math.round((t - hourMs) / 1000), p[1], p[2], p[3]]);
+    if (t < slice.firstMs) slice.firstMs = t;
+    if (t > slice.lastMs) slice.lastMs = t;
+  }
+
+  // A single point is a dot, not a track. It is still enough to say the
+  // aircraft was there, so it is kept — the historical view interpolates
+  // between points and a lone point simply renders where it is.
+  return Array.from(byHour.values());
+}
 
 /**
  * Points per stored hour, as a backstop only.

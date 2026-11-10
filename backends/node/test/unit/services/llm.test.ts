@@ -4,7 +4,7 @@
  * covered separately via /api/summaries/trigger smoke tests with a
  * mocked Gemini client.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 
 vi.mock('../../../src/services/rdio.js', async () => {
   const actual = await vi.importActual<typeof import('../../../src/services/rdio.js')>(
@@ -729,5 +729,83 @@ describe('/api/summaries/trigger', () => {
     });
     expect(res.status).toBe(503);
     vi.doUnmock('../../../src/services/auth/roles.js');
+  });
+});
+
+/**
+ * Network failures must take the retry path.
+ *
+ * undici rejects a connection reset as a bare TypeError('fetch failed') with
+ * the real error on `.cause`, so the old top-level `.code` check classed it as
+ * a programming error and rethrew on the first attempt. The documented 4-round
+ * backoff therefore only ever covered HTTP 429/5xx, and one DNS blip at HH:55
+ * lost that hour's summary.
+ */
+describe('callLlm transient classification', () => {
+  const resetError = () =>
+    new TypeError('fetch failed', {
+      cause: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }),
+    });
+
+  async function loadWithMocks(fetchImpl: () => Promise<never>) {
+    vi.resetModules();
+    vi.doMock('undici', async (orig) => {
+      const actual = await orig<typeof import('undici')>();
+      return { ...actual, fetch: vi.fn(fetchImpl) };
+    });
+    vi.doMock('../../../src/config.js', async (orig) => {
+      const actual = await orig<typeof import('../../../src/config.js')>();
+      return {
+        ...actual,
+        config: { ...actual.config, GEMINI_API_KEY: 'k1', LLM_MODEL_FALLBACK: '' },
+      };
+    });
+    const undici = await import('undici');
+    const llm = await import('../../../src/services/llm.js');
+    return { llm, fetchMock: vi.mocked(undici.fetch) };
+  }
+
+  afterEach(() => {
+    vi.doUnmock('undici');
+    vi.doUnmock('../../../src/config.js');
+    vi.useRealTimers();
+    vi.resetModules();
+  });
+
+  it('retries every round on a connection reset instead of giving up at once', async () => {
+    const { llm, fetchMock } = await loadWithMocks(async () => {
+      throw resetError();
+    });
+    vi.useFakeTimers();
+    const p = llm
+      .callLlm({
+        systemPrompt: 's',
+        userPrompt: 'u',
+        model: 'gemini-test',
+        maxAttempts: 4,
+        fallbackModel: '',
+      })
+      .catch((e: unknown) => (e as Error).message);
+    // Let the three backoff sleeps elapse.
+    await vi.runAllTimersAsync();
+    const message = await p;
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(message).toContain('after 4 rounds');
+  });
+
+  it('still bubbles a genuinely non-transient error on the first attempt', async () => {
+    const { llm, fetchMock } = await loadWithMocks(async () => {
+      throw new Error('opts.body is not iterable');
+    });
+    await expect(
+      llm.callLlm({
+        systemPrompt: 's',
+        userPrompt: 'u',
+        model: 'gemini-test',
+        maxAttempts: 4,
+        fallbackModel: '',
+      }),
+    ).rejects.toThrow('not iterable');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

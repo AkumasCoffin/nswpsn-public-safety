@@ -1,0 +1,22 @@
+-- 125: when, within the hour, each radio was last heard.
+--
+-- The staff Data tab's Aliases list ("which named radios were heard this
+-- period, how often, and when last") joined node_radio_events for the whole
+-- window on every request. On production that read never finished: 109 s for
+-- 24 h and 74 s for 7 d against a 30 s statement timeout, measured read-only on
+-- 2026-10-14. Only ~4-7 k pages came off disk; the time went on visibility
+-- checks — rows newer than the last vacuum have to be fetched from the heap
+-- one at a time, in radio-id order, which on this storage is ~26 ms a fetch.
+--
+-- node_radio_hourly_unit already answers "who was heard and how often" per
+-- hour (it is what the overview's top-radios card reads). The one thing it
+-- cannot say is WHEN in the hour, so "Last heard" would round down to the top
+-- of the hour. This column carries the exact time.
+--
+-- NOT re-derived. Filling it for existing rows means rewinding the shared
+-- rollup cursor, which rebuilds all four rollups from 30 days of detail — the
+-- same catch-up that stalled after 123 on this storage. Old rows stay NULL and
+-- the read falls back to the hour itself, so the only effect is a rounded
+-- "Last heard" for a radio not heard since this deploy, and it clears as the
+-- window rolls forward (a day for 24 h, a week for 7 d).
+ALTER TABLE node_radio_hourly_unit ADD COLUMN IF NOT EXISTS last_heard TIMESTAMPTZ;

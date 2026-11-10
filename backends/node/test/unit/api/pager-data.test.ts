@@ -1,11 +1,13 @@
 /**
- * Pager Data-tab endpoints (owner|dev only): pager-overview, capcodes, capcode.
+ * Pager Data-tab endpoints: pager-overview, pager-pages, pager-filtered,
+ * capcodes, capcode, pager-nodes, pager-node.
  *
  * Mocks the pg pool so we drive the Hono handlers end-to-end without a DB, and
  * points PAGER_CAPCODE_CSV at a temp file so capcode→alias resolution runs on
  * the NORMALISED capcode (a zero-padded CSV address resolves the unpadded
- * stored capcode). Asserts the aggregation JSON shapes and the logical_id
- * grouping the message browser depends on.
+ * stored capcode). Asserts the JSON shapes, the logical_id grouping the
+ * message browser depends on, and that every traffic figure leaves the
+ * filtered pages out.
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
 import { Hono } from 'hono';
@@ -50,17 +52,45 @@ async function setupApp() {
   return app;
 }
 
+/** The SQL text of every node_pager_events query the last request ran. */
+function pagerQueries(): Array<{ sql: string; params: unknown[] }> {
+  return queryMock.mock.calls
+    .map(([sql, params]) => ({ sql: String(sql), params: (params ?? []) as unknown[] }))
+    .filter((q) => q.sql.includes('node_pager_events'));
+}
+
 beforeEach(() => {
   queryMock.mockReset();
 });
 
+/** The page-log query (pagerPageRows): one row per logical page, counted over. */
+const isPageRows = (sql: string) =>
+  sql.includes('GROUP BY COALESCE(e.logical_id, e.id)') && sql.includes('COUNT(*) OVER ()');
+
 describe('GET /api/node-data/pager-overview', () => {
-  it('returns totals, alias-labelled top capcodes with topNode, top nodes, and series', async () => {
+  it('returns traffic totals, the filtered split, top capcodes, series and latest pages', async () => {
     queryMock.mockImplementation((sql: string) => {
+      if (isPageRows(sql)) {
+        return {
+          rows: [
+            {
+              at: new Date(1_700_000_600_000), message: 'STRUCTURE FIRE', freq_mhz: 148.5875, capcode: '10627',
+              receptions: 2, nodes: [{ id: 'n1', name: 'Newcastle' }], total: 2,
+            },
+            {
+              at: new Date(1_700_000_598_000), message: 'STRUCTURE FIRE', freq_mhz: 148.5875, capcode: '999',
+              receptions: 1, nodes: [{ id: 'n1', name: 'Newcastle' }], total: 2,
+            },
+          ],
+        };
+      }
       if (sql.includes('AS capcodes')) {
         return { rows: [{ pages: 42, logical: 30, nodes: 3, capcodes: 7 }] };
       }
-      if (sql.includes('GROUP BY capcode') && sql.includes('LIMIT 15')) {
+      if (sql.includes('GROUP BY reason')) {
+        return { rows: [{ reason: 'blocked capcode', n: 1300 }, { reason: 'time code', n: 51 }] };
+      }
+      if (sql.includes('GROUP BY capcode') && sql.includes('LIMIT 10')) {
         return {
           rows: [
             { capcode: '10627', pages: 20, last_seen: new Date(1_700_000_000_000) },
@@ -68,7 +98,7 @@ describe('GET /api/node-data/pager-overview', () => {
           ],
         };
       }
-      if (sql.includes('unnest($2::text[]) AS k(capcode)')) {
+      if (sql.includes('unnest($3::text[]) AS k(capcode)')) {
         return {
           rows: [
             { capcode: '10627', node_id: 'n1', name: 'Newcastle', pages: 12 },
@@ -76,10 +106,7 @@ describe('GET /api/node-data/pager-overview', () => {
           ],
         };
       }
-      if (sql.includes('GROUP BY e.node_id, n.name')) {
-        return { rows: [{ node_id: 'n1', name: 'Newcastle', pages: 18 }] };
-      }
-      if (sql.includes("date_trunc('hour'")) {
+      if (sql.includes('generate_series')) {
         return { rows: [{ hour: new Date(1_700_000_000_000), pages: 4 }] };
       }
       return { rows: [] };
@@ -92,6 +119,7 @@ describe('GET /api/node-data/pager-overview', () => {
 
     expect(body['window']).toBe('7d');
     expect(body['totals']).toEqual({ pages: 42, pagesLogical: 30, activeNodes: 3, capcodes: 7 });
+    expect(body['filtered']).toEqual({ pages: 1351, byReason: { 'blocked capcode': 1300, 'time code': 51 } });
 
     const caps = body['topCapcodes'] as Array<Record<string, unknown>>;
     expect(caps).toHaveLength(2);
@@ -104,17 +132,107 @@ describe('GET /api/node-data/pager-overview', () => {
     expect(caps[1]?.['alias']).toBeNull();
     expect(caps[1]?.['topNode']).toBeNull();
 
-    const nodes = body['topNodes'] as Array<Record<string, unknown>>;
-    expect(nodes[0]).toEqual({ nodeId: 'n1', name: 'Newcastle', pages: 18 });
+    // Per-node figures belong to /pager-nodes, not the overview.
+    expect(body).not.toHaveProperty('topNodes');
 
     const series = body['series'] as Array<Record<string, unknown>>;
     expect(series[0]?.['pages']).toBe(4);
     expect(typeof series[0]?.['hour']).toBe('string');
+
+    // One row per capcode, as Pagermon lists them, each with its own label.
+    const recent = body['recent'] as Array<Record<string, unknown>>;
+    expect(recent).toHaveLength(2);
+    expect(recent[0]).toMatchObject({
+      message: 'STRUCTURE FIRE', capcode: '10627', alias: 'Gresford Brigade', agency: 'RFS', receptions: 2,
+    });
+    expect(recent[1]).toMatchObject({ capcode: '999', alias: null, agency: null });
+    expect(recent[0]).not.toHaveProperty('capcodes');
+  });
+
+  it('binds the blocked capcodes to every query and counts traffic only', async () => {
+    queryMock.mockResolvedValue({ rows: [] });
+    const app = await setupApp();
+    await app.request('/api/node-data/pager-overview?window=24h');
+    const qs = pagerQueries();
+    expect(qs.length).toBeGreaterThanOrEqual(5);
+    for (const q of qs) {
+      expect(q.params[1]).toEqual(expect.arrayContaining(['1850000', '521839']));
+      expect(q.sql).toContain("THEN 'blocked capcode'");
+    }
+  });
+});
+
+describe('GET /api/node-data/pager-pages', () => {
+  it('searches the message case-insensitively and pages one row per capcode', async () => {
+    queryMock.mockImplementation((sql: string) => {
+      if (isPageRows(sql)) {
+        return {
+          rows: [{
+            at: new Date(1_700_000_600_000), message: 'MVA persons trapped', freq_mhz: 148.5875, capcode: '10627',
+            receptions: 3, nodes: [{ id: 'n1', name: 'Newcastle' }], total: 57,
+          }],
+        };
+      }
+      return { rows: [] };
+    });
+    const app = await setupApp();
+    const res = await app.request('/api/node-data/pager-pages?window=7d&q=MVA&limit=20&offset=20');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body['total']).toBe(57);
+    expect(body['limit']).toBe(20);
+    expect(body['offset']).toBe(20);
+    const q = pagerQueries().find((x) => isPageRows(x.sql))!;
+    expect(q.sql).toContain('strpos(lower(e.message), $3) > 0');
+    expect(q.params).toEqual(['7 days', expect.any(Array), 'mva', 20, 20]);
+    // No merging across capcodes: the copies of a job are a row each.
+    expect(q.sql).not.toContain('message_hash');
+  });
+});
+
+describe('GET /api/node-data/pager-filtered', () => {
+  it('lists filtered pages with their reason, and counts every reason', async () => {
+    queryMock.mockImplementation((sql: string) => {
+      if (sql.includes('GROUP BY reason')) {
+        return { rows: [{ reason: 'blocked capcode', n: 1300 }, { reason: 'time code', n: 51 }] };
+      }
+      if (sql.includes('GROUP BY capcode, reason')) {
+        return { rows: [{ capcode: '521839', reason: 'blocked capcode', pages: 1300, last_seen: new Date(1_700_000_000_000) }] };
+      }
+      if (sql.includes('GROUP BY COALESCE(f.logical_id, f.id)')) {
+        return {
+          rows: [{
+            at: new Date(1_700_000_000_000), capcode: '180111', reason: 'time code', message: '0157',
+            freq_mhz: 148.9625, receptions: 1, nodes: [{ id: 'n1', name: 'Newcastle' }],
+          }],
+        };
+      }
+      return { rows: [] };
+    });
+    const app = await setupApp();
+    const res = await app.request('/api/node-data/pager-filtered?window=24h&reason=time%20code');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body['byReason']).toEqual({ 'blocked capcode': 1300, 'time code': 51 });
+    // The total is the chosen reason's, not the whole window's.
+    expect(body['total']).toBe(51);
+    expect((body['messages'] as Array<Record<string, unknown>>)[0]).toMatchObject({
+      capcode: '180111', reason: 'time code', message: '0157',
+    });
+    const list = pagerQueries().find((x) => x.sql.includes('GROUP BY COALESCE(f.logical_id, f.id)'))!;
+    expect(list.sql).toContain('AND f.reason = $3');
+    expect(list.params[2]).toBe('time code');
+  });
+
+  it('rejects an unknown reason with 400', async () => {
+    const app = await setupApp();
+    const res = await app.request('/api/node-data/pager-filtered?reason=spam');
+    expect(res.status).toBe(400);
   });
 });
 
 describe('GET /api/node-data/capcodes', () => {
-  it('paginates the per-capcode rollup with alias + topNode', async () => {
+  it('paginates the per-capcode rollup with alias + topNode, traffic only', async () => {
     queryMock.mockImplementation((sql: string) => {
       if (sql.includes('COUNT(DISTINCT capcode)::int AS n')) {
         return { rows: [{ n: 3 }] };
@@ -122,7 +240,7 @@ describe('GET /api/node-data/capcodes', () => {
       if (sql.includes('GROUP BY capcode') && sql.includes('LIMIT $')) {
         return { rows: [{ capcode: '10627', pages: 9, last_seen: new Date(1_700_000_000_000) }] };
       }
-      if (sql.includes('unnest($2::text[]) AS k(capcode)')) {
+      if (sql.includes('unnest($3::text[]) AS k(capcode)')) {
         return { rows: [{ capcode: '10627', node_id: 'n2', name: 'Hunter', pages: 6 }] };
       }
       return { rows: [] };
@@ -137,6 +255,7 @@ describe('GET /api/node-data/capcodes', () => {
     expect(list[0]?.['alias']).toBe('Gresford Brigade');
     expect(list[0]?.['pages']).toBe(9);
     expect(list[0]?.['topNode']).toEqual({ id: 'n2', name: 'Hunter', pages: 6 });
+    for (const q of pagerQueries()) expect(q.sql).toMatch(/END\) IS NULL/);
   });
 
   it('rejects a non-numeric q prefix with 400', async () => {
@@ -190,5 +309,54 @@ describe('GET /api/node-data/capcode', () => {
     const app = await setupApp();
     const res = await app.request('/api/node-data/capcode?window=7d');
     expect(res.status).toBe(400);
+  });
+});
+
+describe('GET /api/node-data/pager-nodes', () => {
+  it('lists every pager node, including one that has heard nothing', async () => {
+    queryMock.mockImplementation((sql: string) => {
+      if (sql.includes("WHERE n.kind = 'pager'")) {
+        return {
+          rows: [
+            { id: 'n1', name: 'Newcastle', state: 'NSW', lga: 'Newcastle', enabled: true, feed_enabled: true,
+              pages: 120, receptions: 121, capcodes: 30, filtered: 900, unique_pages: 80,
+              last_heard: new Date(1_700_000_000_000) },
+            { id: 'n2', name: 'Quiet', state: 'NSW', lga: 'Bega', enabled: true, feed_enabled: false,
+              pages: 0, receptions: 0, capcodes: 0, filtered: 0, unique_pages: 0, last_heard: null },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+    const app = await setupApp();
+    const res = await app.request('/api/node-data/pager-nodes?window=7d');
+    expect(res.status).toBe(200);
+    const nodes = ((await res.json()) as { nodes: Array<Record<string, unknown>> }).nodes;
+    expect(nodes[0]).toMatchObject({ id: 'n1', pages: 120, unique: 80, filtered: 900, online: false, readers: [] });
+    expect(nodes[1]).toMatchObject({ id: 'n2', pages: 0, lastHeard: null, feedEnabled: false });
+  });
+});
+
+describe('GET /api/node-data/pager-node', () => {
+  it('splits traffic from filtered and pages its recent pages', async () => {
+    queryMock.mockImplementation((sql: string) => {
+      if (sql.startsWith('SELECT id, name, kind')) {
+        return { rows: [{ id: 'n1', name: 'Newcastle', kind: 'pager', state: 'NSW', lga: 'Newcastle' }] };
+      }
+      if (sql.includes('AS last_heard')) {
+        return { rows: [{ pages: 10, receptions: 11, capcodes: 4, filtered: 300, last_heard: new Date(1_700_000_000_000) }] };
+      }
+      if (sql.includes('HAVING COUNT(DISTINCT node_id) = 1')) return { rows: [{ n: 7 }] };
+      if (isPageRows(sql)) return { rows: [] };
+      return { rows: [] };
+    });
+    const app = await setupApp();
+    const res = await app.request('/api/node-data/pager-node?nodeId=n1&window=24h');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body['totals']).toMatchObject({ pages: 10, receptions: 11, capcodes: 4, unique: 7, filtered: 300 });
+    expect(body['recent']).toEqual({ total: 0, limit: 25, offset: 0, pages: [] });
+    const recent = pagerQueries().find((x) => isPageRows(x.sql))!;
+    expect(recent.sql).toContain('e.node_id = $3');
   });
 });

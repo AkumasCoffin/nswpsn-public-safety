@@ -6,11 +6,12 @@
  * Mirrors the Python routes at external_api_proxy.py:6847 + 6999.
  */
 import { fetchJson } from './shared/http.js';
+import { config } from '../config.js';
 import { registerSource } from '../services/sourceRegistry.js';
 import { liveStore } from '../store/live.js';
 
 const RADAR_URL = 'https://api.rainviewer.com/public/weather-maps.json';
-const OPEN_METEO_BASE = 'https://api.open-meteo.com/v1/forecast';
+const OPEN_METEO_BASE = config.OPEN_METEO_FORECAST_URL;
 
 export interface NswLocation {
   name: string;
@@ -200,10 +201,19 @@ export async function fetchWeatherCurrent(): Promise<WeatherSnapshot> {
     `${OPEN_METEO_BASE}?latitude=${lats}&longitude=${lons}` +
     `&current=temperature_2m,relative_humidity_2m,apparent_temperature,` +
     `precipitation,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m` +
-    `&timezone=Australia%2FSydney`;
+    `&timezone=Australia%2FSydney` +
+    // Same pin as the grid: a self-hosted instance's default model for
+    // Australia can be the dead BOM mirror, which answers with nulls.
+    (config.OPEN_METEO_FORECAST_MODELS
+      ? `&models=${encodeURIComponent(config.OPEN_METEO_FORECAST_MODELS)}`
+      : '');
 
   const data = await fetchJson<unknown>(url, {
     headers: { 'User-Agent': 'Mozilla/5.0' },
+    // A cold self-hosted instance pulls model chunks from S3 on its first
+    // request — well past the 15s default, which timed this source out on
+    // every boot of the first self-hosted deploy.
+    timeoutMs: 60_000,
   });
   const list: OpenMeteoEntry[] = Array.isArray(data)
     ? (data as OpenMeteoEntry[])

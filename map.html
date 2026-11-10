@@ -31,7 +31,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
-  <script src="livetraffic-vocab.js?v=1"></script>
+  <script src="livetraffic-vocab.js?v=3"></script>
   <script src="fire-vocab.js?v=3"></script>
   <script src="fleet-vocab.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js" integrity="sha384-948ahk4ZmxYVYOc+rxN1H2gM1EJ2Duhp7uHtZ4WSLkV4Vtx5MUqnV+l7u9B+jFv+" crossorigin="anonymous"></script>
@@ -608,6 +608,10 @@
     }
     .weather-panel.open { display: block; }
     .weather-panel h4 { margin: 0 0 10px 0; color: #38bdf8; font-size: 13px; font-weight: 600; }
+    .weather-panel .wx-sep { height: 1px; background: rgba(148,163,184,0.22); margin: 8px 0; }
+    .weather-panel .wx-note { color: #64748b; font-size: 10px; }
+    #wx-legend .legend-color { width: 14px; height: 10px; border-radius: 2px; display: inline-block; }
+    #wx-time-container.is-loading #wx-time-display::after { content: ' · loading…'; color: #64748b; }
     .weather-panel label { display: flex; align-items: center; gap: 8px; color: #e2e8f0; font-size: 12px; margin-bottom: 8px; cursor: pointer; }
     .weather-panel input[type="checkbox"] { accent-color: #38bdf8; width: 16px; height: 16px; }
     .weather-panel .slider-container { margin: 12px 0 8px 0; }
@@ -1249,6 +1253,7 @@
     .btn-toggle.active#btn-floods { border: 1px solid #06b6d4; color: #67e8f9; }
     .btn-toggle.active#btn-cameras { border: 1px solid #8b5cf6; color: #c4b5fd; }
     .btn-toggle.active#btn-beachwatch { border: 1px solid #06b6d4; color: #67e8f9; }
+    .btn-toggle.active#btn-sharksmart { border: 1px solid #2dd4bf; color: #5eead4; }
     .btn-toggle.active#btn-firms { border: 1px solid #f97316; color: #fdba74; }
 
     /* Floating per-layer filter sidebar (desktop only). Each enabled
@@ -1651,7 +1656,8 @@
       #cameras-panel,
       #pager-panel,
       #outages-panel,
-      #beaches-panel { display: none !important; }
+      #beaches-panel,
+      #sharksmart-panel { display: none !important; }
     }
     /* Active outline for the repeaters/ships/aircraft/transport layers — colours
        match each button's icon. (The old #btn-repeaters rule was dead: the button
@@ -2794,6 +2800,7 @@
   
   </style>
   <script src="auth-common.js"></script>
+  <script src="api-session.js"></script>
 </head>
 <body>
   <!-- Camera Selection Badge -->
@@ -2917,6 +2924,7 @@
         <button id="btn-floods" class="btn-toggle" onclick="toggleMapLayer('floods')" title="Floods"><i class="fa-solid fa-water" style="color:#06b6d4;"></i><span>Floods</span></button>
         <button id="btn-cameras" class="btn-toggle" onclick="toggleCamerasPanel()" title="Cameras"><i class="fa-solid fa-video" style="color:#8b5cf6;"></i><span>Cameras</span></button>
         <button id="btn-beachwatch" class="btn-toggle" onclick="toggleBeachesPanel()" title="Beaches"><i class="fa-solid fa-umbrella-beach" style="color:#06b6d4;"></i><span>Beaches</span></button>
+        <button id="btn-sharksmart" class="btn-toggle" onclick="toggleSharkSmartPanel()" title="Shark sightings and tagged-shark detections"><i class="fa-solid fa-fish-fins" style="color:#2dd4bf;"></i><span>SharkSmart</span></button>
         <button id="btn-weather" class="btn-toggle" onclick="toggleWeatherPanel()" title="Weather"><i class="fa-solid fa-cloud-sun" style="color:#38bdf8;"></i><span>Weather</span></button>
         <button id="btn-firms" class="btn-toggle" onclick="toggleMapLayer('firms')" title="Satellite fire hotspots"><i class="fa-solid fa-satellite" style="color:#f97316;"></i><span>Hotspots</span></button>
         <button id="btn-nswpsn" class="btn-toggle" onclick="toggleMapLayer('nswpsn')" title="NSW PSN repeaters"><i class="fa-solid fa-tower-broadcast" style="color:#14b8a6;"></i><span>Repeaters</span></button>
@@ -2951,8 +2959,31 @@
       <!-- Weather Panel -->
       <div class="weather-panel" id="weather-panel">
         <h4>🌦️ Weather Layers</h4>
-        <label><input type="checkbox" id="chk-radar" onchange="toggleRadar(this.checked)"> Rain Radar</label>
-        <label><input type="checkbox" id="chk-weather-pins" onchange="toggleWeatherPins(this.checked)"> Weather Stations</label>
+        <label><input type="radio" name="wx-layer" id="chk-wx-none" checked onchange="wxSetLayer('none')"> Off</label>
+        <label><input type="radio" name="wx-layer" id="chk-wx-wind" onchange="wxSetLayer('wind')"> Wind</label>
+        <label><input type="radio" name="wx-layer" id="chk-wx-temp" onchange="wxSetLayer('temperature_2m')"> Temperature</label>
+        <label><input type="radio" name="wx-layer" id="chk-wx-rain" onchange="wxSetLayer('precipitation')"> Rain forecast</label>
+        <label><input type="radio" name="wx-layer" id="chk-wx-waves" onchange="wxSetLayer('wave_height')"> Waves <span class="wx-note">at sea</span></label>
+        <label><input type="radio" name="wx-layer" id="chk-wx-flood" onchange="wxSetLayer('river_discharge')"> River flow <span class="wx-note">daily</span></label>
+        <div class="wx-sep"></div>
+        <label><input type="checkbox" id="chk-radar" onchange="toggleRadar(this.checked)"> Rain radar <span class="wx-note">observed</span></label>
+        <label><input type="checkbox" id="chk-weather-pins" onchange="toggleWeatherPins(this.checked)"> Weather stations</label>
+        <!-- The forecast field and the radar run on different clocks: the radar
+             is observed and only looks backwards, the field is modelled and runs
+             forward. They get separate controls and separate labels so the
+             timeline below can never be read as scrubbing the radar. -->
+        <div class="slider-container" id="wx-time-container" style="display:none;">
+          <div class="slider-label">
+            <span id="wx-time-label">Forecast</span>
+            <button class="btn-live" id="wx-btn-now" onclick="wxJumpToNow()">● NOW</button>
+          </div>
+          <input type="range" id="wx-time-slider" min="0" max="0" value="0" oninput="wxSetTime(this.value)">
+          <div class="radar-time" id="wx-time-display">--</div>
+        </div>
+        <div class="temp-legend" id="wx-legend" style="display:none;">
+          <div class="legend-title" id="wx-legend-title">Legend</div>
+          <div class="legend-items" id="wx-legend-items"></div>
+        </div>
         <div class="slider-container" id="radar-slider-container" style="display:none;">
           <div class="slider-label">
             <span id="radar-time-label">Radar Time</span>
@@ -3035,6 +3066,23 @@
         <h4><i class="fa-solid fa-umbrella-beach"></i> Beaches</h4>
         <label><input type="checkbox" id="chk-beachwatch" checked onchange="onBeachFilterChange()"><span class="filter-dot" style="background:#22c55e;"></span> Beachwatch (Water Quality)</label>
         <label><input type="checkbox" id="chk-beachsafe" checked onchange="onBeachFilterChange()"><span class="filter-dot" style="background:#3b82f6;"></span> BeachSafe (Patrol / Hazards)</label>
+      </div>
+
+      <!-- SharkSmart Filter Panel — shark reports from Dorsal Watch. Receiver
+           detections start OFF: they are 56% of all volume (a tagged shark
+           swimming past a listening station, ~14 a day) and would otherwise
+           bury the sightings people are actually looking for. -->
+      <div class="filter-panel" id="sharksmart-panel">
+        <div class="mobile-drag-handle"></div>
+        <h4><i class="fa-solid fa-fish-fins" style="color:#2dd4bf;"></i> SharkSmart</h4>
+        <label><input type="checkbox" id="chk-shark-sighting" checked onchange="onSharkFilterChange()"><span class="filter-dot" style="background:#2dd4bf;"></span> Sightings</label>
+        <label><input type="checkbox" id="chk-shark-drone" checked onchange="onSharkFilterChange()"><span class="filter-dot" style="background:#38bdf8;"></span> Drone sightings</label>
+        <label><input type="checkbox" id="chk-shark-incident" onchange="onSharkFilterChange()"><span class="filter-dot" style="background:#ef4444;"></span> Bites &amp; bumps</label>
+        <label><input type="checkbox" id="chk-shark-closure" onchange="onSharkFilterChange()"><span class="filter-dot" style="background:#f59e0b;"></span> Beach closures</label>
+        <label><input type="checkbox" id="chk-shark-advisory" checked onchange="onSharkFilterChange()"><span class="filter-dot" style="background:#fbbf24;"></span> Warnings</label>
+        <label><input type="checkbox" id="chk-shark-tagging" checked onchange="onSharkFilterChange()"><span class="filter-dot" style="background:#8b5cf6;"></span> Tag &amp; release</label>
+        <label><input type="checkbox" id="chk-shark-carcass" onchange="onSharkFilterChange()"><span class="filter-dot" style="background:#94a3b8;"></span> Carcasses</label>
+        <label><input type="checkbox" id="chk-shark-detection" onchange="onSharkFilterChange()"><span class="filter-dot" style="background:#64748b;"></span> Receiver detections</label>
       </div>
 
       <!-- AIS Ships Filter Panel — keyed off btn-ais. Identical pattern
@@ -3267,6 +3315,7 @@
       { panel: 'police-panel', btn: 'btn-police' },
       { panel: 'cameras-panel', btn: 'btn-cameras' },
       { panel: 'beaches-panel', btn: 'btn-beachwatch' },
+      { panel: 'sharksmart-panel', btn: 'btn-sharksmart' },
       { panel: 'weather-panel', btn: 'btn-weather' },
       { panel: 'ais-panel', btn: 'btn-ais' }
     ];
@@ -3390,11 +3439,20 @@
 
     // SUPABASE_URL, SUPABASE_KEY, and sb are provided by auth-common.js
 
-    const darkBase = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=cb1_29rl_1_764d57ded0436220d836abc9', { attribution: '&copy; CartoDB', subdomains: 'abcd', maxZoom: 19 });
+    const darkBase = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png?key=cb1_29rl_1_764d57ded0436220d836abc9', { attribution: '&copy; CartoDB', subdomains: 'abcd', maxZoom: 19 });
+    // Labels only, drawn ABOVE the weather field (pane z 260 vs the field's
+    // 250). Added and removed with darkBase so the two halves never separate.
+    const darkLabels = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png?key=cb1_29rl_1_764d57ded0436220d836abc9', { pane: 'labelPane', subdomains: 'abcd', maxZoom: 19 });
     const satBase = L.tileLayer('https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', { maxZoom: 21, subdomains: ['mt0', 'mt1', 'mt2', 'mt3'], maxNativeZoom: 19, attribution: '© Google' });
     const topoBase = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { attribution: 'Map data: &copy; OpenStreetMap | Map style: &copy; OpenTopoMap', maxZoom: 17 });
 
     const map = L.map('map', { zoomControl: false, layers: [darkBase] }).setView([-33.8688, 151.2093], 7);
+    // Above the weather field (250/251), below every marker pane. Created
+    // before the labels layer is added so Leaflet has somewhere to put it.
+    map.createPane('labelPane');
+    map.getPane('labelPane').style.zIndex = 260;
+    map.getPane('labelPane').style.pointerEvents = 'none';
+    darkLabels.addTo(map);
 
     // Close any open tooltips when the map starts moving / zooming.
     // Workaround for a Leaflet quirk: during a drag the map element
@@ -3704,6 +3762,14 @@
             }
           }
 
+          // Special handling for SharkSmart — opens the panel. Delegated to
+          // the toggle rather than reproduced inline, so the deep link can't
+          // drift from what the button does (filter button, loader, stacking).
+          if (layer === 'sharksmart') {
+            const panel = document.getElementById('sharksmart-panel');
+            if (panel && !panel.classList.contains('open')) toggleSharkSmartPanel();
+          }
+
           // Special handling for incidents (traffic) — opens the hazards panel
           if (layer === 'incidents') {
             const panel = document.getElementById('hazards-panel');
@@ -3789,11 +3855,12 @@
     function setMapType(type) {
       if (typeof umami !== 'undefined') umami.track('map-type-change', { type: type });
       map.removeLayer(darkBase); map.removeLayer(satBase); map.removeLayer(topoBase);
+      map.removeLayer(darkLabels);
       document.querySelectorAll('.map-type-btn').forEach(btn => btn.classList.remove('active'));
       const mapDiv = document.getElementById('map');
       // Remove all mode classes first
       mapDiv.classList.remove('map-dark-mode', 'map-sat-mode', 'map-topo-mode');
-      if (type === 'dark') { map.addLayer(darkBase); mapDiv.classList.add('map-dark-mode'); document.getElementById('btn-type-dark').classList.add('active'); }
+      if (type === 'dark') { map.addLayer(darkBase); map.addLayer(darkLabels); mapDiv.classList.add('map-dark-mode'); document.getElementById('btn-type-dark').classList.add('active'); }
       else if (type === 'sat') { map.addLayer(satBase); mapDiv.classList.add('map-sat-mode'); document.getElementById('btn-type-sat').classList.add('active'); }
       else if (type === 'topo') { map.addLayer(topoBase); mapDiv.classList.add('map-topo-mode'); document.getElementById('btn-type-topo').classList.add('active'); }
       document.querySelectorAll('#maptype-seg .seg-opt').forEach((o) => {
@@ -3880,6 +3947,8 @@
       // Beaches
       beachwatch: { data: null, timestamp: 0 },
       beachsafe: { data: null, timestamp: 0 },
+      // Shark reports (Dorsal Watch) — its own layer, not a beach feed
+      dorsal_reports: { data: null, timestamp: 0 },
       // Weather
       weather_current: { data: null, timestamp: 0 },
       // Power outages (Endeavour + Essential Energy have lat/lon)
@@ -3894,7 +3963,6 @@
       // Live Traffic feeds that were never ingested until now
       traffic_alpine: { data: null, timestamp: 0 },
       traffic_lga: { data: null, timestamp: 0 },
-      traffic_works: { data: null, timestamp: 0 },
       // The hazards layer serves a MERGED payload (incidents + alpine +
       // fire + major events). It needs its own slot: the startup
       // prefetch fills traffic_incidents with the raw incidents feed,
@@ -4009,16 +4077,18 @@
     // to filter them apart. This tracks the real category per marker so the
     // panel can offer one pill per category the data actually contains.
     const _hazardExcludedCategories = new Set();
-    // Responding agencies the user has switched off. Only records that
-    // name one are affected - see the note where hazard markers are built.
-    const _hazardExcludedAgencies = new Set();
+    // States and publishers the user has switched off. Every record has
+    // both: the road feeds name them, and the councils' and emergency
+    // services' records are tagged where the feeds are merged.
+    const _hazardExcludedStates = new Set();
+    const _hazardExcludedPublishers = new Set();
 
     // Floods was a single-source layer until Victoria's SES warnings
     // arrived on it, so it had no marker registry and no panel at all.
     // Same shape as the hazard one: keep the markers flat, rebuild
     // membership when a pill flips.
-    const _floodMarkers = []; // [{marker, agency}]
-    const _floodExcludedAgencies = new Set();
+    const _floodMarkers = []; // [{marker, state}]
+    const _floodExcludedStates = new Set();
     // 'waze' dropped with the retired ingest. It also gates the Waze subtype
     // pill block below, which would otherwise render an empty section.
     const _hazardSelectedSources = new Set(['livetraffic']);
@@ -4075,10 +4145,14 @@
     // the per-marker type alongside the marker. Filtering then just
     // re-projects the flat list into roadworkLayer based on the
     // currently-selected type set.
-    const _roadworkMarkers = [];        // [{marker, type, source}]
+    // A record can have more than one entry: an SA job is a pin at each end
+    // and its road as a line. Only the first entry of a record counts
+    // towards the panel's numbers; the rest are `extra`.
+    const _roadworkMarkers = [];        // [{marker, type, source, state, extra?, line?}]
     const _roadworkAvailableTypes = []; // distinct types in current dataset, ordered
     const _roadworkSelectedTypes = new Set(); // populated from available on first load
     const _roadworkSelectedSources = new Set(['livetraffic']); // 'waze' dropped with the retired ingest
+    const _roadworkExcludedStates = new Set();
 
     // Camera filter states and sub-layers
     const cameraFilters = {
@@ -4131,6 +4205,10 @@
     // pick up its filters and culling.
     const weatherLayer = L.layerGroup();
     const beachwatchLayer = L.layerGroup();
+    // Shark reports. Its own layer rather than a beaches sub-feed: these are
+    // timestamped events at a beach, not the standing state of one, so they
+    // can't merge into the one-pin-per-beach model beachwatchLayer uses.
+    const sharkLayer = L.layerGroup();
     // ---------- AIS (vessel positions) ----------
     // MarineTraffic provides vessel data; CORS blocks direct browser fetch so
     // this hits a backend proxy at PROXY_BASE that re-fetches the upstream URL.
@@ -4948,6 +5026,7 @@
     // one bails out at its next checkpoint instead of pushing/rendering stale data.
     let _loadAllSeq = 0;
     let pagerHours = 12; // Pager hits lookback window in hours (controlled by slider)
+    let _pagerHitsLast = null; // { hours, hits } from the last pager fetch that answered
     const PAGER_HOURS_STORAGE_KEY = 'pager_hours_window';
     const AGENCY_COLORS = { 'RFS': '#ff6600', 'FRNSW': '#ef4444', 'NSWAS': '#3b82f6', 'SES': '#eab308', 'POLICE': '#3b82f6', 'VRA': '#000000', 'AVIATION': '#a855f7' };
     // User incidents now carry full Aus-wide agency names (fleet-vocab):
@@ -6262,7 +6341,8 @@ function initPagerHoursFromStorage() {
       // --- Pager hits: load + cluster by GPS ---
       let pagerHitsRaw = [];
       try {
-        const res = await apiFetch(`${PROXY_BASE}/api/pager/hits?hours=${pagerHours}`);
+        const res = await apiFetch(`${PROXY_BASE}/api/v1/pager/hits?hours=${pagerHours}`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
         const pagerData = await res.json();
         // Convert GeoJSON features to flat hit objects for compatibility
         pagerHitsRaw = (pagerData.features || []).map(f => ({
@@ -6280,8 +6360,13 @@ function initPagerHoursFromStorage() {
           lat: f.properties.lat,
           lon: f.properties.lon
         }));
+        _pagerHitsLast = { hours: pagerHours, hits: pagerHitsRaw };
       } catch (e) {
         console.error('Pager hits load error', e);
+        // /api/v1/pager/hits answers 503 while the database cannot be read
+        // (the old path served a small cached copy then), so a blip keeps
+        // the last pins for the same window rather than clearing them.
+        if (_pagerHitsLast && _pagerHitsLast.hours === pagerHours) pagerHitsRaw = _pagerHitsLast.hits;
       }
 
       // A newer loadAllData started while we awaited the pager fetch — bail before
@@ -7852,8 +7937,9 @@ function initPagerHoursFromStorage() {
 
     // When a history snapshot was taken, as something new Date() cannot
     // misread. The API sends the same instant twice: fetched_at as unix
-    // seconds (1788334663) and fetched_at_iso as naive server-local time
-    // with no offset ("2026-09-02T17:37:43"). We used to take the ISO
+    // seconds (1788334663) and fetched_at_iso, which the old /api/ path
+    // wrote as naive server-local time with no offset
+    // ("2026-09-02T17:37:43"; /api/v1/ writes UTC). We used to take the ISO
     // first, so new Date() applied the *viewer's* zone — right in AEST,
     // two hours out in WA, thirty minutes in SA. And because formatAgo
     // refuses to print a negative age, everyone west of the server just
@@ -7871,10 +7957,7 @@ function initPagerHoursFromStorage() {
         // the same silent failure, from the other direction.
         return new Date(secs > 1e11 ? secs : secs * 1000).toISOString();
       }
-      // Nothing unambiguous on offer. The naive string is still better
-      // than no age for the eastern majority; it cannot be repaired here
-      // because we do not know the server's offset, and guessing one
-      // (appending 'Z') would break it for everybody instead of some.
+      // No unix seconds: the ISO string, which /api/v1/ sends in UTC.
       return (r && r.fetched_at_iso) || '';
     }
 
@@ -7886,10 +7969,11 @@ function initPagerHoursFromStorage() {
       if (seen === 'loading') return undefined;
       _changeTrails.set(key, 'loading');
       try {
-        const url = `${PROXY_BASE}/api/data/history?source=${encodeURIComponent(source)}`
+        const url = `${PROXY_BASE}/api/v1/history?source=${encodeURIComponent(source)}`
           + `&source_id=${encodeURIComponent(sourceId)}&limit=50&order=desc&full=1&unique=0`;
         const res = await apiFetch(url);
-        const body = await res.json();
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const body = (await res.json()).data;
         // Oldest first, so a change reads as "from -> to" in the order
         // it happened rather than backwards.
         const snaps = (body.records || []).slice().reverse();
@@ -8661,9 +8745,9 @@ function initPagerHoursFromStorage() {
     // Proxy base URL for external API calls
     const PROXY_BASE = 'https://api.forcequit.xyz';
     
-    // API Key - loaded from backend config
-    let API_KEY = null;
-    
+    // Credential: the page's browser session token, from api-session.js
+    // (window.AusApi). Mints on first use, refreshes itself, retries a 401.
+
     // Authenticated fetch wrapper
     // In-flight request dedupe. The map page wires up several layers
     // that each kick off their own fetch on init, so the same endpoint
@@ -8705,10 +8789,6 @@ function initPagerHoursFromStorage() {
 
     function apiFetch(url, options = {}) {
       const method = (options.method || 'GET').toUpperCase();
-      const headers = {
-        ...options.headers,
-        ...(API_KEY ? { 'Authorization': `Bearer ${API_KEY}` } : {})
-      };
       // Dedupe only safe idempotent reads. Anything with a body or
       // non-GET/HEAD method gets a fresh fetch.
       const dedupable = (method === 'GET' || method === 'HEAD') && !options.body;
@@ -8722,30 +8802,28 @@ function initPagerHoursFromStorage() {
         if (existing) {
           return existing.then(r => r.clone()).then(promote);
         }
-        const p = fetch(url, { ...options, headers }).finally(() => {
+        const p = AusApi.fetch(url, options).finally(() => {
           _inflightFetches.delete(key);
         });
         _inflightFetches.set(key, p);
         return p.then(r => r.clone()).then(promote);
       }
-      return fetch(url, { ...options, headers }).then(promote);
+      return AusApi.fetch(url, options).then(promote);
     }
-    
-    // Load API config from backend (with flood guard)
+
+    // Warm the session token before the first burst of layer fetches so they
+    // don't each wait on (and dedupe through) one mint. Flood-guarded.
     let _apiConfigLoaded = false;
     let _apiConfigInFlight = false;
     async function loadApiConfig() {
-      // Prevent loading config more than once, and prevent concurrent calls
       if (_apiConfigLoaded || _apiConfigInFlight) return;
       _apiConfigInFlight = true;
       try {
-        const res = await fetch(`${PROXY_BASE}/api/config`);
-        const config = await res.json();
-        API_KEY = config.apiKey;
+        await AusApi.token();
         _apiConfigLoaded = true;
-        console.log('✓ API config loaded');
+        console.log('✓ API session ready');
       } catch (e) {
-        console.error('Failed to load API config:', e);
+        console.error('Failed to get an API session:', e);
       } finally {
         _apiConfigInFlight = false;
       }
@@ -8758,13 +8836,20 @@ function initPagerHoursFromStorage() {
     let _heartbeatInFlight = false;  // Guard: prevent concurrent heartbeat requests
     
     // Shared session ID across all pages AND tabs - uses localStorage to persist
-    const MAP_PAGE_ID = localStorage.getItem('nswpsn_session_id') || (() => {
-      const id = 'session-' + (crypto.randomUUID ? crypto.randomUUID() : 
+    const MAP_PAGE_ID = (() => {
+      // localStorage can throw in blocked-storage / private modes — guard it
+      // so a failure here doesn't abort the whole inline script. This runs at
+      // top level, so an unguarded read took the boot IIFE, the polling and
+      // every deep link down with it and left the page on bare base tiles.
+      let stored = null;
+      try { stored = localStorage.getItem('nswpsn_session_id'); } catch (e) {}
+      if (stored) return stored;
+      const id = 'session-' + ((typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() :
         'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
           const r = Math.random() * 16 | 0;
           return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
         }));
-      localStorage.setItem('nswpsn_session_id', id);
+      try { localStorage.setItem('nswpsn_session_id', id); } catch (e) {}
       return id;
     })();
     const MAP_PAGE_TYPE = 'map';
@@ -9652,11 +9737,207 @@ function initPagerHoursFromStorage() {
         createBeachMarker(beach, showBeachwatch, showBeachsafe);
       });
     }
-    
+
+    // ---------- SharkSmart (Dorsal Watch shark reports) ----------
+    // Icon says what the thing is, colour says how it is going — the same
+    // convention the rest of the map uses. Receiver detections are the
+    // routine case and are deliberately the dullest pin on the layer.
+    // `rgb` is the same colour as "R,G,B" — _ttSection builds its rgba()
+    // tint from it, so the tooltip panel matches the pin.
+    const SHARK_CATEGORIES = {
+      incident:  { label: 'Bites & bumps',       icon: 'fa-triangle-exclamation', color: '#ef4444', rgb: '239,68,68' },
+      closure:   { label: 'Beach closures',      icon: 'fa-ban',                  color: '#f59e0b', rgb: '245,158,11' },
+      advisory:  { label: 'Warnings',            icon: 'fa-circle-exclamation',   color: '#fbbf24', rgb: '251,191,36' },
+      sighting:  { label: 'Sightings',           icon: 'fa-fish-fins',            color: '#2dd4bf', rgb: '45,212,191' },
+      drone:     { label: 'Drone sightings',     icon: 'fa-video',                color: '#38bdf8', rgb: '56,189,248' },
+      tagging:   { label: 'Tag & release',       icon: 'fa-tag',                  color: '#8b5cf6', rgb: '139,92,246' },
+      carcass:   { label: 'Carcasses',           icon: 'fa-skull',                color: '#94a3b8', rgb: '148,163,184' },
+      detection: { label: 'Receiver detections', icon: 'fa-tower-broadcast',      color: '#64748b', rgb: '100,116,139' },
+    };
+    // Order the panel, the floating pills and the legend all read in.
+    const SHARK_CATEGORY_ORDER = [
+      'sighting', 'drone', 'incident', 'closure', 'advisory', 'tagging', 'carcass', 'detection',
+    ];
+
+    function toggleSharkSmartPanel() {
+      const panel = document.getElementById('sharksmart-panel');
+      const btn = document.getElementById('btn-sharksmart');
+      const isOpen = panel.classList.contains('open');
+      if (!isOpen) { showFiltersSidebarToast(); if (typeof umami !== 'undefined') umami.track('map-layer-toggle', { layer: 'sharksmart' }); }
+      if (isOpen) {
+        panel.classList.remove('open');
+        btn.classList.remove('active');
+        map.removeLayer(sharkLayer);
+        removeFilterButton('sharksmart');
+      } else {
+        panel.classList.add('open');
+        btn.classList.add('active');
+        map.addLayer(sharkLayer);
+        if (sharkLayer.getLayers().length === 0) loadSharkSmartData();
+        addFilterButton('sharksmart');
+      }
+      updateFilterPanelPositions();
+      updateSettingsBackdrop();
+    }
+
+    let _allSharkReports = [];
+
+    function sharkCategoryEnabled(cat) {
+      const el = document.getElementById(`chk-shark-${cat}`);
+      // Unknown categories (a new encounter type upstream normalises to
+      // 'sighting' today) follow the sightings checkbox rather than vanishing.
+      if (!el) return document.getElementById('chk-shark-sighting')?.checked ?? true;
+      return el.checked;
+    }
+
+    function onSharkFilterChange() {
+      renderSharkMarkers();
+    }
+
+    function renderSharkMarkers() {
+      sharkLayer.clearLayers();
+      _allSharkReports.forEach(report => {
+        if (!sharkCategoryEnabled(report.category)) return;
+        createSharkMarker(report);
+      });
+    }
+
+    function createSharkMarker(r) {
+      const cfg = SHARK_CATEGORIES[r.category] || SHARK_CATEGORIES.sighting;
+      const icon = L.divIcon({
+        className: 'custom-pin shark-pin',
+        html: `<div style="
+          background: linear-gradient(135deg, ${cfg.color}, ${cfg.color}cc);
+          width: 28px; height: 28px; border-radius: 50%;
+          border: 3px solid #fff;
+          box-shadow: 0 2px 8px ${cfg.color}80, 0 0 12px ${cfg.color}40;
+          display: flex; align-items: center; justify-content: center;
+          font-size: 13px; color: #fff;
+        "><i class="fa-solid ${cfg.icon}"></i></div>`,
+        iconSize: [28, 28],
+        iconAnchor: [14, 14],
+      });
+      L.marker([r.lat, r.lon], { icon })
+        .addTo(sharkLayer)
+        .bindTooltip(buildSharkTooltipContent(r), {
+          direction: 'top',
+          offset: [0, -16],
+          opacity: 0.95,
+        });
+    }
+
+    function buildSharkTooltipContent(r) {
+      const cfg = SHARK_CATEGORIES[r.category] || SHARK_CATEGORIES.sighting;
+      // No OFFICIAL/COMMUNITY pill. Dorsal's `official` flag only means the
+      // report was posted by their own account rather than by a member of the
+      // public — it is not a verification, and a badge reading OFFICIAL on a
+      // layer named SharkSmart reads as government confirmation. The flag is
+      // still carried in the feed for anyone who wants to weigh it.
+      const header = _ttHeader(
+        `fa-solid ${cfg.icon}`,
+        r.species && r.species !== 'Unknown' ? r.species : 'Shark report',
+        cfg.color,
+        '', '', '',
+      );
+
+      let body = '';
+
+      const tiles = [];
+      tiles.push(_ttTile('Type', cfg.label, cfg.color));
+      if (r.sharkLength != null) tiles.push(_ttTile('Length', `${r.sharkLength} m`, '#e2e8f0'));
+      if (r.distanceFromShore != null) {
+        tiles.push(_ttTile('From shore', `${r.distanceFromShore} m`, '#e2e8f0'));
+      }
+      body += _ttSection('Report', cfg.color, cfg.rgb,
+        `<div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap:4px;">${tiles.join('')}</div>`);
+
+      const whenAgo = formatAgo(r.reportedAt);
+      const whenAbs = (() => {
+        const d = new Date(r.reportedAt);
+        return isNaN(d.getTime()) ? '' : d.toLocaleString('en-AU', { timeZone: 'Australia/Sydney' });
+      })();
+      const place = [r.location, r.zone, r.state].filter(Boolean).join(' · ');
+      let loc = '';
+      if (place) loc += `<div style="color:#e2e8f0; font-size:12px;">${escapeHtml(place)}</div>`;
+      if (whenAbs) {
+        loc += `<div style="color:#94a3b8; font-size:11px; margin-top:2px;">${escapeHtml(whenAbs)}`
+          + (whenAgo ? ` <span style="color:#64748b;">(${escapeHtml(whenAgo)})</span>` : '')
+          + `</div>`;
+      }
+      if (loc) body += _ttSection('Where & when', '#38bdf8', '56,189,248', loc);
+
+      if (r.comment) {
+        // Upstream comments run to 1200 characters and are free text from
+        // the public — escaped, and clipped so one essay can't fill the map.
+        const text = r.comment.length > 420 ? `${r.comment.slice(0, 420)}…` : r.comment;
+        body += _ttSection('Detail', '#cbd5e1', '203,213,225',
+          `<div style="color:#cbd5e1; font-size:11.5px; white-space:pre-wrap;">${escapeHtml(text)}</div>`);
+      }
+
+      if (r.photoUrl) {
+        body += `<div style="margin-bottom:8px;"><img src="${safeUrl(r.photoUrl)}" alt="" `
+          + `style="width:100%; max-height:150px; object-fit:cover; border-radius:6px;" loading="lazy"></div>`;
+      }
+
+      body += `<div style="color:#64748b; font-size:10px; letter-spacing:0.3px;">`
+        + `Source: Dorsal Watch${r.encounter ? ` · ${escapeHtml(r.encounter)}` : ''}</div>`;
+
+      return _ttWrap(header, body);
+    }
+
+    async function loadSharkSmartData() {
+      try {
+        const cached = layerCache.dorsal_reports;
+        const fresh = cached.data && (Date.now() - cached.timestamp) < LAYER_CACHE_TTL;
+        let geo;
+        if (fresh) {
+          geo = cached.data;
+        } else {
+          // 7 days. The endpoint defaults to 48h for the Discord bot's sake;
+          // the map asks for its own window explicitly.
+          const res = await apiFetch(`${PROXY_BASE}/api/v1/dorsal/reports?hours=168`);
+          geo = await res.json();
+          layerCache.dorsal_reports = { data: geo, timestamp: Date.now() };
+        }
+
+        const features = Array.isArray(geo?.features) ? geo.features : [];
+        _allSharkReports = features.map(f => {
+          const p = f?.properties || {};
+          const c = f?.geometry?.coordinates;
+          if (!Array.isArray(c) || c.length < 2) return null;
+          const lon = Number(c[0]);
+          const lat = Number(c[1]);
+          if (!isFinite(lat) || !isFinite(lon)) return null;
+          return {
+            id: p.report_id,
+            lat, lon,
+            category: p.category || 'sighting',
+            encounter: p.encounter || '',
+            species: p.species || 'Unknown',
+            sharkLength: typeof p.shark_length_m === 'number' ? p.shark_length_m : null,
+            distanceFromShore:
+              typeof p.distance_from_shore_m === 'number' ? p.distance_from_shore_m : null,
+            location: p.location || '',
+            zone: p.zone || '',
+            state: p.state || '',
+            reportedAt: p.reported_at || '',
+            official: p.official === true,
+            comment: p.comment || '',
+            photoUrl: typeof p.photo_url === 'string' ? p.photo_url : null,
+          };
+        }).filter(Boolean);
+
+        renderSharkMarkers();
+      } catch (e) {
+        console.error('SharkSmart layer failed to load:', e);
+      }
+    }
+
+
     // Stack open filter panels vertically (desktop only)
     function updateFilterPanelPositions() {
       if (window.innerWidth <= 900) return; // Mobile uses bottom-sheet CSS
-      const panels = ['pager-panel', 'outages-panel', 'beaches-panel', 'hazards-panel', 'police-panel', 'cameras-panel', 'weather-panel'];
+      const panels = ['pager-panel', 'outages-panel', 'beaches-panel', 'sharksmart-panel', 'hazards-panel', 'police-panel', 'cameras-panel', 'weather-panel'];
       let bottomOffset = 80; // Start above map type controls
       
       panels.forEach(panelId => {
@@ -9745,6 +10026,13 @@ function initPagerHoursFromStorage() {
 
     /** Mount/unmount one entry on `layer`, honouring the current LOD. */
     function _lodMount(layer, entry, want) {
+      // A road drawn as a line looks the same at every zoom: no dot for it.
+      if (entry.line) {
+        if (want && !entry._pinOn) { layer.addLayer(entry.marker); entry._pinOn = true; }
+        else if (!want && entry._pinOn) { layer.removeLayer(entry.marker); entry._pinOn = false; }
+        entry._shown = !!entry._pinOn;
+        return;
+      }
       const wantDot = want && _lodDots();
       const wantPin = want && !wantDot;
       if (entry._pinOn && !wantPin) { layer.removeLayer(entry.marker); entry._pinOn = false; }
@@ -9770,7 +10058,8 @@ function initPagerHoursFromStorage() {
           && !(m.source === 'waze' && m.subtypeLabel
                && _hazardExcludedSubtypes.has(m.subtypeLabel))
           && !(m.mainCategory && _hazardExcludedCategories.has(m.mainCategory))
-          && !(m.agency && _hazardExcludedAgencies.has(m.agency))
+          && !(m.state && _hazardExcludedStates.has(m.state))
+          && !(m.publisher && _hazardExcludedPublishers.has(m.publisher))
           && _cullEntryInView(m, bounds);
         const sl = hazardSubLayers[m.type];
         if (!sl) continue;
@@ -10124,8 +10413,12 @@ function initPagerHoursFromStorage() {
       html += `<div style="display:flex; align-items:center; gap:6px; margin-bottom:8px; flex-wrap:wrap;">`;
       html += `<span style="color:#f97316; font-size:13px; font-weight:600;">Traffic Alert</span>`;
       html += `<span style="background:${typeColor}; color:#fff; font-size:9px; padding:2px 6px; border-radius:3px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px;">${escapeHtml(typeText)}</span>`;
+      // Interstate records (QLD, SA, VIC, ACT) say whose they are.
+      if (props.state && props.state !== 'NSW') {
+        html += `<span style="background:rgba(148,163,184,0.25); color:#e2e8f0; font-size:9px; padding:2px 6px; border-radius:3px; font-weight:600; letter-spacing:0.3px;">${escapeHtml(props.state)}</span>`;
+      }
       html += `</div>`;
-      
+
       // Title (with type prefix removed) - fallback to roads, then generic label
       let displayTitle = cleanTitle;
       if (isLowQualityText(displayTitle)) {
@@ -10201,7 +10494,12 @@ function initPagerHoursFromStorage() {
         if (props.lastUpdated) html += `<div style="color:#64748b; font-size:10px; margin-top:3px;"><i class="fa-solid fa-rotate" style="margin-right:4px;"></i>Updated: ${new Date(props.lastUpdated).toLocaleString()}</div>`;
         html += `</div>`;
       }
-      
+
+      // The publisher's attribution — the QLD, SA and VIC data is CC BY.
+      if (props.credit) {
+        html += `<div style="color:#64748b; font-size:9px; margin-top:6px;">${escapeHtml(props.credit)}</div>`;
+      }
+
       html += `</div>`;
       return html;
     }
@@ -10230,13 +10528,14 @@ function initPagerHoursFromStorage() {
           const j = (path) => apiFetch(`${PROXY_BASE}${path}`)
             .then((r) => r.json())
             .catch(() => ({ features: [] }));
-          const [inc, alp, fir, maj, lgaHz, wrkHz, ntHz, qldHz, vicHz, waHz, waHzW, saHzC, saHzM] = await Promise.all([
-            j('/api/traffic/incidents'),
-            j('/api/traffic/alpine'),
-            j('/api/traffic/fire'),
-            j('/api/traffic/majorevent'),
-            j('/api/traffic/lga'),
-            j('/api/traffic/works'),
+          // Incidents and major events carry QLD, SA, VIC and ACT records
+          // as well as NSW's, each from its own state's feed.
+          const [inc, alp, fir, maj, lgaHz, ntHz, qldHz, vicHz, waHz, waHzW, saHzC, saHzM] = await Promise.all([
+            j('/api/v1/traffic/incidents'),
+            j('/api/v1/traffic/alpine'),
+            j('/api/v1/traffic/fire'),
+            j('/api/v1/traffic/majorevent'),
+            j('/api/v1/traffic/lga'),
             j('/api/nt-fire/incidents'),
             j('/api/qld-fire/incidents'),
             j('/api/vic-emergency/events'),
@@ -10364,23 +10663,34 @@ function initPagerHoursFromStorage() {
                 lastUpdated: f.properties.updatedISO || '',
               },
             }));
+          // Each record's state and publisher, for the State and Publisher
+          // rows. The road feeds name both (their `state` and `source`);
+          // the councils' and the emergency services' records are tagged
+          // here. `publisher` is its own property because the draw loop
+          // below overwrites `source`.
+          const tagged = (features, state, publisher) => (features || []).map((f) => ({
+            ...f,
+            properties: {
+              ...f.properties,
+              state: (f.properties || {}).state || state,
+              publisher: publisher || (f.properties || {}).source || 'livetraffic',
+            },
+          }));
           trafficData = {
             type: 'FeatureCollection',
             features: [
-              ...(inc.features || []),
-              ...(alp.features || []),
-              ...(fir.features || []),
-              ...(maj.features || []),
+              ...tagged(inc.features, 'NSW'),
+              ...tagged(alp.features, 'NSW'),
+              ...tagged(fir.features, 'NSW'),
+              ...tagged(maj.features, 'NSW'),
               // The council records that aren't roadwork: hazards, adverse
               // weather, flooding, changed traffic conditions.
-              ...(lgaHz.features || []).filter((f) => !_isCouncilRoadwork(f.properties)),
-              // The works aggregate's hazard-ish share.
-              ...(wrkHz.features || []).filter((f) => _worksTarget(f.properties) === 'hazard'),
-              ...ntCrashes,
-              ...qldCrashes,
-              ...vicHazards,
-              ...waHazards,
-              ...saHazards,
+              ...tagged((lgaHz.features || []).filter((f) => !_isCouncilRoadwork(f.properties)), 'NSW', 'council'),
+              ...tagged(ntCrashes, 'NT', 'emergency'),
+              ...tagged(qldCrashes, 'QLD', 'emergency'),
+              ...tagged(vicHazards, 'VIC', 'emergency'),
+              ...tagged(waHazards, 'WA', 'emergency'),
+              ...tagged(saHazards, 'SA', 'emergency'),
             ],
           };
           layerCache.hazards_merged = { data: trafficData, timestamp: now };
@@ -10741,12 +11051,8 @@ function initPagerHoursFromStorage() {
                 opacity: 0.95
               });
               _hazardMarkers.push({ marker, type: category, source: 'livetraffic', subtypeLabel: null,
-                // Only the emergency-service records carry this. The road
-                // authority and council records deliberately do not: their
-                // OrgName is the reporting council, and 128 of those would
-                // bury the handful of agencies the row exists to filter.
-                // Markers without one are never hidden by the agency row.
-                agency: props.responderAgency || null,
+                state: props.state || '',
+                publisher: props.publisher || '',
                 // Colour for the zoomed-out canvas dot, matching the bucket.
                 color: category === 'accident' ? '#ef4444' : category === 'closures' ? '#a855f7' : '#f97316',
                 // Canonical form: the merged feeds disagree on casing and
@@ -11006,22 +11312,21 @@ function initPagerHoursFromStorage() {
           trafficData = cached.data;
         } else {
           // Council roadwork joins state-road roadwork here rather than
-          // sitting on a layer of its own.
+          // sitting on a layer of its own. /traffic/roadwork carries QLD,
+          // SA, VIC and ACT roadwork (construction, utilities, light rail)
+          // as well as NSW's.
           const jr = (path) => apiFetch(`${PROXY_BASE}${path}`)
             .then((r) => r.json())
             .catch(() => ({ features: [] }));
-          const [rw, lgaRw, wrkRw] = await Promise.all([
-            jr('/api/traffic/roadwork'),
-            jr('/api/traffic/lga'),
-            jr('/api/traffic/works'),
+          const [rw, lgaRw] = await Promise.all([
+            jr('/api/v1/traffic/roadwork'),
+            jr('/api/v1/traffic/lga'),
           ]);
           trafficData = {
             type: 'FeatureCollection',
             features: [
               ...(rw.features || []),
               ...(lgaRw.features || []).filter((f) => _isCouncilRoadwork(f.properties)),
-              // Works: roadwork, construction, utilities, light rail.
-              ...(wrkRw.features || []).filter((f) => _worksTarget(f.properties) === 'roadwork'),
             ],
           };
           layerCache.roadwork_merged = { data: trafficData, timestamp: now };
@@ -11214,26 +11519,65 @@ function initPagerHoursFromStorage() {
               const [lon, lat] = feature.geometry.coordinates;
               if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
               const props = feature.properties || {};
-              const icon = L.divIcon({
-                className: 'custom-pin',
-                html: getRoadworkIcon(props, false),
-                iconSize: [24, 24],
-                iconAnchor: [12, 12]
+              const type = _roadworkClassify(props, false);
+              // Council roadwork comes from NSW's council feed.
+              const state = props.state || 'NSW';
+              // An SA job lists its sites along the road: a pin at each
+              // end. Anything else, or a job whose sites are all at one
+              // spot, is one pin at its own place.
+              const sites = (Array.isArray(props.sites) ? props.sites : [])
+                .filter((s) => s && Number.isFinite(s.lat) && Number.isFinite(s.lon));
+              const first = sites[0];
+              const last = sites[sites.length - 1];
+              const pins = first && (first.lat !== last.lat || first.lon !== last.lon)
+                ? [[first.lat, first.lon], [last.lat, last.lon]]
+                : [[lat, lon]];
+              pins.forEach(([plat, plon], i) => {
+                const icon = L.divIcon({
+                  className: 'custom-pin',
+                  html: getRoadworkIcon(props, false),
+                  iconSize: [24, 24],
+                  iconAnchor: [12, 12]
+                });
+                const marker = L.marker([plat, plon], { icon });
+                marker.bindTooltip(buildRoadworkTooltip(props, plat, plon), {
+                  direction: 'top',
+                  offset: [0, -10],
+                  opacity: 0.95
+                });
+                _roadworkMarkers.push({
+                  marker,
+                  type,
+                  source: 'livetraffic',
+                  state,
+                  // The second end pin is the same record.
+                  extra: i > 0,
+                  // Colour for the zoomed-out canvas dot.
+                  color: '#eab308',
+                  latlng: L.latLng(plat, plon),
+                });
               });
-              const marker = L.marker([lat, lon], { icon });
-              marker.bindTooltip(buildRoadworkTooltip(props, lat, lon), {
-                direction: 'top',
-                offset: [0, -10],
-                opacity: 0.95
-              });
-              _roadworkMarkers.push({
-                marker,
-                type: _roadworkClassify(props, false),
-                source: 'livetraffic',
-                // Colour for the zoomed-out canvas dot.
-                color: '#eab308',
-                latlng: L.latLng(lat, lon),
-              });
+              // The road the works are on, in red, where the record carries
+              // it: an SA job's road between its ends, QLD's own lines.
+              const lines = (Array.isArray(props.encodedPolylines) ? props.encodedPolylines : [])
+                .map((l) => l && l.coords).filter(Boolean);
+              if (!lines.length && props.encodedPolyline) lines.push(props.encodedPolyline);
+              for (const enc of lines) {
+                const latLngs = decodeGooglePolyline(enc);
+                if (latLngs.length < 2) continue;
+                const road = L.polyline(latLngs, {
+                  color: '#ef4444',
+                  weight: 5,
+                  opacity: 0.85,
+                  lineCap: 'round',
+                  lineJoin: 'round'
+                });
+                road.bindTooltip(buildRoadworkTooltip(props, lat, lon), { sticky: true, opacity: 0.95 });
+                _roadworkMarkers.push({
+                  marker: road, type, source: 'livetraffic', state,
+                  extra: true, line: true, mbounds: road.getBounds(),
+                });
+              }
               totalCount++;
             }
           });
@@ -11301,11 +11645,18 @@ function initPagerHoursFromStorage() {
         const desired =
           _roadworkSelectedTypes.has(m.type)
           && _roadworkSelectedSources.has(m.source)
+          && !(m.state && _roadworkExcludedStates.has(m.state))
           && _cullEntryInView(m, bounds);
         _lodMount(roadworkLayer, m, desired);
       }
     }
     registerViewportCuller(_renderRoadworkVisible);
+    window.toggleRoadworkStatePill = function (key) {
+      if (_roadworkExcludedStates.has(key)) _roadworkExcludedStates.delete(key);
+      else _roadworkExcludedStates.add(key);
+      _renderRoadworkVisible();
+      refreshActiveFilterPanel();
+    };
     function toggleRoadworkSourcePill(src) {
       if (_roadworkSelectedSources.has(src)) _roadworkSelectedSources.delete(src);
       else _roadworkSelectedSources.add(src);
@@ -11374,24 +11725,6 @@ function initPagerHoursFromStorage() {
       return c.includes('ROADWORK');
     }
 
-    // Which existing layer a works-aggregate record belongs to. The feed
-    // is a mixed bag — roadwork, construction, utilities, light rail,
-    // hazards, flooding, events — so it is split by category rather than
-    // being given a layer of its own.
-    function _worksTarget(props) {
-      const c = String((props && (props.mainCategory || props.type)) || '').toLowerCase();
-      // Static infrastructure, not road events: heavy vehicle checking
-      // stations and rest areas never change and don't belong on any
-      // incident layer. The backend skips them at ingest too; this guard
-      // keeps them hidden even against an older API.
-      if (/hvcs|checking station|restarea|rest area/.test(c)) return null;
-      if (c.includes('flood')) return 'flood';
-      if (/roadwork|construction|utilit|lightrail|light rail|telecommunication|charitable/.test(c)) {
-        return 'roadwork';
-      }
-      return 'hazard';
-    }
-
     async function loadActAmbulanceData() {
       actAmbulanceLayer.clearLayers();
       try {
@@ -11400,7 +11733,7 @@ function initPagerHoursFromStorage() {
         if (cached.data && (Date.now() - cached.timestamp) < LAYER_CACHE_TTL) {
           data = cached.data;
         } else {
-          const res = await apiFetch(`${PROXY_BASE}/api/act-ambulance/incidents`);
+          const res = await apiFetch(`${PROXY_BASE}/api/v1/act-ambulance/incidents`);
           data = await res.json();
           layerCache.act_ambulance = { data, timestamp: Date.now() };
         }
@@ -11487,15 +11820,13 @@ function initPagerHoursFromStorage() {
         if (cached.data && (Date.now() - cached.timestamp) < LAYER_CACHE_TTL) {
           data = cached.data;
         } else {
-          // The works aggregate carries its own flooding records (long-term
-          // flooding, heavy rain), so they join this layer rather than
-          // sitting under a separate Works toggle.
+          // /traffic/flood carries QLD, SA, VIC and ACT flooded roads as
+          // well as NSW's.
           const jf = (path) => apiFetch(`${PROXY_BASE}${path}`)
             .then((r) => r.json())
             .catch(() => ({ features: [] }));
-          const [fl, wrkFl, vicFl, waFl, waFlW] = await Promise.all([
-            jf('/api/traffic/flood'),
-            jf('/api/traffic/works'),
+          const [fl, vicFl, waFl, waFlW] = await Promise.all([
+            jf('/api/v1/traffic/flood'),
             jf('/api/vic-emergency/events'),
             jf('/api/wa-emergency/incidents'),
             jf('/api/wa-emergency/warnings'),
@@ -11556,7 +11887,6 @@ function initPagerHoursFromStorage() {
             type: 'FeatureCollection',
             features: [
               ...(fl.features || []),
-              ...(wrkFl.features || []).filter((f) => _worksTarget(f.properties) === 'flood'),
               ...vicFloods,
               ...waFloods,
             ],
@@ -11571,7 +11901,11 @@ function initPagerHoursFromStorage() {
               const props = feature.properties || {};
               const pulseClass = isWithinMinutes(props.created, 15) ? 'rfs-pulse' : '';
               const tooltip = buildTrafficTooltip(props);
-              
+              // The road feeds name their state; Victoria's and WA's
+              // warnings are theirs; the rest is NSW's.
+              const state = props.state
+                || (props.region === 'Victoria' ? 'VIC' : props.region === 'Western Australia' ? 'WA' : 'NSW');
+
               // Decode and render polyline if available
               const encodedPoly = props.encodedPolyline;
               const polyStrings = Array.isArray(encodedPoly) ? encodedPoly : (encodedPoly ? [encodedPoly] : []);
@@ -11590,6 +11924,8 @@ function initPagerHoursFromStorage() {
                     lineJoin: 'round'
                   }).addTo(floodsLayer);
                   polyline.bindTooltip(tooltip, { sticky: true, opacity: 0.95 });
+                  // Registered with its record's pin, so the State row hides both.
+                  _floodMarkers.push({ marker: polyline, state, extra: true });
                 }
               }
               
@@ -11606,10 +11942,7 @@ function initPagerHoursFromStorage() {
                 offset: [0, -10],
                 opacity: 0.95
               });
-              // Only the emergency-service records name a responding
-              // agency; the road-authority ones pass the agency row
-              // untouched, the same way they do on Hazards.
-              _floodMarkers.push({ marker, agency: props.responderAgency || null });
+              _floodMarkers.push({ marker, state });
               // A warning area, where the agency published one - the same
               // rings the Fires layer draws around a fire ground.
               for (const ring of (props.polygons || [])) {
@@ -11622,7 +11955,7 @@ function initPagerHoursFromStorage() {
                   color: '#06b6d4', weight: 2, fillColor: '#06b6d4', fillOpacity: 0.12
                 }).addTo(floodsLayer);
                 area.bindTooltip(tooltip, { sticky: true, opacity: 0.95 });
-                _floodMarkers.push({ marker: area, agency: props.responderAgency || null });
+                _floodMarkers.push({ marker: area, state, extra: true });
               }
               floodCount++;
             }
@@ -11693,6 +12026,8 @@ function initPagerHoursFromStorage() {
         console.error('Floods error (Waze)', e);
       }
       
+      // A reload mounts everything; take the states switched off back off.
+      _rebuildFloodLayer();
       console.log(`Loaded ${floodCount} flood items (Live Traffic + Waze)`);
     }
 
@@ -11924,7 +12259,7 @@ function initPagerHoursFromStorage() {
 
     let _firmsFeatures = [];           // last fetched raw features
     let _firmsZoomHandlerWired = false;
-    let _firmsLastSourceStatus = [];   // captured from /api/firms/hotspots for the panel
+    let _firmsLastSourceStatus = [];   // captured from /api/v1/firms/hotspots for the panel
     // Per-satellite filter — defaults to all on. Toggled by the user via
     // the floating-sidebar pill buttons.
     const _firmsSelectedSats = new Set(['S-NPP', 'NOAA-20', 'NOAA-21']);
@@ -11976,6 +12311,18 @@ function initPagerHoursFromStorage() {
     }
     function _ffPill(active, label, onclickJs) {
       return `<button class="floating-filter-pill ${active ? 'active' : ''}" onclick="${onclickJs}">${label}</button>`;
+    }
+    // States and territories, in the order the site lists them.
+    const _STATE_ORDER = ['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'NT', 'ACT'];
+    /** A State row: a pill per state with records, counted; nothing when
+     *  there is only one, as its pill could only hide the whole layer. */
+    function _ffStateRow(counts, excluded, toggleName) {
+      const rank = (s) => (_STATE_ORDER.indexOf(s) + 1) || 99;
+      const keys = Object.keys(counts).filter(Boolean).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+      if (keys.length < 2) return '';
+      const pills = keys.map((s) => _ffPill(!excluded.has(s), `${escapeHtml(s)} (${counts[s].toLocaleString()})`,
+                                            `${toggleName}('${jsArg(s)}')`)).join('');
+      return `<div class="ff-section-label">State</div><div class="floating-filter-pills">${pills}</div>`;
     }
     // Pill variant that carries a per-pill colour. Used by AIS to keep
     // the filter buttons visually matched to the on-map pin colour for
@@ -12036,13 +12383,30 @@ function initPagerHoursFromStorage() {
       toggleHazardFilter(key, hazardFilters[key]);
       refreshActiveFilterPanel();
     };
-    // Which responding agency's records to show. Only the emergency
-    // services tag themselves, so this can never hide a road-authority pin.
-    window.toggleHazardAgencyPill = function (key) {
-      if (_hazardExcludedAgencies.has(key)) _hazardExcludedAgencies.delete(key);
-      else _hazardExcludedAgencies.add(key);
+    // Which states' and which publishers' records to show.
+    window.toggleHazardStatePill = function (key) {
+      if (_hazardExcludedStates.has(key)) _hazardExcludedStates.delete(key);
+      else _hazardExcludedStates.add(key);
       _rebuildHazardSubLayers();
       refreshActiveFilterPanel();
+    };
+    window.toggleHazardPublisherPill = function (key) {
+      if (_hazardExcludedPublishers.has(key)) _hazardExcludedPublishers.delete(key);
+      else _hazardExcludedPublishers.add(key);
+      _rebuildHazardSubLayers();
+      refreshActiveFilterPanel();
+    };
+    // Who published a record: the road feeds by name, and the two groups
+    // tagged where the feeds are merged. VIC records read from Live
+    // Traffic's re-share are Live Traffic NSW's.
+    const _HAZARD_PUBLISHERS = {
+      livetraffic: 'Live Traffic NSW',
+      qldtraffic: 'QLDTraffic',
+      traffic_sa: 'Traffic SA',
+      roads_act: 'Roads ACT',
+      transport_vic: 'Transport Victoria',
+      council: 'NSW councils',
+      emergency: 'Emergency services',
     };
     // One pill per category the Live Traffic feed actually publishes,
     // rather than the three coarse buckets the sub-layers use.
@@ -12076,9 +12440,11 @@ function initPagerHoursFromStorage() {
           if (!_hazardSelectedSources.has(m.source)) continue;
           if (m.source === 'waze' && m.subtypeLabel
               && _hazardExcludedSubtypes.has(m.subtypeLabel)) continue;
-          // Respect the Category row too — otherwise excluding a category
-          // removed pins while these bucket counts stayed put.
+          // Respect the Category, State and Publisher rows too — otherwise
+          // excluding one removed pins while these bucket counts stayed put.
           if (m.mainCategory && _hazardExcludedCategories.has(m.mainCategory)) continue;
+          if (m.state && _hazardExcludedStates.has(m.state)) continue;
+          if (m.publisher && _hazardExcludedPublishers.has(m.publisher)) continue;
           if (typeCounts[m.type] !== undefined) typeCounts[m.type]++;
         }
         const typePills = items.map((it) => {
@@ -12134,28 +12500,30 @@ function initPagerHoursFromStorage() {
         // Busiest first, same as the roadwork Type row.
         const catKeys = Object.keys(catCounts)
           .sort((a, b) => catCounts[b] - catCounts[a] || a.localeCompare(b));
-        // Responding agency. Routing is by event, so a CFA hazmat call
-        // and an SES rescue land here rather than on Fires - without this
-        // row they would be the only records with no way to filter by who
-        // is attending.
-        const agencyCounts = {};
+        // State and publisher. The layer spans every state, from the road
+        // feeds, the councils and the emergency services' road crashes and
+        // hazards; no agency row, as who attends is not what anyone looks
+        // the layer up by.
+        const stateCounts = {};
+        const publisherCounts = {};
         for (const m of _hazardMarkers) {
-          if (!m.agency) continue;
           if (!_hazardSelectedSources.has(m.source)) continue;
-          agencyCounts[m.agency] = (agencyCounts[m.agency] || 0) + 1;
+          if (m.state) stateCounts[m.state] = (stateCounts[m.state] || 0) + 1;
+          if (m.publisher) publisherCounts[m.publisher] = (publisherCounts[m.publisher] || 0) + 1;
         }
-        const agencyKeys = Object.keys(agencyCounts)
-          .sort((a, b) => agencyCounts[b] - agencyCounts[a] || a.localeCompare(b));
-        let agencyBlock = '';
-        if (agencyKeys.length) {
-          const agencyPills = agencyKeys.map((k) => {
-            const on = !_hazardExcludedAgencies.has(k);
-            return _ffPill(on, `${escapeHtml(agencyLabel(k))} (${agencyCounts[k].toLocaleString()})`,
-                           `toggleHazardAgencyPill('${jsArg(k)}')`);
+        const stateBlock = _ffStateRow(stateCounts, _hazardExcludedStates, 'toggleHazardStatePill');
+        const publisherKeys = Object.keys(publisherCounts)
+          .sort((a, b) => publisherCounts[b] - publisherCounts[a] || a.localeCompare(b));
+        let publisherBlock = '';
+        if (publisherKeys.length > 1) {
+          const publisherPills = publisherKeys.map((k) => {
+            const on = !_hazardExcludedPublishers.has(k);
+            return _ffPill(on, `${escapeHtml(_HAZARD_PUBLISHERS[k] || k)} (${publisherCounts[k].toLocaleString()})`,
+                           `toggleHazardPublisherPill('${jsArg(k)}')`);
           }).join('');
-          agencyBlock = `
-            <div class="ff-section-label">Agency</div>
-            <div class="floating-filter-pills">${agencyPills}</div>
+          publisherBlock = `
+            <div class="ff-section-label">Publisher</div>
+            <div class="floating-filter-pills">${publisherPills}</div>
           `;
         }
         let categoryBlock = '';
@@ -12177,7 +12545,8 @@ function initPagerHoursFromStorage() {
           ${LiveTrafficVocab.panelHeader('incident')}
           <div class="ff-section-label">Group <span style="opacity:.6;font-weight:400;">(${ltCount.toLocaleString()} total)</span></div>
           <div class="floating-filter-pills">${typePills}</div>
-          ${agencyBlock}
+          ${stateBlock}
+          ${publisherBlock}
           ${categoryBlock}
           ${subtypeBlock}
         `;
@@ -12212,21 +12581,19 @@ function initPagerHoursFromStorage() {
       const lbl = document.querySelector('#floating-filter-panel #ff-heat-opacity-val');
       if (lbl) lbl.textContent = `${v}%`;
     };
-    // Floods. Single-source until Victoria's SES flood warnings landed
-    // here, which is what the agency row is for - without it those would
-    // be the only records on the map with no way to filter by who issued
-    // them. Records with no agency (the road authority's road-flooding
-    // reports) are never hidden by it.
+    // Floods: flooded roads from every state's road feed, and Victoria's
+    // and WA's flood warnings — filtered by state. A record's road line and
+    // warning area go with its pin.
     function _rebuildFloodLayer() {
       for (const m of _floodMarkers) {
-        const desired = !(m.agency && _floodExcludedAgencies.has(m.agency));
+        const desired = !(m.state && _floodExcludedStates.has(m.state));
         if (desired) { if (!floodsLayer.hasLayer(m.marker)) floodsLayer.addLayer(m.marker); }
         else if (floodsLayer.hasLayer(m.marker)) floodsLayer.removeLayer(m.marker);
       }
     }
-    window.toggleFloodAgencyPill = function (key) {
-      if (_floodExcludedAgencies.has(key)) _floodExcludedAgencies.delete(key);
-      else _floodExcludedAgencies.add(key);
+    window.toggleFloodStatePill = function (key) {
+      if (_floodExcludedStates.has(key)) _floodExcludedStates.delete(key);
+      else _floodExcludedStates.add(key);
       _rebuildFloodLayer();
       refreshActiveFilterPanel();
     };
@@ -12235,25 +12602,17 @@ function initPagerHoursFromStorage() {
       label: 'Floods',
       color: '#06b6d4',
       render() {
-        const agencyCounts = {};
-        let unattributed = 0;
+        const stateCounts = {};
+        let total = 0;
         for (const m of _floodMarkers) {
-          if (m.agency) agencyCounts[m.agency] = (agencyCounts[m.agency] || 0) + 1;
-          else unattributed += 1;
+          if (m.extra) continue;
+          total += 1;
+          if (m.state) stateCounts[m.state] = (stateCounts[m.state] || 0) + 1;
         }
-        const keys = Object.keys(agencyCounts)
-          .sort((a, b) => agencyCounts[b] - agencyCounts[a] || a.localeCompare(b));
-        const pills = keys.map((k) => {
-          const on = !_floodExcludedAgencies.has(k);
-          return _ffPill(on, `${escapeHtml(agencyLabel(k))} (${agencyCounts[k].toLocaleString()})`,
-                         `toggleFloodAgencyPill('${jsArg(k)}')`);
-        }).join('');
+        const stateBlock = _ffStateRow(stateCounts, _floodExcludedStates, 'toggleFloodStatePill');
         return `
           <h4><i class="fa-solid fa-water" style="color:#06b6d4;"></i> Floods</h4>
-          ${pills ? `<div class="ff-section-label">Agency</div><div class="floating-filter-pills">${pills}</div>` : ''}
-          <div style="font-size:10px;color:#64748b;margin-top:6px;">
-            ${unattributed.toLocaleString()} record${unattributed === 1 ? '' : 's'} with no agency published (road authority and council reports) - always shown
-          </div>
+          ${stateBlock || `<div style="font-size:11px;color:#94a3b8;">${total.toLocaleString()} record${total === 1 ? '' : 's'}${total ? `, all ${escapeHtml(Object.keys(stateCounts)[0] || '')}` : ''}</div>`}
         `;
       },
     };
@@ -12357,6 +12716,35 @@ function initPagerHoursFromStorage() {
       },
     };
 
+    // SharkSmart (shark reports — sightings, closures, receiver detections).
+    window.toggleSharkPill = function (cat) {
+      const chkId = `chk-shark-${cat}`;
+      const cur = document.getElementById(chkId)?.checked ?? true;
+      _ffSetCheckbox(chkId, !cur);
+      onSharkFilterChange();
+      refreshActiveFilterPanel();
+    };
+    FILTER_REGISTRY.sharksmart = {
+      icon: 'fa-fish-fins',
+      label: 'SharkSmart',
+      color: '#2dd4bf',
+      render() {
+        // Coloured pills rather than plain ones: the pin colours are the
+        // legend this layer would otherwise need.
+        const pills = SHARK_CATEGORY_ORDER.map((cat) => {
+          const cfg = SHARK_CATEGORIES[cat];
+          const on = document.getElementById(`chk-shark-${cat}`)?.checked ?? false;
+          const glyph = `<i class="fa-solid ${cfg.icon}" style="font-size:11px;"></i>`;
+          return _ffPillColored(on, cfg.color, glyph, cfg.label, `toggleSharkPill('${cat}')`);
+        }).join('');
+        return `
+          <h4><i class="fa-solid fa-fish-fins" style="color:#2dd4bf;"></i> SharkSmart</h4>
+          <div class="ff-section-label">Report type</div>
+          <div class="floating-filter-pills">${pills}</div>
+        `;
+      },
+    };
+
     // Outages (Unplanned / Current maintenance / Future maintenance).
     window.toggleOutagePill = function (key) {
       const chkId = `chk-outages-${key}`;
@@ -12441,13 +12829,20 @@ function initPagerHoursFromStorage() {
             <div style="font-size:11px;color:#94a3b8;font-style:italic;">Loading roadwork data…</div>
           `;
         }
+        // One count per record (not per end pin or line); type counts
+        // follow the State row, as the hazard ones do.
         const typeCounts = {};
+        const stateCounts = {};
         let ltCount = 0, wzCount = 0;
         for (const m of _roadworkMarkers) {
-          typeCounts[m.type] = (typeCounts[m.type] || 0) + 1;
+          if (m.extra) continue;
+          if (m.state) stateCounts[m.state] = (stateCounts[m.state] || 0) + 1;
           if (m.source === 'livetraffic') ltCount++;
           else if (m.source === 'waze') wzCount++;
+          if (m.state && _roadworkExcludedStates.has(m.state)) continue;
+          typeCounts[m.type] = (typeCounts[m.type] || 0) + 1;
         }
+        const stateBlock = _ffStateRow(stateCounts, _roadworkExcludedStates, 'toggleRoadworkStatePill');
         // Busiest types first — alphabetical buried the useful buckets
         // behind one-off job names once the national feeds merged in.
         const orderedTypes = _roadworkAvailableTypes
@@ -12465,6 +12860,7 @@ function initPagerHoursFromStorage() {
         // pill whose only effect was hiding the entire layer.
         return `
           ${LiveTrafficVocab.panelHeader('roadwork')}
+          ${stateBlock}
           <div class="ff-section-label">Type <span style="opacity:.6;font-weight:400;">(${ltCount.toLocaleString()} total)</span></div>
           <div class="floating-filter-pills">${typePills}</div>
         `;
@@ -12479,16 +12875,173 @@ function initPagerHoursFromStorage() {
       toggleRadar(next);
       refreshActiveFilterPanel();
     };
-    window.toggleWeatherPinsPill = function () {
-      const chk = document.getElementById('chk-weather-pins');
-      const next = chk ? !chk.checked : true;
-      _ffSetCheckbox('chk-weather-pins', next);
-      toggleWeatherPins(next);
-      refreshActiveFilterPanel();
-    };
+    // The weather readout: click the map, get that point's conditions.
+    //
+    // Replaces a layer of ~100 fixed station pins. Those answered "what is it
+    // doing at one of these towns"; this answers "what is it doing HERE",
+    // which is the question people actually arrive with. It also costs nothing
+    // to carry — /api/v1/weather/point serves any coordinate and was already
+    // built and unused.
+    let _wxPointPopup = null;
+
+    function wxPointRow(icon, label, value) {
+      if (value === null || value === undefined || value === '') return '';
+      return '<div style="display:flex;gap:6px;align-items:baseline;">'
+        + '<i class="fa-solid ' + icon + '" style="color:#38bdf8;width:13px;"></i>'
+        + '<span style="color:#94a3b8;">' + label + '</span>'
+        + '<strong style="margin-left:auto;color:#e2e8f0;">' + value + '</strong></div>';
+    }
+
+    /** Index of the hour nearest the instant the field is showing. */
+    function wxNearestHour(times, wantIso) {
+      const want = Date.parse(wantIso || '');
+      const target = Number.isFinite(want) ? want : Date.now();
+      let best = 0, gap = Infinity;
+      times.forEach(function (t, i) {
+        const d = Math.abs(Date.parse(t + 'Z') - target);
+        if (d < gap) { gap = d; best = i; }
+      });
+      return best;
+    }
+
+    async function wxShowPointReadout(latlng) {
+      if (!map) return;
+      const lat = latlng.lat, lon = latlng.lng;
+      const popup = L.popup({ maxWidth: 260, className: 'wx-point-popup' })
+        .setLatLng(latlng)
+        .setContent('<div style="font-size:12px;color:#94a3b8;">Reading the forecast…</div>')
+        .openOn(map);
+      _wxPointPopup = popup;
+
+      try {
+        const res = await apiFetch(PROXY_BASE + '/api/v1/weather/point?lat='
+          + encodeURIComponent(lat.toFixed(4)) + '&lon=' + encodeURIComponent(lon.toFixed(4)));
+        if (!res.ok) throw new Error('lookup failed');
+        const data = (await res.json()).data;
+        // A popup the user has already dismissed or replaced must not be
+        // written into — the fetch outlives the click that started it.
+        if (_wxPointPopup !== popup || !popup.isOpen()) return;
+
+        const h = data.hourly || {};
+        const times = Array.isArray(h.time) ? h.time : [];
+        if (!times.length) throw new Error('no series');
+        // Lined up with whatever moment the field is showing, so the numbers
+        // agree with the colours under the cursor.
+        const shownIso = (_wxManifest && _wxLayer !== 'none')
+          ? wxAxis(_wxLayer === 'wind' ? 'wind_speed_10m' : _wxLayer)[_wxTimeIdx]
+          : null;
+        const i = wxNearestHour(times, shownIso);
+        const num = (arr, dp) => (Array.isArray(arr) && typeof arr[i] === 'number')
+          ? arr[i].toFixed(dp === undefined ? 0 : dp) : null;
+
+        const when = new Date(times[i] + 'Z').toLocaleString(undefined,
+          { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+        const dir = (Array.isArray(h.wind_direction_10m) && typeof h.wind_direction_10m[i] === 'number')
+          ? ' ' + ['N','NE','E','SE','S','SW','W','NW'][Math.round(h.wind_direction_10m[i] / 45) % 8]
+          : '';
+        const spd = num(h.wind_speed_10m);
+        const gust = num(h.wind_gusts_10m);
+
+        popup.setContent(
+          '<div style="font-size:12px;line-height:1.6;min-width:190px;">'
+          + '<div style="font-weight:600;color:#38bdf8;margin-bottom:4px;">'
+          + escapeHtml(lat.toFixed(3) + ', ' + lon.toFixed(3)) + '</div>'
+          + '<div style="color:#64748b;font-size:11px;margin-bottom:6px;">' + escapeHtml(when) + '</div>'
+          + wxPointRow('fa-temperature-half', 'Temp', num(h.temperature_2m, 1) === null ? null : num(h.temperature_2m, 1) + '°C')
+          + wxPointRow('fa-person', 'Feels', num(h.apparent_temperature, 1) === null ? null : num(h.apparent_temperature, 1) + '°C')
+          + wxPointRow('fa-droplet', 'Humidity', num(h.relative_humidity_2m) === null ? null : num(h.relative_humidity_2m) + '%')
+          + wxPointRow('fa-wind', 'Wind', spd === null ? null : spd + ' km/h' + dir + (gust ? ' (gusts ' + gust + ')' : ''))
+          + wxPointRow('fa-cloud-showers-heavy', 'Rain', num(h.precipitation, 1) === null ? null : num(h.precipitation, 1) + ' mm')
+          + wxPointRow('fa-gauge', 'Pressure', num(h.pressure_msl) === null ? null : num(h.pressure_msl) + ' hPa')
+          + wxPointRow('fa-sun', 'UV', num(h.uv_index, 1))
+          + '</div>');
+      } catch (e) {
+        if (_wxPointPopup === popup && popup.isOpen()) {
+          popup.setContent('<div style="font-size:12px;color:#94a3b8;">No forecast for this spot.</div>');
+        }
+      }
+    }
+
+    // Only while the weather panel is the active filter — otherwise every
+    // click anywhere on the map would open a weather popup over whatever the
+    // user was actually trying to click.
+    map.on('click', function (e) {
+      if (_activeFilterKey !== 'weather') return;
+      if (typeof onW3WMapClick === 'function' && document.getElementById('w3w-toggle')?.checked) return;
+      wxShowPointReadout(e.latlng);
+    });
     window.setRadarSliderFromPanel = function (v) {
       const r = document.getElementById('radar-slider');
       if (r) { r.value = String(v); if (typeof onRadarSliderChange === 'function') onRadarSliderChange(v); }
+    };
+
+    // ---- the gridded field, driven from the floating card ------------------
+    // #weather-panel holds the radios and stays the single source of truth for
+    // which field is showing; these just drive it, exactly as toggleRadarPill
+    // drives #chk-radar. Two surfaces, one state — otherwise the card and the
+    // panel can disagree about what is on the map.
+    const WX_FIELD_GROUPS = [
+      ['Wind', [
+        ['wind', '<i class="fa-solid fa-wind"></i> Wind'],
+        ['wind_gusts_10m', '<i class="fa-solid fa-wind"></i> Gusts'],
+      ]],
+      ['Sky', [
+        ['temperature_2m', '<i class="fa-solid fa-temperature-half"></i> Temp'],
+        ['relative_humidity_2m', '<i class="fa-solid fa-droplet"></i> Humidity'],
+        ['pressure_msl', '<i class="fa-solid fa-gauge"></i> Pressure'],
+        ['uv_index', '<i class="fa-solid fa-sun"></i> UV'],
+      ]],
+      ['Rain &amp; storms', [
+        ['precipitation', '<i class="fa-solid fa-cloud-showers-heavy"></i> Rain'],
+        ['precip_accum', '<i class="fa-solid fa-bucket"></i> Accum'],
+        ['cape', '<i class="fa-solid fa-bolt"></i> Thunder'],
+      ]],
+      ['Sea', [
+        ['wave_height', '<i class="fa-solid fa-water"></i> Waves'],
+        ['swell_wave_height', '<i class="fa-solid fa-wave-square"></i> Swell'],
+        ['ocean_current_velocity', '<i class="fa-solid fa-arrows-turn-right"></i> Currents'],
+      ]],
+      ['Land &amp; air', [
+        ['river_discharge', '<i class="fa-solid fa-house-flood-water"></i> Rivers'],
+        ['us_aqi', '<i class="fa-solid fa-smog"></i> Air quality'],
+        ['pm2_5', '<i class="fa-solid fa-industry"></i> PM2.5'],
+      ]],
+    ];
+    const WX_FIELD_PILLS = WX_FIELD_GROUPS.flatMap(function (g) { return g[1]; });
+
+    // The legacy #weather-panel radios only ever described five layers, and
+    // there are fourteen now. Rather than keep a hidden radio per layer in two
+    // places forever, the pills read _wxLayer directly and only sync the radios
+    // that still exist — they remain the deep-link/keyboard path for those.
+    const WX_LEGACY_RADIO = {
+      wind: 'chk-wx-wind',
+      temperature_2m: 'chk-wx-temp',
+      precipitation: 'chk-wx-rain',
+      wave_height: 'chk-wx-waves',
+      river_discharge: 'chk-wx-flood',
+    };
+
+    window.toggleWxFieldPill = function (which) {
+      // Clicking the active pill turns it off, which is how every other pill
+      // on this card behaves.
+      const next = (typeof _wxLayer !== 'undefined' && _wxLayer === which) ? 'none' : which;
+      for (const key of Object.keys(WX_LEGACY_RADIO)) {
+        _ffSetCheckbox(WX_LEGACY_RADIO[key], key === next);
+      }
+      _ffSetCheckbox('chk-wx-none', next === 'none');
+      Promise.resolve(wxSetLayer(next)).then(refreshActiveFilterPanel, refreshActiveFilterPanel);
+    };
+
+    window.setWxTimeFromPanel = function (v) {
+      const r = document.getElementById('wx-time-slider');
+      if (r) r.value = String(v);
+      if (typeof wxSetTime === 'function') wxSetTime(v);
+      refreshActiveFilterPanel();
+    };
+
+    window.wxJumpToNowFromPanel = function () {
+      if (typeof wxJumpToNow === 'function') wxJumpToNow();
+      refreshActiveFilterPanel();
     };
     FILTER_REGISTRY.weather = {
       icon: 'fa-cloud-sun',
@@ -12496,11 +13049,38 @@ function initPagerHoursFromStorage() {
       color: '#38bdf8',
       render() {
         const radarOn = document.getElementById('chk-radar')?.checked ?? false;
-        const pinsOn  = document.getElementById('chk-weather-pins')?.checked ?? false;
         const slider = document.getElementById('radar-slider');
         const max = Number(slider?.max ?? 0);
         const val = Number(slider?.value ?? 0);
         const timeLbl = document.getElementById('radar-time-display')?.textContent ?? '--:--';
+
+        const active = (typeof _wxLayer !== 'undefined') ? _wxLayer : 'none';
+        const fieldPills = WX_FIELD_GROUPS.map(function (g) {
+          const pills = g[1]
+            .map((p) => _ffPill(active === p[0], p[1], `toggleWxFieldPill('${p[0]}')`))
+            .join('');
+          return `<div class="ff-section-label">${g[0]}</div>`
+            + `<div class="floating-filter-pills">${pills}</div>`;
+        }).join('');
+
+        // The forecast scrubber only appears once a field is showing. It is
+        // deliberately separate from the radar timeline above: the radar is
+        // observed and only looks backwards, this runs two days back to seven
+        // forward, and one slider implying it drives both would be a lie.
+        const wxSlider = document.getElementById('wx-time-slider');
+        const wxMax = Number(wxSlider?.max ?? 0);
+        const wxVal = Number(wxSlider?.value ?? 0);
+        const wxLbl = document.getElementById('wx-time-display')?.textContent ?? '--';
+        const fieldTimeline = (active !== 'none' && wxMax > 0) ? `
+          <div class="ff-section-label">Forecast time
+            <button class="floating-filter-pill" style="padding:1px 7px;font-size:10px;margin-left:6px;"
+                    onclick="wxJumpToNowFromPanel()">NOW</button>
+          </div>
+          <input type="range" min="0" max="${wxMax}" value="${wxVal}"
+                 oninput="setWxTimeFromPanel(this.value)"
+                 style="width:100%;accent-color:#38bdf8;cursor:pointer;">
+          <div style="text-align:center;font-size:11px;color:#cbd5e1;font-family:monospace;margin-top:4px;">${wxLbl}</div>
+        ` : '';
         const radarTimeline = (radarOn && max > 0) ? `
           <div class="ff-section-label">Radar time</div>
           <input type="range" min="0" max="${max}" value="${val}"
@@ -12510,11 +13090,20 @@ function initPagerHoursFromStorage() {
         ` : '';
         return `
           <h4><i class="fa-solid fa-cloud-sun" style="color:#38bdf8;"></i> Weather</h4>
+          <div class="ff-section-label">Observed
+            <span style="font-weight:400;opacity:.6;">· click the map for local conditions</span>
+          </div>
           <div class="floating-filter-pills">
-            ${_ffPill(radarOn, '<i class="fa-solid fa-cloud-rain"></i> Rain Radar', 'toggleRadarPill()')}
-            ${_ffPill(pinsOn, '<i class="fa-solid fa-temperature-half"></i> Stations', 'toggleWeatherPinsPill()')}
+            ${_ffPill(radarOn, '<i class="fa-solid fa-satellite-dish"></i> Radar', 'toggleRadarPill()')}
           </div>
           ${radarTimeline}
+          ${fieldPills}
+          <div class="ff-section-label">Animation</div>
+          <div class="floating-filter-pills">
+            ${_ffPill(typeof _wxParticles !== 'undefined' && _wxParticles,
+              '<i class="fa-solid fa-wind"></i> Wind particles', 'toggleWxParticles()')}
+          </div>
+          ${fieldTimeline}
         `;
       },
     };
@@ -13754,9 +14343,9 @@ function initPagerHoursFromStorage() {
       _aisDetailCache.set(shipId, '__loading__');
       aisListRender();
       try {
-        const res = await apiFetch(`${PROXY_BASE}/api/marinetraffic/vessel/${encodeURIComponent(shipId)}`);
+        const res = await apiFetch(`${PROXY_BASE}/api/v1/marinetraffic/vessel/${encodeURIComponent(shipId)}`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
+        const data = (await res.json()).data;
         _aisDetailCache.set(shipId, data);
       } catch (e) {
         console.warn('[ais] vessel detail fetch failed', e);
@@ -13870,9 +14459,9 @@ function initPagerHoursFromStorage() {
       const hadData = _aisVessels.length > 0;
       if (line && !hadData) line.textContent = 'Loading vessels…';
       try {
-        const res = await apiFetch(`${PROXY_BASE}/api/marinetraffic/vessels`);
+        const res = await apiFetch(`${PROXY_BASE}/api/v1/marinetraffic/vessels`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
+        const data = (await res.json()).data;
         const vessels = aisExtractVessels(data);
         // Don't blow away populated markers if a refresh comes back
         // empty (backend cache mid-replace, transient upstream failure,
@@ -13886,12 +14475,12 @@ function initPagerHoursFromStorage() {
         console.log('[ais] loaded', vessels.length, 'vessels');
       } catch (e) {
         console.warn('[ais] failed to load:', e);
-        if (line && !hadData) line.textContent = 'Failed to load AIS data — backend proxy /api/marinetraffic/vessels not available.';
+        if (line && !hadData) line.textContent = 'Failed to load AIS data — backend proxy /api/v1/marinetraffic/vessels not available.';
       }
     }
 
     // ==================== ADS-B AIRCRAFT LAYER ====================
-    // Live positions from /api/adsb/aircraft (backend merge of adsb.lol,
+    // Live positions from /api/v1/adsb/aircraft (backend merge of adsb.lol,
     // adsb.fi, airplanes.live and adsb.one, deduped by ICAO hex). The
     // feed is Australia-wide, so markers are culled to the padded
     // viewport (pinned aircraft exempt) and rebuilt on moveend.
@@ -13910,7 +14499,7 @@ function initPagerHoursFromStorage() {
     // hex → '__loading__' | '__none__' | {src, link, photographer}.
     // Filled by a throttled prefetch queue for listed aircraft (plus
     // on-demand when pinning), via the backend Planespotters proxy
-    // (/api/adsb/photo/:hex). Persisted to localStorage so revisits
+    // (/api/v1/adsb/photo/:hex). Persisted to localStorage so revisits
     // don't re-fetch — an airframe's photo essentially never changes.
     const _adsbPhotoCache = new Map();
     const ADSB_PHOTO_LS_KEY = 'adsbPhotoCache-v1';
@@ -14726,9 +15315,9 @@ function initPagerHoursFromStorage() {
       if (adsbHistoryMode) return;
       const hadData = _adsbAircraft.length > 0;
       try {
-        const res = await apiFetch(`${PROXY_BASE}/api/adsb/aircraft`);
+        const res = await apiFetch(`${PROXY_BASE}/api/v1/adsb/aircraft`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
+        const data = (await res.json()).data;
         const aircraft = Array.isArray(data.aircraft) ? data.aircraft : [];
         // Keep stale markers over a blank map on transient upstream
         // failures — same guard as the AIS layer.
@@ -14782,9 +15371,9 @@ function initPagerHoursFromStorage() {
       if (adsbHistoryMode) return;   // trails come from the history response
       if (!adsbTrailsEnabled && !_adsbPinnedHex) return;
       try {
-        const res = await apiFetch(`${PROXY_BASE}/api/adsb/trails`);
+        const res = await apiFetch(`${PROXY_BASE}/api/v1/adsb/trails`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
+        const data = (await res.json()).data;
         _adsbTrails = data.trails || {};
         _rebuildAdsbTrails();
         // The trend arrow and track summary are both derived from the trail,
@@ -14939,6 +15528,9 @@ function initPagerHoursFromStorage() {
     // that always starts off.
 
     let adsbHistoryMode = false;
+    /** An aircraft not heard for this long before the viewed instant is not
+     *  drawn. History stores a point at least every 30 s while one is heard. */
+    const ADSB_HIST_STALE_SEC = 120;
     let _adsbHistAtMs = null;         // the instant being viewed
     let _adsbHistSeq = 0;             // discards responses overtaken by a newer scrub
     let _adsbHistDebounce = null;
@@ -14963,7 +15555,7 @@ function initPagerHoursFromStorage() {
     let _adsbPlaying = false;
     let _adsbPlaySpeed = 1;
     let _adsbPlayTimer = null;
-    // Filled from /api/adsb/aircraft, which the live poll already fetches — the
+    // Filled from /api/v1/adsb/aircraft, which the live poll already fetches — the
     // date picker needs its bounds before it can offer a first scrub.
     let _adsbHistWindow = { retentionDays: null, oldestMs: null };
     const ADSB_HIST_TRAIL_MIN = 15;
@@ -15277,16 +15869,19 @@ function initPagerHoursFromStorage() {
 
     async function loadAdsbHistory() {
       if (!adsbHistoryMode) return;
-      const at = _adsbHistAtMs;
+      // Snapped to the minute here, not just on the server: the server snaps
+      // too, but a URL carrying the raw millisecond is unique per viewer, so
+      // nobody would ever share a cached answer.
+      const at = _adsbHistAtMs ? Math.floor(_adsbHistAtMs / 60_000) * 60_000 : null;
       if (!at) return;
       const seq = ++_adsbHistSeq;
       _adsbHistLoading = true;
       _adsbHistSyncControls();
       try {
         const res = await apiFetch(
-          `${PROXY_BASE}/api/adsb/history?at=${at}&trail=${ADSB_HIST_TRAIL_MIN}`);
+          `${PROXY_BASE}/api/v1/adsb/history?at=${at}&trail=${ADSB_HIST_TRAIL_MIN}`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
+        const data = (await res.json()).data;
         // A slower earlier request must not overwrite a newer scrub.
         if (seq !== _adsbHistSeq || !adsbHistoryMode) return;
 
@@ -15296,6 +15891,10 @@ function initPagerHoursFromStorage() {
         for (const t of (data.aircraft || [])) {
           const pos = _adsbHistInterpolate(t.points, atMs);
           if (!pos) continue;
+          // Not heard for two minutes before the instant: it has landed or
+          // left coverage. Holding it at its last fix for the rest of the
+          // trail window would show it parked in mid-air.
+          if (pos.ageSec > ADSB_HIST_STALE_SEC) continue;
           const course = _adsbHistCourse(t.points, atMs);
           aircraft.push({
             hex: t.hex,
@@ -15344,7 +15943,7 @@ function initPagerHoursFromStorage() {
     function adsbHistoryStart() {
       adsbHistoryStopPlay();   // a stale timer from a previous visit
       adsbHistoryMode = true;
-      _adsbHistAtMs = Date.now() - ADSB_HIST_LAG_MS;
+      _adsbHistAtMs = Math.floor((Date.now() - ADSB_HIST_LAG_MS) / 60_000) * 60_000;
       _adsbHistCount = null;
       _adsbHistTruncated = false;
       // The live poll would overwrite the frozen picture on its next tick.
@@ -15549,11 +16148,11 @@ function initPagerHoursFromStorage() {
       _adsbPhotoCache.set(a.hex, '__loading__');
       adsbListRender();
       try {
-        const url = `${PROXY_BASE}/api/adsb/photo/${encodeURIComponent(a.hex)}` +
+        const url = `${PROXY_BASE}/api/v1/adsb/photo/${encodeURIComponent(a.hex)}` +
           (a.reg ? `?reg=${encodeURIComponent(a.reg)}` : '');
         const res = await apiFetch(url);
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
+        const data = (await res.json()).data;
         _adsbPhotoCache.set(a.hex, data.photo ? data.photo : '__none__');
         saveAdsbPhotoCache();
         // Refresh the marker's tooltip now rather than waiting for the
@@ -15637,7 +16236,7 @@ function initPagerHoursFromStorage() {
 
     /** Points held and the highest altitude among them.
      *
-     *  No "tracked for N minutes": /api/adsb/trails drops the timestamp from
+     *  No "tracked for N minutes": /api/v1/adsb/trails drops the timestamp from
      *  every point on the way out (it draws paths, and a third number per
      *  point would inflate the response for something nothing renders), so a
      *  duration here would have to be invented. Point count is the honest
@@ -16640,7 +17239,7 @@ function initPagerHoursFromStorage() {
 
     // ==================== PUBLIC TRANSPORT LAYER ====================
     // Live vehicles + stations from the backend AnyTrip proxy
-    // (/api/transport/*). The upstream is viewport-scoped, so data is
+    // (/api/v1/transport/*). The upstream is viewport-scoped, so data is
     // fetched for the current (padded) bounds on enable, every 10 s,
     // and on debounced moveend — never network-wide. Five AnyTrip
     // regions are served — au2 (NSW), au3 (VIC), au4 (SEQ/QLD), au5
@@ -16966,9 +17565,9 @@ function initPagerHoursFromStorage() {
       // render what succeeded. Only when EVERY region fails do we keep
       // the previous markers (the old single-fetch catch behaviour).
       const results = await Promise.allSettled(queries.map((q) =>
-        apiFetch(`${PROXY_BASE}/api/transport/vehicles?` + bboxQ + q).then(async (res) => {
+        apiFetch(`${PROXY_BASE}/api/v1/transport/vehicles?` + bboxQ + q).then(async (res) => {
           if (!res.ok) throw new Error('HTTP ' + res.status);
-          return res.json();
+          return (await res.json()).data;
         })));
       if (seq !== _transportFetchSeq) return; // superseded by a newer fetch
       const vehicles = [];
@@ -17265,9 +17864,9 @@ function initPagerHoursFromStorage() {
         .map((r) => STOP_REGION_MODES[r.id]).filter(Boolean);
       try {
         const results = await Promise.allSettled(stopQueries.map((q) =>
-          apiFetch(`${PROXY_BASE}/api/transport/stops?` + key + q).then(async (res) => {
+          apiFetch(`${PROXY_BASE}/api/v1/transport/stops?` + key + q).then(async (res) => {
             if (!res.ok) throw new Error('HTTP ' + res.status);
-            return res.json();
+            return (await res.json()).data;
           })));
         const stops = [];
         let anyOk = false;
@@ -17479,7 +18078,7 @@ function initPagerHoursFromStorage() {
       if (_transportLinesLoaded) return;
       _transportLinesLoaded = true; // set first so a failure doesn't refire every tick
       try {
-        const res = await apiFetch(`${PROXY_BASE}/api/transport/lines`);
+        const res = await apiFetch(`${PROXY_BASE}/api/v1/transport/lines`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const geo = await res.json();
         _transportLanes = _transportBuildLanes(geo);
@@ -17720,9 +18319,9 @@ function initPagerHoursFromStorage() {
         _transportShapeFailed.delete(shapeId); // stale — retry
       }
       try {
-        const res = await apiFetch(`${PROXY_BASE}/api/transport/shape/${encodeURIComponent(shapeId)}`);
+        const res = await apiFetch(`${PROXY_BASE}/api/v1/transport/shape/${encodeURIComponent(shapeId)}`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
+        const data = (await res.json()).data;
         if (!data.enc) { _transportShapeFailed.set(shapeId, Date.now()); return null; }
         // Two smoothing passes — GTFS shapes are often sparse and render
         // with visibly sharp corners otherwise. Cached smoothed.
@@ -17985,9 +18584,9 @@ function initPagerHoursFromStorage() {
       const body = document.getElementById('transport-info-body');
       if (body && !body.dataset.tripId) body.innerHTML = '<div class="ais-list-empty">Loading trip…</div>';
       try {
-        const res = await apiFetch(`${PROXY_BASE}/api/transport/trip/${ref.startDate}/${encodeURIComponent(ref.tripId)}/${ref.inst}`);
+        const res = await apiFetch(`${PROXY_BASE}/api/v1/transport/trip/${ref.startDate}/${encodeURIComponent(ref.tripId)}/${ref.inst}`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        const trip = await res.json();
+        const trip = (await res.json()).data;
         // A newer click may have replaced this request.
         if (!_transportInfo || _transportInfo.kind !== 'trip' || _transportInfo.ref.tripId !== ref.tripId) return;
         const route = trip.route && trip.route.name ? trip.route : (fallbackRoute || trip.route);
@@ -18113,9 +18712,9 @@ function initPagerHoursFromStorage() {
       const body = document.getElementById('transport-info-body');
       if (body) { delete body.dataset.tripId; body.innerHTML = '<div class="ais-list-empty">Loading departures…</div>'; }
       try {
-        const res = await apiFetch(`${PROXY_BASE}/api/transport/departures/${encodeURIComponent(stopId)}?limit=12`);
+        const res = await apiFetch(`${PROXY_BASE}/api/v1/transport/departures/${encodeURIComponent(stopId)}?limit=12`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
+        const data = (await res.json()).data;
         if (!_transportInfo || _transportInfo.kind !== 'departures' || _transportInfo.stopId !== stopId) return;
         _setTransportInfoHeader('fa-train', '#f18500', data.stopName || stopName || 'Departures',
           data.departures.length + ' services');
@@ -18162,9 +18761,9 @@ function initPagerHoursFromStorage() {
 
     async function loadTransportAlerts() {
       try {
-        const res = await apiFetch(`${PROXY_BASE}/api/transport/alerts`);
+        const res = await apiFetch(`${PROXY_BASE}/api/v1/transport/alerts`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
+        const data = (await res.json()).data;
         _transportAlerts = Array.isArray(data.alerts) ? data.alerts : [];
         _transportAlertsConfigured = data.configured !== false;
         _transportAlertsAt = Date.now();
@@ -18695,7 +19294,7 @@ function initPagerHoursFromStorage() {
         if (cached && cached.data && (Date.now() - cached.timestamp) < LAYER_CACHE_TTL) {
           data = cached.data;
         } else {
-          const res = await apiFetch(`${PROXY_BASE}/api/firms/hotspots`);
+          const res = await apiFetch(`${PROXY_BASE}/api/v1/firms/hotspots`);
           data = await res.json();
           if (!layerCache.firms_hotspots) layerCache.firms_hotspots = { data: null, timestamp: 0 };
           layerCache.firms_hotspots.data = data;
@@ -19058,11 +19657,10 @@ function initPagerHoursFromStorage() {
 
     // ==================== BEACHES LAYER (Beachwatch + BeachSafe merged) ====================
     
-    // Cache for beach detail data (pre-fetched from backend bulk endpoint)
+    // Beach detail, by slug, loaded on a marker's first hover
     const _beachDetailCache = {};
     // Track slugs that returned no data so we don't retry
     const _beachDetailFailed = new Set();
-    let _beachDetailsLoaded = false;
 
     // Derive a beachsafe slug from a beach name (e.g. "Bondi Beach" -> "bondi-beach")
     function deriveBeachSlug(name) {
@@ -19119,7 +19717,7 @@ function initPagerHoursFromStorage() {
 
       const marker = L.marker([beach.lat, beach.lon], { icon }).addTo(beachwatchLayer);
 
-      // Use pre-fetched detail data if available, otherwise show basic tooltip
+      // Use detail already loaded for this beach if any, otherwise show basic tooltip
       const slug = beach.beachsafeSlug || deriveBeachSlug(beach.name);
       const cachedDetail = slug ? _beachDetailCache[slug] : null;
 
@@ -19127,7 +19725,7 @@ function initPagerHoursFromStorage() {
         direction: 'top', offset: [0, -16], opacity: 0.95
       });
 
-      // Fallback: if detail wasn't pre-fetched, lazy-load on first hover
+      // Otherwise load it on the first hover
       if (slug && !cachedDetail) {
         let detailLoaded = false;
         marker.on('mouseover', () => {
@@ -19137,7 +19735,7 @@ function initPagerHoursFromStorage() {
             detailLoaded = true;
             return;
           }
-          apiFetch(`${PROXY_BASE}/api/beachsafe/beach/${slug}`).then(r => r.json()).then(detail => {
+          apiFetch(`${PROXY_BASE}/api/v1/beachsafe/beach/${slug}`).then(r => r.json()).then(j => j.data).then(detail => {
             if (detail && Object.keys(detail).length > 0 && (detail.weather || detail.currentTide || detail.currentUV)) {
               _beachDetailCache[slug] = detail;
               marker.setTooltipContent(buildBeachTooltipContent(beach, detail, showBeachwatch, showBeachsafe));
@@ -19397,8 +19995,8 @@ function initPagerHoursFromStorage() {
       
       if (needBW || needBS) {
         const fetches = await Promise.all([
-          needBW ? apiFetch(`${PROXY_BASE}/api/beachwatch`).then(r => r.json()).catch(() => ({ features: [] })) : Promise.resolve(bwCached.data),
-          needBS ? apiFetch(`${PROXY_BASE}/api/beachsafe`).then(r => r.json()).catch(() => []) : Promise.resolve(bsCached.data)
+          needBW ? apiFetch(`${PROXY_BASE}/api/v1/beachwatch`).then(r => r.json()).catch(() => ({ features: [] })) : Promise.resolve(bwCached.data),
+          needBS ? apiFetch(`${PROXY_BASE}/api/v1/beachsafe`).then(r => r.json()).then(j => j.data).catch(() => []) : Promise.resolve(bsCached.data)
         ]);
         beachwatchData = fetches[0];
         beachsafeData = fetches[1];
@@ -19537,18 +20135,6 @@ function initPagerHoursFromStorage() {
 
       console.log(`Loaded ${mergedBeaches.length} merged beaches (${mergedBeaches.filter(b => b.hasBeachwatch && b.hasBeachSafe).length} with both sources)`);
 
-      // Fetch all beach details in bulk (pre-warmed by backend)
-      if (!_beachDetailsLoaded) {
-        apiFetch(`${PROXY_BASE}/api/beachsafe/details`).then(r => r.json()).then(allDetails => {
-          if (allDetails && typeof allDetails === 'object') {
-            Object.assign(_beachDetailCache, allDetails);
-            _beachDetailsLoaded = true;
-            // Re-render markers now that detail data is available
-            renderBeachMarkers();
-            console.log(`Loaded ${Object.keys(allDetails).length} beach details (bulk)`);
-          }
-        }).catch(() => {});
-      }
     }
 
     // ==================== WEATHER PANEL ====================
@@ -19575,6 +20161,11 @@ function initPagerHoursFromStorage() {
         // Closing panel - turn off all weather layers
         document.getElementById('chk-radar').checked = false;
         document.getElementById('chk-weather-pins').checked = false;
+        const wxOff = document.getElementById('chk-wx-none');
+        if (wxOff) wxOff.checked = true;
+        // Not cosmetic: the field owns an animation loop, and leaving it running
+        // behind a closed panel is a battery drain nobody can see.
+        wxSetLayer('none');
         toggleRadar(false);
         toggleWeatherPins(false);
         removeFilterButton('weather');
@@ -19586,6 +20177,578 @@ function initPagerHoursFromStorage() {
       btn.classList.toggle('active', !isOpen);
       updateFilterPanelPositions();
       updateSettingsBackdrop();
+    }
+
+
+    // ---- the gridded weather field ----------------------------------------
+    // The field is a continuous surface served as Int16 grids, one per variable
+    // per 3-hourly timestep. This holds the manifest, the currently selected
+    // variable and time, and the WeatherField controller that paints them.
+    //
+    // Deliberately separate from the radar below: the radar is observed and only
+    // looks backwards; this is modelled and runs two days back to seven forward.
+    let _wxManifest = null;
+    let _wxField = null;
+    let _wxLayer = 'none';
+    let _wxTimeIdx = 0;
+    // Grids are immutable once written, so one fetched for a timestep stays
+    // valid for the whole session. Caching them is what makes scrubbing back and
+    // forth feel instant instead of refetching on every drag of the slider.
+    const _wxGridCache = new Map();
+    let _wxLoadToken = 0;
+    // Names people use, not the upstream variable keys.
+    const WX_LABELS = {
+      wind_speed_10m: 'Wind',
+      temperature_2m: 'Temperature',
+      precipitation: 'Rain',
+      wind_gusts_10m: 'Gusts',
+      wave_height: 'Wave height',
+      swell_wave_height: 'Swell',
+      river_discharge: 'River flow',
+    };
+    const WX_FLOOD_VARS = ['river_discharge', 'river_discharge_median'];
+    // uv_index is served by the AIR source (CAMS), not the weather models —
+    // it must read the air geometry and time axis or every lookup misses.
+    const WX_AIR_VARS = ['pm2_5', 'pm10', 'us_aqi', 'uv_index'];
+    function wxIsAir(name) { return WX_AIR_VARS.indexOf(name) !== -1; }
+    // How far ahead "Accum" adds up. Eight 3-hourly steps is the next 24 hours,
+    // which is the window people actually ask about before a storm.
+    const WX_ACCUM_STEPS = 8;
+    // Particles are an OVERLAY, not a layer. Windy draws them over whatever
+    // field is showing — rain, temperature, pressure — because wind is the
+    // thing that explains the others, and watching it move is most of why the
+    // map reads as weather rather than as a heatmap. On by default.
+    let _wxParticles = true;
+    function wxIsFlood(name) { return WX_FLOOD_VARS.indexOf(name) !== -1; }
+
+    /**
+     * Rain accumulation, summed on the client rather than fetched.
+     *
+     * The API would happily return a precipitation sum, but it would cost one
+     * of the ten variable slots the land grid is already full of — and every
+     * number needed to compute it is in grids we have already downloaded and
+     * cached. Adding them up locally is free and instant when scrubbing.
+     *
+     * Returns a fresh Int16Array on the same grid and scale as precipitation,
+     * so the renderer needs to know nothing about it.
+     */
+    async function wxAccumGrid(startIdx, scale, nodata) {
+      const axis = _wxManifest.timesteps;
+      const first = await wxFetchGrid('precipitation', axis[startIdx]);
+      if (!first) return null;
+      const out = new Int16Array(first.length);
+      // Seeded from the first step so a cell that is absent in every step
+      // stays absent, rather than becoming a confident zero.
+      for (let i = 0; i < first.length; i += 1) out[i] = first[i];
+
+      const last = Math.min(axis.length - 1, startIdx + WX_ACCUM_STEPS - 1);
+      for (let t = startIdx + 1; t <= last; t += 1) {
+        const g = await wxFetchGrid('precipitation', axis[t]);
+        if (!g) break;
+        for (let i = 0; i < out.length; i += 1) {
+          if (g[i] === nodata) continue;
+          out[i] = out[i] === nodata ? g[i] : out[i] + g[i];
+        }
+      }
+      // Totals over 24 hours routinely exceed what one 3-hourly step needs, so
+      // clamp rather than let the Int16 wrap into a negative rainfall.
+      const cap = 32767;
+      for (let i = 0; i < out.length; i += 1) {
+        if (out[i] !== nodata && out[i] > cap) out[i] = cap;
+      }
+      return out;
+    }
+    // Which variables are marine is a fact about the variable, not about
+    // whether the manifest happens to list it yet. Deriving it from the
+    // manifest alone means that before the marine source has ever run,
+    // wave_height reads as "not marine" — so it would be validated against the
+    // land time axis and the guard that should refuse the layer never fires.
+    const WX_MARINE_VARS = ['wave_height', 'wave_direction', 'wave_period', 'swell_wave_height'];
+
+    /** Marine variables live on their own coarser grid and their own time axis. */
+    function wxIsMarine(name) {
+      if (WX_MARINE_VARS.indexOf(name) !== -1) return true;
+      const meta = wxVarMeta(name);
+      return !!(meta && meta.marine);
+    }
+    function wxAxis(name) {
+      if (!_wxManifest) return [];
+      if (wxIsFlood(name)) return _wxManifest.floodTimesteps || [];
+      if (wxIsMarine(name)) return _wxManifest.marineTimesteps || [];
+      if (wxIsAir(name)) return _wxManifest.airTimesteps || [];
+      return _wxManifest.timesteps;
+    }
+
+    async function wxLoadManifest() {
+      if (_wxManifest) return _wxManifest;
+      const res = await apiFetch(PROXY_BASE + '/api/v1/weather/grid/manifest');
+      if (!res.ok) return null;
+      _wxManifest = (await res.json()).data;
+      return _wxManifest;
+    }
+
+    async function wxFetchGrid(varName, iso) {
+      const key = varName + '@' + iso;
+      const hit = _wxGridCache.get(key);
+      if (hit) return hit;
+      const url = PROXY_BASE + '/api/v1/weather/grid?var=' + encodeURIComponent(varName)
+        + '&t=' + encodeURIComponent(iso);
+      const res = await apiFetch(url);
+      if (!res.ok) return null;
+      const buf = await res.arrayBuffer();
+      const arr = new Int16Array(buf);
+      _wxGridCache.set(key, arr);
+      return arr;
+    }
+
+    function wxVarMeta(name) {
+      if (!_wxManifest) return null;
+      for (const v of _wxManifest.vars) if (v.name === name) return v;
+      return null;
+    }
+
+    /** Timestep nearest to now - where the slider should sit on open. */
+    function wxNowIndex() {
+      if (!_wxManifest) return 0;
+      const now = Date.now();
+      const axis = wxAxis(_wxLayer === 'wind' ? 'wind_speed_10m' : _wxLayer);
+      let best = 0, bestGap = Infinity;
+      axis.forEach(function (t, i) {
+        const gap = Math.abs(Date.parse(t) - now);
+        if (gap < bestGap) { bestGap = gap; best = i; }
+      });
+      return best;
+    }
+
+    // A short status for the current layer, shown after the time.
+    //
+    // It has to live in a variable: wxRenderTimeLabel repaints the whole
+    // display at the end of every load, so anything written straight into the
+    // element — "nothing running high", "layer failed" — was erased in the
+    // same tick it appeared. For as long as this card has existed, none of
+    // its explanations were ever actually visible.
+    let _wxNote = '';
+
+    function wxRenderTimeLabel() {
+      const el = document.getElementById('wx-time-display');
+      if (!el || !_wxManifest) return;
+      const axis = wxAxis(_wxLayer === 'wind' ? 'wind_speed_10m' : _wxLayer);
+      const iso = axis[_wxTimeIdx];
+      if (!iso) { el.textContent = '--'; return; }
+      // Formatted in the VIEWER's zone, not the grid's. Data is stored in UTC
+      // because Australia spans three zones and no single local clock fits a
+      // continental field, but a person reading it wants their own time.
+      const d = new Date(iso);
+      el.textContent = d.toLocaleString(undefined, {
+        weekday: 'short', hour: 'numeric', minute: '2-digit',
+      }) + (_wxNote ? ' \u00b7 ' + _wxNote : '');
+      const btn = document.getElementById('wx-btn-now');
+      if (btn) btn.classList.toggle('active', _wxTimeIdx === wxNowIndex());
+    }
+
+    function wxRenderLegend() {
+      const box = document.getElementById('wx-legend');
+      const items = document.getElementById('wx-legend-items');
+      const title = document.getElementById('wx-legend-title');
+      if (!box || !items || !title) return;
+      if (wxIsFlood(_wxLayer)) {
+        title.textContent = 'River flow vs normal';
+        items.innerHTML = [
+          ['#38bdf8', 'normal'], ['#eab308', '1.25×'], ['#f97316', '2×'],
+          ['#ef4444', '4×'], ['#7c3aed', '8×+'],
+        ].map(function (p) {
+          return '<div class="legend-item"><span class="legend-color" style="background:'
+            + p[0] + ';"></span><span>' + p[1] + '</span></div>';
+        }).join('');
+        box.style.display = 'block';
+        return;
+      }
+      const legend = (_wxField && _wxField.legend) ? _wxField.legend() : null;
+      if (!legend || !legend.stops || !legend.stops.length) {
+        box.style.display = 'none';
+        return;
+      }
+      title.textContent = (WX_LABELS[legend.variable] || legend.variable)
+        + (legend.unit ? ' (' + legend.unit + ')' : '');
+      // The bar is the renderer's own gradient, not a reconstruction of it, so
+      // the legend cannot drift from the colours actually on the map. Only the
+      // end labels are drawn: the stops are a continuous ramp, and listing nine
+      // swatches implies bands the field does not have.
+      items.innerHTML =
+        '<div style="height:10px;border-radius:2px;background:' + escapeHtml(legend.gradientCss) + ';"></div>'
+        + '<div style="display:flex;justify-content:space-between;font-size:10px;color:#94a3b8;margin-top:3px;">'
+        + '<span>' + escapeHtml(String(legend.min)) + '</span>'
+        + '<span>' + escapeHtml(String(legend.max)) + '</span></div>';
+      box.style.display = 'block';
+    }
+
+    /**
+     * Load the wind grids that drive the particles.
+     *
+     * Always on the LAND axis and the LAND geometry, whatever field is
+     * showing: wind only exists on that grid, and the renderer now samples it
+     * through its own geometry so a coarse marine field underneath does not
+     * drag the particles onto the wrong stride.
+     */
+    async function wxApplyParticles(token) {
+      if (!_wxField) return;
+      if (!_wxParticles) { _wxField.setAnimated(false); return; }
+      const axis = _wxManifest.timesteps || [];
+      // The land axis and a marine or daily axis are different lengths, so the
+      // field's index cannot be reused directly — match on the instant shown.
+      const shownIso = wxAxis(_wxLayer === 'wind' ? 'wind_speed_10m' : _wxLayer)[_wxTimeIdx];
+      let idx = 0, best = Infinity;
+      const want = Date.parse(shownIso || '');
+      axis.forEach(function (t, i) {
+        const gap = Math.abs(Date.parse(t) - (Number.isFinite(want) ? want : Date.now()));
+        if (gap < best) { best = gap; idx = i; }
+      });
+      const iso = axis[idx];
+      if (!iso) return;
+      const pair = await Promise.all([
+        wxFetchGrid('wind_speed_10m', iso),
+        wxFetchGrid('wind_direction_10m', iso),
+      ]);
+      if (token !== _wxLoadToken || !pair[0] || !pair[1]) return;
+      _wxField.setWindGeometry(_wxManifest.geometry);
+      _wxField.setWind(pair[0], pair[1], wxVarMeta('wind_speed_10m'), wxVarMeta('wind_direction_10m'));
+      _wxField.setAnimated(true);
+    }
+
+    window.toggleWxParticles = function () {
+      _wxParticles = !_wxParticles;
+      if (_wxField) {
+        if (!_wxParticles) _wxField.setAnimated(false);
+        else wxApplyParticles(_wxLoadToken);
+      }
+      refreshActiveFilterPanel();
+    };
+
+    /**
+     * A layer whose grids are not on the server yet. Distinct from an error:
+     * the first full dataset takes a day of quota to build, and during that
+     * window clicking a new layer used to silently leave the previous one on
+     * screen — which reads as "broken" with no explanation. Say so, and put
+     * the picker back to Off so the card's state matches the map.
+     */
+    function wxNoData() {
+      if (typeof showToast === 'function') {
+        showToast('That layer\u2019s data is still being prepared \u2014 try again later.');
+      }
+      const off = document.getElementById('chk-wx-none');
+      if (off) off.checked = true;
+      _wxLayer = 'none';
+      if (_wxField) _wxField.setData(null, { scale: 1 });
+      const box = document.getElementById('wx-legend');
+      if (box) box.style.display = 'none';
+      refreshActiveFilterPanel();
+    }
+
+    async function wxApply() {
+      if (_wxLayer === 'none' || !_wxManifest || !_wxField) return;
+      const axis = wxAxis(_wxLayer === 'wind' ? 'wind_speed_10m' : _wxLayer);
+      const iso = axis[_wxTimeIdx];
+      if (!iso) return;
+      const container = document.getElementById('wx-time-container');
+      if (container) container.classList.add('is-loading');
+      // Every apply takes a token; a slower earlier fetch that lands after a
+      // newer one must not paint stale data over it. Dragging the slider fires
+      // these faster than the network answers.
+      const token = ++_wxLoadToken;
+      _wxNote = '';
+      try {
+        if (_wxLayer === 'wind') {
+          const spd = await wxFetchGrid('wind_speed_10m', iso);
+          if (token !== _wxLoadToken || !spd) return;
+          _wxField.setGeometry(_wxManifest.geometry);
+          _wxField.setVariable('wind_speed_10m');
+          _wxField.setData(spd, wxVarMeta('wind_speed_10m'));
+        } else if (_wxLayer === 'precip_accum') {
+          const meta = wxVarMeta('precipitation');
+          const grid = await wxAccumGrid(
+            _wxTimeIdx, (meta && meta.scale) || 100, _wxManifest.nodata || -32768,
+          );
+          if (token !== _wxLoadToken || !grid) return;
+          _wxField.setGeometry(_wxManifest.geometry);
+          _wxField.setVariable('precip_accum');
+          // Carries precipitation's scale, because that is the unit it was
+          // summed in — only the colour ramp differs.
+          _wxField.setData(grid, { name: 'precip_accum', scale: (meta && meta.scale) || 100 });
+          _wxNote = wxEmptyNote('precip_accum', grid,
+            { scale: (meta && meta.scale) || 100 }, _wxManifest.geometry);
+        } else if (wxIsFlood(_wxLayer)) {
+          const pair = await Promise.all([
+            wxFetchGrid('river_discharge', iso),
+            wxFetchGrid('river_discharge_median', iso),
+          ]);
+          if (token !== _wxLoadToken || !pair[0]) return;
+          // The colour field is cleared, not left underneath: two
+          // representations of the same thing stacked is just noise.
+          // Clearing, not supplying data. The scale is passed only so the
+          // renderer does not warn about a missing one — there is no variable
+          // here to scale, and a warning on every flood selection would train
+          // people to ignore the one that matters.
+          _wxField.setData(null, { scale: 1 });
+          const n = wxRenderFlood(pair[0], pair[1],
+            _wxManifest.floodGeometry || _wxManifest.geometry);
+          if (!map.hasLayer(_wxFloodLayer)) map.addLayer(_wxFloodLayer);
+          _wxNote = n.drawn === 0 ? 'no river data here'
+            : n.drawn + ' rivers, ' + (n.high === 0 ? 'none' : n.high) + ' above normal';
+        } else {
+          const grid = await wxFetchGrid(_wxLayer, iso);
+          if (token !== _wxLoadToken) return;
+          if (!grid) { wxNoData(); return; }
+          // Geometry BEFORE data: marine is a coarser grid, and handing a
+          // 43x35 array to a renderer still sized for 85x69 would read the
+          // array off its end and smear the waves across the continent.
+          _wxField.setGeometry(
+            wxIsMarine(_wxLayer) ? (_wxManifest.marineGeometry || _wxManifest.geometry)
+            : wxIsAir(_wxLayer) ? (_wxManifest.airGeometry || _wxManifest.geometry)
+            : _wxManifest.geometry);
+          _wxField.setVariable(_wxLayer);
+          _wxField.setData(grid, wxVarMeta(_wxLayer));
+          _wxNote = wxEmptyNote(_wxLayer, grid, wxVarMeta(_wxLayer), _wxManifest.geometry);
+        }
+        wxRenderLegend();
+        await wxApplyParticles(token);
+      } catch (e) {
+        console.warn('weather field failed to load', e);
+        // Say so on the card too. The particle system was broken for days by a
+        // thrown method that only ever reached the console — an error state
+        // the user cannot see is an error state that does not get reported.
+        _wxNote = 'layer failed \u2014 see console';
+      } finally {
+        if (token === _wxLoadToken && container) container.classList.remove('is-loading');
+      }
+      wxRenderTimeLabel();
+    }
+
+    // River flow is drawn as discrete markers, NOT as a colour field.
+    //
+    // The sample is one point per degree against a 5 km river network, so each
+    // value belongs to whatever river happened to be nearest that point.
+    // Interpolating between them would paint a smooth surface across country
+    // with no river in it at all — authoritative-looking and wrong. Dots say
+    // "we sampled here, and this is what we found", which is the truth.
+    const _wxFloodLayer = L.layerGroup();
+    const _wxFloodRenderer = L.canvas({ padding: 0.3 });
+
+    /** Flow relative to its own climatological median: 1 is normal, 3 is high. */
+    function wxFloodRatio(flow, median) {
+      if (flow === null || median === null || !(median > 0)) return null;
+      return flow / median;
+    }
+
+    function wxFloodColour(ratio) {
+      if (ratio >= 8) return '#7c3aed';
+      if (ratio >= 4) return '#ef4444';
+      if (ratio >= 2) return '#f97316';
+      if (ratio >= 1.25) return '#eab308';
+      return '#38bdf8';
+    }
+
+    function wxRenderFlood(flow, median, geometry) {
+      _wxFloodLayer.clearLayers();
+      if (!flow || !geometry) return 0;
+      const nodata = (_wxManifest && _wxManifest.nodata) || -32768;
+      const scale = (wxVarMeta('river_discharge') || {}).scale || 1;
+      const medScale = (wxVarMeta('river_discharge_median') || {}).scale || 1;
+      let drawn = 0;
+      let high = 0;
+
+      for (let i = 0; i < flow.length; i += 1) {
+        const raw = flow[i];
+        if (raw === nodata) continue;
+        const q = raw / scale;
+        const med = (median && median[i] !== nodata) ? median[i] / medScale : null;
+        const ratio = wxFloodRatio(q, med);
+
+        // Below a cubic metre a second there is effectively no watercourse at
+        // this sample point, and plotting those would carpet the inland in dots
+        // that mean nothing.
+        if (q < 1) continue;
+        // Every sampled watercourse is drawn. The first version drew only
+        // what was running above its median ("normal flow is not news"), which
+        // in a dry spell is nothing at all — a layer that shows an empty map
+        // reads as broken, not as "all quiet". Normal flow gets the calm
+        // baseline colour and the eye still goes to the ones that are not.
+        const isHigh = ratio !== null && ratio >= 1.25;
+        if (isHigh) high += 1;
+
+        const row = Math.floor(i / geometry.cols);
+        const col = i % geometry.cols;
+        const lat = geometry.south + row * geometry.stepDeg;
+        const lon = geometry.west + col * geometry.stepDeg;
+
+        // Area scales with flow, so a river ten times the size reads as ten
+        // times the ink rather than ten times the radius.
+        const radius = Math.max(3, Math.min(16, Math.sqrt(q) / 2));
+        const colour = wxFloodColour(ratio === null ? 1 : ratio);
+        const dot = L.circleMarker([lat, lon], {
+          renderer: _wxFloodRenderer,
+          radius: radius,
+          color: colour,
+          weight: 1,
+          fillColor: colour,
+          // Quieter when normal, so a river in flood still stands out of a
+          // map that now has every river on it.
+          fillOpacity: isHigh ? 0.6 : 0.3,
+          interactive: true,
+        });
+        dot.bindTooltip(
+          Math.round(q).toLocaleString() + ' m³/s'
+          + (ratio !== null ? ' · ' + ratio.toFixed(1) + '× normal' : ''),
+          { direction: 'top' },
+        );
+        _wxFloodLayer.addLayer(dot);
+        drawn += 1;
+      }
+      return { drawn: drawn, high: high };
+    }
+
+    // Layers that are legitimately blank most of the time. A blank map with no
+    // explanation is indistinguishable from a broken one, so say which it is.
+    const WX_SPARSE = {
+      precipitation: { min: 0.2, what: 'no rain in view at this time' },
+      cape: { min: 300, what: 'no storm energy in view at this time' },
+      precip_accum: { min: 1, what: 'no rain expected in view over 24 h' },
+    };
+
+    /** A note when a sparse layer has nothing to show inside the viewport. */
+    function wxEmptyNote(layer, grid, meta, geometry) {
+      const rule = WX_SPARSE[layer];
+      if (!rule || !grid || !geometry || !map) return '';
+      const scale = (meta && meta.scale) || 1;
+      const nodata = (_wxManifest && _wxManifest.nodata) || -32768;
+      const threshold = rule.min * scale;
+      const b = map.getBounds();
+      const x0 = Math.max(0, Math.floor((b.getWest() - geometry.west) / geometry.stepDeg));
+      const x1 = Math.min(geometry.cols - 1, Math.ceil((b.getEast() - geometry.west) / geometry.stepDeg));
+      const y0 = Math.max(0, Math.floor((b.getSouth() - geometry.south) / geometry.stepDeg));
+      const y1 = Math.min(geometry.rows - 1, Math.ceil((b.getNorth() - geometry.south) / geometry.stepDeg));
+      for (let y = y0; y <= y1; y += 1) {
+        for (let x = x0; x <= x1; x += 1) {
+          const v = grid[y * geometry.cols + x];
+          if (v !== nodata && v >= threshold) return '';
+        }
+      }
+      return rule.what;
+    }
+
+    async function wxSetLayer(which) {
+      _wxLayer = which;
+      const container = document.getElementById('wx-time-container');
+
+      if (!wxIsFlood(which) && map.hasLayer(_wxFloodLayer)) {
+        map.removeLayer(_wxFloodLayer);
+        _wxFloodLayer.clearLayers();
+      }
+
+      if (which === 'none') {
+        if (_wxField) { _wxField.remove(); _wxField = null; }
+        if (container) container.style.display = 'none';
+        const box = document.getElementById('wx-legend');
+        if (box) box.style.display = 'none';
+        return;
+      }
+
+      if (typeof umami !== 'undefined') umami.track('map-layer-toggle', { layer: 'weather-' + which });
+
+      const m = await wxLoadManifest();
+      if (!m) {
+        // The field simply has not been built yet (first boot, or the cache was
+        // cleared). Say so rather than leaving a radio selected over a blank map.
+        if (typeof showToast === 'function') {
+          showToast('Weather forecast is still being prepared - try again shortly.');
+        }
+        const off = document.getElementById('chk-wx-none');
+        if (off) off.checked = true;
+        _wxLayer = 'none';
+        return;
+      }
+
+      // The manifest is the truth about what exists. A variable it does not
+      // list has no grids behind it — the server is still building that part
+      // of the dataset — and asking for one would 400.
+      const neededVar = which === 'wind' ? 'wind_speed_10m'
+        : which === 'precip_accum' ? 'precipitation' : which;
+      if (!wxVarMeta(neededVar)) {
+        wxNoData();
+        return;
+      }
+
+      if (wxIsAir(which) && !m.airGeometry) {
+        if (typeof showToast === 'function') {
+          showToast('Air quality data is still being prepared - try again shortly.');
+        }
+        const off = document.getElementById('chk-wx-none');
+        if (off) off.checked = true;
+        _wxLayer = 'none';
+        return;
+      }
+
+      if (wxIsFlood(which) && !m.floodGeometry) {
+        if (typeof showToast === 'function') {
+          showToast('River flow data is still being prepared - try again shortly.');
+        }
+        const off = document.getElementById('chk-wx-none');
+        if (off) off.checked = true;
+        _wxLayer = 'none';
+        return;
+      }
+
+      if (wxIsMarine(which) && !m.marineGeometry) {
+        // The land field can be live for a day before marine first runs. Say so
+        // rather than selecting a radio over an empty map.
+        if (typeof showToast === 'function') {
+          showToast('Wave data is still being prepared - try again shortly.');
+        }
+        const off = document.getElementById('chk-wx-none');
+        if (off) off.checked = true;
+        _wxLayer = 'none';
+        return;
+      }
+
+      if (!_wxField) {
+        if (!window.WeatherField) { console.warn('weather module not loaded'); return; }
+        _wxField = window.WeatherField.create(map, {
+          geometry: m.geometry,
+          fieldPane: 'wxFieldPane',
+          particlePane: 'wxParticlePane',
+        });
+      }
+      wxSyncSlider();
+      if (container) container.style.display = 'block';
+      await wxApply();
+    }
+
+    /** Range and position follow whichever axis the active layer rides. */
+    function wxSyncSlider() {
+      if (!_wxManifest) return;
+      const axis = wxAxis(_wxLayer === 'wind' ? 'wind_speed_10m' : _wxLayer);
+      _wxTimeIdx = wxNowIndex();
+      const slider = document.getElementById('wx-time-slider');
+      if (slider) {
+        slider.min = 0;
+        slider.max = String(Math.max(0, axis.length - 1));
+        slider.value = String(_wxTimeIdx);
+      }
+    }
+
+    function wxSetTime(value) {
+      const idx = Number(value);
+      if (!Number.isFinite(idx)) return;
+      _wxTimeIdx = idx;
+      wxRenderTimeLabel();
+      wxApply();
+    }
+
+    function wxJumpToNow() {
+      _wxTimeIdx = wxNowIndex();
+      const slider = document.getElementById('wx-time-slider');
+      if (slider) slider.value = String(_wxTimeIdx);
+      wxRenderTimeLabel();
+      wxApply();
     }
 
     async function toggleRadar(enabled) {
@@ -19622,8 +20785,8 @@ function initPagerHoursFromStorage() {
         let past = [];
         let nowcast = [];
         try {
-          const res = await apiFetch(`${PROXY_BASE}/api/weather/radar`);
-          data = await res.json();
+          const res = await apiFetch(`${PROXY_BASE}/api/v1/weather/radar`);
+          data = (await res.json()).data;
           past = data.radar?.past || [];
           nowcast = data.radar?.nowcast || [];
         } catch {
@@ -19661,13 +20824,22 @@ function initPagerHoursFromStorage() {
       
       currentFrameIndex = index;
       const frame = radarFrames[index];
-      const url = `https://tilecache.rainviewer.com${frame.path}/256/{z}/{x}/{y}/6/1_1.png`;
+      // 512-pixel tiles at RainViewer's real ceiling, URL zoom 7. Anything
+      // above that returns a "Zoom Level Not Supported" PLACEHOLDER IMAGE with
+      // HTTP 200 — which is how a status-code check once "verified" zoom 10
+      // and shipped a map full of grey notices. tileSize 512 + zoomOffset -1
+      // means URL z = tile zoom - 1, so maxNativeZoom 8 requests z7 at 512px:
+      // the genuine best available, twice the pixels of the original 256px
+      // tiles. Beyond it Leaflet stretches, as it always did.
+      const url = `https://tilecache.rainviewer.com${frame.path}/512/{z}/{x}/{y}/6/1_1.png`;
       
       if (radarLayer) map.removeLayer(radarLayer);
       radarLayer = L.tileLayer(url, {
         opacity: 0.65,
         zIndex: 100,
-        maxNativeZoom: 7,
+        tileSize: 512,
+        zoomOffset: -1,
+        maxNativeZoom: 8,
         maxZoom: 21
       }).addTo(map);
       
@@ -19737,7 +20909,7 @@ function initPagerHoursFromStorage() {
         if (cached.data && (Date.now() - cached.timestamp) < LAYER_CACHE_TTL) {
           data = cached.data;
         } else {
-          const res = await apiFetch(`${PROXY_BASE}/api/weather/current`);
+          const res = await apiFetch(`${PROXY_BASE}/api/v1/weather/current`);
           data = await res.json();
           layerCache.weather_current = { data, timestamp: Date.now() };
         }
@@ -19836,7 +21008,10 @@ function initPagerHoursFromStorage() {
           const res = responses[i];
           if (res && res.ok) {
             try {
-              const data = await res.json();
+              // /api/v1/ wraps non-GeoJSON answers in `data`; the cache holds
+              // what the layer loaders fetch themselves, the unwrapped value.
+              const body = await res.json();
+              const data = endpoints[i].unwrap ? body.data : body;
               // Don't cache empty Waze results (browser worker may still be starting)
               if (endpoints[i].key.startsWith('waze_') && data && data.features && data.features.length === 0) {
                 continue;
@@ -19854,15 +21029,15 @@ function initPagerHoursFromStorage() {
         // Waze prefetches removed — the ingest is retired (see docs/waze-userscript.md).
         const stage1 = [
           { key: 'rfs_incidents', url: '/api/rfs/incidents' },
-          { key: 'traffic_incidents', url: '/api/traffic/incidents' },
+          { key: 'traffic_incidents', url: '/api/v1/traffic/incidents' },
         ];
         totalLoaded += await fetchBatch(stage1, 'Stage 1');
         console.log(`⚡ Stage 1: ${totalLoaded} critical layers loaded (${Date.now() - startTime}ms)`);
         
         // STAGE 2: Secondary - roadwork, floods, cameras (commonly used)
         const stage2 = [
-          { key: 'traffic_roadwork', url: '/api/traffic/roadwork' },
-          { key: 'traffic_flood', url: '/api/traffic/flood' },
+          { key: 'traffic_roadwork', url: '/api/v1/traffic/roadwork' },
+          { key: 'traffic_flood', url: '/api/v1/traffic/flood' },
           { key: 'traffic_cameras', url: '/api/traffic/cameras' },
             { key: 'qld_cameras', url: '/api/qld/cameras' },
             { key: 'qld_flood_cameras', url: '/api/qld/flood-cameras' },
@@ -19873,9 +21048,10 @@ function initPagerHoursFromStorage() {
         // STAGE 3: Tertiary - beaches, weather, aviation, outages (less common)
         const stage3 = [
           { key: 'aviation_cameras', url: '/api/aviation/cameras' },
-          { key: 'beachwatch', url: '/api/beachwatch' },
-          { key: 'beachsafe', url: '/api/beachsafe' },
-          { key: 'weather_current', url: '/api/weather/current' },
+          { key: 'beachwatch', url: '/api/v1/beachwatch' },
+          { key: 'beachsafe', url: '/api/v1/beachsafe', unwrap: true },
+          { key: 'dorsal_reports', url: '/api/v1/dorsal/reports?hours=168' },
+          { key: 'weather_current', url: '/api/v1/weather/current' },
           { key: 'endeavour_current', url: '/api/endeavour/current' },
           { key: 'endeavour_maintenance', url: '/api/endeavour/maintenance' },
           { key: 'endeavour_future', url: '/api/endeavour/future' },
@@ -19958,11 +21134,11 @@ function initPagerHoursFromStorage() {
         // Core emergency data (always needs to be fresh)
         apiFetch(`${PROXY_BASE}/api/rfs/incidents`).then(r => r.json()).then(d => { layerCache.rfs_incidents = { data: d, timestamp: Date.now() }; }).catch(() => {}),
         // Traffic hazards (most used toggleable layers)
-        apiFetch(`${PROXY_BASE}/api/traffic/incidents`).then(r => r.json()).then(d => { layerCache.traffic_incidents = { data: d, timestamp: Date.now() }; }).catch(() => {}),
+        apiFetch(`${PROXY_BASE}/api/v1/traffic/incidents`).then(r => r.json()).then(d => { layerCache.traffic_incidents = { data: d, timestamp: Date.now() }; }).catch(() => {}),
         // Waze prefetches removed with the retired ingest — the hazards and
         // roadwork layers are fed by LiveTraffic, which is unaffected.
-        apiFetch(`${PROXY_BASE}/api/traffic/roadwork`).then(r => r.json()).then(d => { layerCache.traffic_roadwork = { data: d, timestamp: Date.now() }; }).catch(() => {}),
-        apiFetch(`${PROXY_BASE}/api/traffic/flood`).then(r => r.json()).then(d => { layerCache.traffic_flood = { data: d, timestamp: Date.now() }; }).catch(() => {}),
+        apiFetch(`${PROXY_BASE}/api/v1/traffic/roadwork`).then(r => r.json()).then(d => { layerCache.traffic_roadwork = { data: d, timestamp: Date.now() }; }).catch(() => {}),
+        apiFetch(`${PROXY_BASE}/api/v1/traffic/flood`).then(r => r.json()).then(d => { layerCache.traffic_flood = { data: d, timestamp: Date.now() }; }).catch(() => {}),
       ];
       
       // Wait for all cache pre-warming to complete
@@ -19977,6 +21153,7 @@ function initPagerHoursFromStorage() {
       if (map.hasLayer(floodsLayer)) redrawTasks.push(loadFloodsData());
       if (map.hasLayer(camerasLayer)) redrawTasks.push(loadCamerasData());
       if (map.hasLayer(beachwatchLayer)) redrawTasks.push(loadBeachwatchData());
+      if (map.hasLayer(sharkLayer)) redrawTasks.push(loadSharkSmartData());
       if (map.hasLayer(weatherLayer)) redrawTasks.push(loadWeatherData());
       if (map.hasLayer(outagesLayer)) redrawTasks.push(loadOutageData());
       // AIS vessels — refresh from the backend's prefetched cache so
@@ -20654,6 +21831,7 @@ function initPagerHoursFromStorage() {
           police: typeof policeLayer !== 'undefined' ? policeLayer : null,
           cameras: typeof camerasLayer !== 'undefined' ? camerasLayer : null,
           beaches: typeof beachwatchLayer !== 'undefined' ? beachwatchLayer : null,
+          sharksmart: typeof sharkLayer !== 'undefined' ? sharkLayer : null,
           outages: typeof outagesLayer !== 'undefined' ? outagesLayer : null,
           weather: typeof weatherLayer !== 'undefined' ? weatherLayer : null,
           pager: typeof pagerLayer !== 'undefined' ? pagerLayer : null,
@@ -20686,6 +21864,7 @@ function initPagerHoursFromStorage() {
   <script src="ui-dialogs.js"></script>
   <!-- Editor mode: dormant for the public; activates only after the
        signed-in user passes the server-side /api/check-editor role check. -->
-  <script src="map-editor-module.js?v=43"></script>
+  <script src="map-weather-module.js?v=15"></script>
+  <script src="map-editor-module.js?v=45"></script>
 </body>
 </html>

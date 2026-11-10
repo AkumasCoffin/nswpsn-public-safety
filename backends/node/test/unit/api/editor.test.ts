@@ -49,11 +49,16 @@ const { _resetRolesCacheForTests } = roles;
 
 // Injects a verified user id by default (POST /api/editor-requests is public
 // and unaffected); pass {authed:false} to exercise the 401 path.
-function makeApp(opts: { authed?: boolean } = {}) {
+function makeApp(opts: { authed?: boolean; userId?: string; email?: string } = {}) {
   const app = new Hono();
   if (opts.authed !== false) {
     app.use('*', async (c, next) => {
-      c.set('userId', 'owner-1');
+      c.set('userId', opts.userId ?? 'owner-1');
+      // The provider-confirmed address, when the token carries one.
+      if (opts.email) {
+        c.set('userEmail', opts.email);
+        c.set('userEmailVerified', true);
+      }
       await next();
     });
   }
@@ -176,6 +181,54 @@ describe('POST /api/editor-requests (public submit)', () => {
     });
     const params = calls[1]?.params ?? [];
     expect(params[13]).toBeNull();
+  });
+
+  // --- request takeover ----------------------------------------------------
+  // The hole: the row to update was found by the email in the BODY, and a
+  // present JWT then overwrote its supabase_user_id. Posting a victim's
+  // address with your own token re-pointed their pending request at your
+  // account, and approval granted their roles to you.
+  it('matches a signed-in submitter on their account, not on a typed-in address', async () => {
+    resultQueue = [{ rows: [{ id: 1, status: 'pending' }] }, { rows: [] }];
+    const app = makeApp({ userId: 'attacker' });
+    const res = await app.request('/api/editor-requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'victim@example.com', about: 'hi', request_type: ['editor'] }),
+    });
+    expect(res.status).toBe(200);
+    // The body's address is not a key into other people's requests...
+    expect(calls[0]?.params).toEqual(['attacker', null]);
+    // ...and the row that IS found keeps whatever account it already belongs to.
+    expect(calls[1]?.sql).toContain('COALESCE(supabase_user_id, $13)');
+  });
+
+  it('accepts its own verified address as a way back to an unlinked request', async () => {
+    // The real reason the email fallback exists: a request filed while email
+    // confirmation was still pending has no account on it yet.
+    resultQueue = [{ rows: [] }, { rows: [{ id: 11 }] }];
+    const app = makeApp({ userId: 'u-1', email: 'Me@Example.com' });
+    await app.request('/api/editor-requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'victim@example.com', about: 'hi', request_type: ['editor'] }),
+    });
+    expect(calls[0]?.params).toEqual(['u-1', 'me@example.com']);
+    expect(calls[0]?.sql).toContain('supabase_user_id IS NULL');
+    // And the row carries the confirmed address, not the one in the body.
+    expect(calls[1]?.params?.[0]).toBe('me@example.com');
+  });
+
+  it('lets an anonymous submitter match only a request no account owns', async () => {
+    resultQueue = [{ rows: [] }, { rows: [{ id: 12 }] }];
+    const app = makeApp({ authed: false });
+    await app.request('/api/editor-requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'a@b.com', about: 'hi', request_type: ['editor'] }),
+    });
+    expect(calls[0]?.params).toEqual([null, 'a@b.com']);
+    expect(calls[0]?.sql).toContain('supabase_user_id IS NULL');
   });
 
   it('clamps experience_level outside 1-5 to null', async () => {

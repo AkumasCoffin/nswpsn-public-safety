@@ -601,6 +601,31 @@ interface ChatResponse {
 
 const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
 
+/**
+ * Whether an exception thrown by fetch deserves another round.
+ *
+ * undici rejects every network failure — DNS, ECONNRESET, a connect timeout,
+ * a socket terminated mid-body — as a bare TypeError whose message is just
+ * "fetch failed", with the real error on `.cause`. A top-level `.code` check
+ * therefore matched none of them: they took the "programming error" path and
+ * were rethrown on the first attempt, so the documented 4-round backoff only
+ * ever covered HTTP 429/5xx. One DNS blip at HH:55 cost that hour's summary
+ * outright. Walk the cause chain the way sources/shared/http.ts does.
+ */
+function isTransientFetchError(err: unknown): boolean {
+  let cause: unknown = err;
+  for (let i = 0; i < 4 && cause; i += 1) {
+    const c = cause as { code?: string; name?: string; message?: string; cause?: unknown };
+    if (c.code) return true;
+    if (c.name === 'AbortError' || c.name === 'TimeoutError') return true;
+    // undici's own wrappers carry no code: 'fetch failed' from the connector,
+    // 'terminated' when the response body dies part-way through.
+    if (c.message === 'fetch failed' || c.message === 'terminated') return true;
+    cause = c.cause;
+  }
+  return false;
+}
+
 // Gemini API keys. GEMINI_API_KEY may be a single key or a comma-separated
 // list ("keyA,keyB,keyC") to spread load and survive per-key rate limits.
 // We rotate through them and, on a 429/RESOURCE_EXHAUSTED, roll over to the
@@ -805,7 +830,7 @@ async function callLlmOnce(opts: {
       } catch (err) {
         const e = err as Error;
         // AbortError or network issues — treat as transient, back off.
-        if (e.name === 'AbortError' || (e as { code?: string }).code) {
+        if (isTransientFetchError(e)) {
           lastErr = e;
           sawTransient = true;
           break;

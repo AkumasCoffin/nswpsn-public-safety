@@ -334,7 +334,11 @@ describe('traffic archive facet (lowercase subcategory)', () => {
 });
 
 describe('traffic works drops RFS re-publications', () => {
-  beforeEach(() => fetchJsonMock.mockReset());
+  beforeEach(async () => {
+    fetchJsonMock.mockReset();
+    const { _resetWorksCarryForward } = await import('../../../src/sources/traffic.js');
+    _resetWorksCarryForward();
+  });
 
   it('skips static infrastructure — checking stations and rest areas', async () => {
     const { fetchTrafficWorks } = await import('../../../src/sources/traffic.js');
@@ -352,10 +356,10 @@ describe('traffic works drops RFS re-publications', () => {
     expect(snap.features[0]?.properties.upstreamId).toBe('w1');
   });
 
-  it("skips eventType 'Fire' items — the rfs source already has them", async () => {
+  it("skips the RFS's re-published incidents — the rfs source already has them", async () => {
     const { fetchTrafficWorks } = await import('../../../src/sources/traffic.js');
     fetchJsonMock.mockResolvedValueOnce([
-      { id: '1', eventCategory: 'Not Applicable', eventType: 'Fire',
+      { id: '1', apiSource: 'rfsNSW', eventCategory: 'Not Applicable', eventType: 'Fire',
         geometry: { type: 'Point', coordinates: [151, -33] }, properties: { title: 'Grass fire' } },
       { id: '2', eventCategory: 'Roadwork', eventType: 'Roadwork',
         geometry: { type: 'Point', coordinates: [151, -33] }, properties: { title: 'Sewer works' } },
@@ -365,6 +369,20 @@ describe('traffic works drops RFS re-publications', () => {
     expect(snap.features[0]?.properties.upstreamId).toBe('2');
     // and works' facet key is its category
     expect(snap.features[0]?.properties.subcategory).toBe('Roadwork');
+  });
+
+  it("keeps other agencies' fire records — QLD's are road hazards", async () => {
+    const { fetchTrafficWorks } = await import('../../../src/sources/traffic.js');
+    fetchJsonMock.mockResolvedValueOnce([
+      { id: '837869', apiSource: 'qldRoad', eventCategory: 'Fire', eventType: 'Fire',
+        geometry: { type: 'POINT', coordinates: [152.4, -27.6] },
+        properties: { title: 'Hazard: Fire', displayName: 'Plainland Exit' } },
+    ]);
+    const snap = await fetchTrafficWorks();
+    expect(snap.count).toBe(1);
+    expect(snap.features[0]?.properties).toMatchObject({
+      upstreamId: '837869', mainCategory: 'Fire', incidentKind: 'Fire', subcategory: 'Fire',
+    });
   });
 });
 
@@ -466,39 +484,34 @@ describe('traffic.worksArchiveSource', () => {
   });
 });
 
-describe('traffic.worksArchiveItems', () => {
-  it('re-points each row without disturbing anything else about it', async () => {
-    const { worksArchiveItems } = await import('../../../src/sources/traffic.js');
-    const snapshot = {
-      type: 'FeatureCollection',
-      features: [
-        {
-          type: 'Feature',
-          geometry: { type: 'Point', coordinates: [151.2, -33.8] },
-          properties: { id: 'ltw:aaa', title: 'Pit works', mainCategory: 'Roadwork' },
-        },
-        {
-          type: 'Feature',
-          geometry: { type: 'Point', coordinates: [151.3, -33.9] },
-          properties: { id: 'ltw:bbb', title: 'Water over road', mainCategory: 'Flood' },
-        },
-        {
-          type: 'Feature',
-          geometry: { type: 'Point', coordinates: [151.4, -34.0] },
-          properties: { id: 'ltw:ccc', title: 'Debris', mainCategory: 'generalHazards' },
-        },
-      ],
-      count: 3,
-    };
-    const rows = worksArchiveItems(snapshot, 1_700_000_000, 'traffic_works');
-    expect(rows.map((r) => r.source)).toEqual([
-      'traffic_roadwork',
-      'traffic_flood',
-      'traffic_incident',
+describe('traffic works for one state (VIC, until it is read from Transport Victoria)', () => {
+  beforeEach(async () => {
+    fetchJsonMock.mockReset();
+    const { _resetWorksCarryForward } = await import('../../../src/sources/traffic.js');
+    _resetWorksCarryForward();
+  });
+
+  const rec = (id: string, apiSource: string, lon: number) => ({
+    id, apiSource, eventCategory: 'Roadwork',
+    geometry: { type: 'POINT', coordinates: [lon, -36] },
+    properties: { title: 'Works ' + id },
+  });
+
+  it('keeps only the groups asked for, each labelled with its state', async () => {
+    const { fetchTrafficWorks } = await import('../../../src/sources/traffic.js');
+    fetchJsonMock.mockResolvedValueOnce([rec('v', 'vicRoadInfo', 145), rec('q', 'qldRoad', 152), rec('a', 'actRoadInfo', 149)]);
+    const snap = await fetchTrafficWorks(new Set(['vicRoadInfo']));
+    expect(snap.features.map((f) => [f.properties.upstreamId, f.properties.state, f.properties.credit])).toEqual([
+      ['v', 'VIC', 'Live Traffic NSW (Transport for NSW)'],
     ]);
-    // ids stay ltw:-prefixed so they cannot collide with the state
-    // feeds' own upstream ids now sharing these sources
-    expect(rows.every((r) => String(r.source_id).startsWith('ltw:'))).toBe(true);
-    expect(rows[0]!.fetched_at).toBe(1_700_000_000);
+  });
+
+  it('carries forward only the groups asked for', async () => {
+    const { fetchTrafficWorks } = await import('../../../src/sources/traffic.js');
+    fetchJsonMock.mockResolvedValueOnce([rec('v', 'vicRoadInfo', 145), rec('q', 'qldRoad', 152)]);
+    await fetchTrafficWorks();
+    fetchJsonMock.mockResolvedValueOnce([]);
+    const snap = await fetchTrafficWorks(new Set(['vicRoadInfo']));
+    expect(snap.features.map((f) => f.properties.upstreamId)).toEqual(['v']);
   });
 });

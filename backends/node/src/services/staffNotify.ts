@@ -45,7 +45,10 @@ export type StaffNotifyKind =
   | 'new_user'
   | 'new_node'
   | 'ticket'
-  | 'siteSurvey';
+  | 'siteSurvey'
+  | 'api_key_request'
+  | 'bug_report'
+  | 'suggestion';
 
 /** app_settings keys. One channel per kind, plus the guild they live in. */
 export const NOTIFY_GUILD_KEY = 'discord_notify_guild_id';
@@ -58,9 +61,15 @@ export const NOTIFY_CHANNEL_KEYS: Record<StaffNotifyKind, string> = {
   // Contact tickets get their OWN channel, distinct from signups/nodes.
   ticket: 'discord_notify_channel_ticket',
   siteSurvey: 'discord_notify_channel_site_survey',
+  // A user asks for a named API key; approve/reject edits the message in place.
+  api_key_request: 'discord_notify_channel_api_key',
+  // Bug reports and suggestions (api/feedback.ts): the private staff alert.
+  // Their PUBLIC channels are FEEDBACK_CHANNEL_KEYS below.
+  bug_report: 'discord_notify_channel_bug_report',
+  suggestion: 'discord_notify_channel_suggestion',
 };
 
-/** Which staff view each kind deep-links to. */
+/** Which staff view each kind deep-links to — the query after `/staff?view=`. */
 const STAFF_VIEW: Record<StaffNotifyKind, string> = {
   signup_request: 'signup',
   wire_approval: 'approvals',
@@ -69,10 +78,34 @@ const STAFF_VIEW: Record<StaffNotifyKind, string> = {
   new_node: 'nodes',
   ticket: 'tickets',
   siteSurvey: 'nodes',
+  api_key_request: 'apikeys',
+  bug_report: 'tickets&tab=reports&kind=bug',
+  suggestion: 'tickets&tab=reports&kind=suggestion',
 };
 
-function publicBase(): string {
-  return (process.env['PUBLIC_BASE_URL'] || 'https://nswpsn.forcequit.xyz').replace(/\/+$/, '');
+/**
+ * The public side of bug reports and suggestions, per kind: the INTAKE
+ * channel the bot files messages from, and the BOARD channel it posts every
+ * report to with its status. Both are app_settings keys like the alert
+ * channels; a change is pushed to the bot as a `feedback_channels` action
+ * (enqueueFeedbackChannels), because the bot never reads app_settings.
+ */
+export type FeedbackKind = 'bug' | 'suggestion';
+export const FEEDBACK_KINDS: readonly FeedbackKind[] = ['bug', 'suggestion'];
+export const FEEDBACK_CHANNEL_KEYS: Record<FeedbackKind, { intake: string; board: string }> = {
+  bug: { intake: 'discord_intake_channel_bug', board: 'discord_board_channel_bug' },
+  suggestion: { intake: 'discord_intake_channel_suggestion', board: 'discord_board_channel_suggestion' },
+};
+
+/**
+ * The SITE's origin, for links people click in Discord. Not PUBLIC_BASE_URL:
+ * that is this API's own origin (the dashboard OAuth callback, node
+ * downloads), and on production it is api.forcequit.xyz, which serves no
+ * pages — every staff deep link built from it landed on the API. The site
+ * is DASHBOARD_FRONTEND_URL, as api/dashboard.ts resolves it.
+ */
+function siteBase(): string {
+  return (process.env['DASHBOARD_FRONTEND_URL'] || 'https://nswpsn.forcequit.xyz').replace(/\/+$/, '');
 }
 
 // ---------------------------------------------------------------------------
@@ -87,7 +120,11 @@ function publicBase(): string {
 const CACHE_MS = 10_000;
 let _cache: { at: number; values: Record<string, string | null> } | null = null;
 
-const ALL_KEYS = [NOTIFY_GUILD_KEY, ...Object.values(NOTIFY_CHANNEL_KEYS)];
+const ALL_KEYS = [
+  NOTIFY_GUILD_KEY,
+  ...Object.values(NOTIFY_CHANNEL_KEYS),
+  ...Object.values(FEEDBACK_CHANNEL_KEYS).flatMap((k) => [k.intake, k.board]),
+];
 
 export function invalidateStaffNotifySettings(): void {
   _cache = null;
@@ -161,12 +198,41 @@ function sign(action: string, requestedBy: string, params: unknown): string | nu
   return signBotAction(secret, action, requestedBy, params);
 }
 
+/**
+ * Sign and insert one outbox row. Every value in `params` must be a string:
+ * the canonicaliser is shared with Python, and keeping to strings removes
+ * any number-formatting drift between the two. Returns false, never throws,
+ * when the bot database is not configured.
+ */
+export async function enqueueBotAction(action: string, params: Record<string, string>): Promise<boolean> {
+  const botPool = await getBotDbPool();
+  if (!botPool) return false;
+  const requestedBy = 'backend';
+  const sig = sign(action, requestedBy, params);
+  await botPool.query(
+    'INSERT INTO pending_bot_actions (action, params, requested_by, sig) VALUES ($1, $2::jsonb, $3, $4)',
+    [action, JSON.stringify(params), requestedBy, sig],
+  );
+  return true;
+}
+
 export interface StaffNotifyInput {
   kind: StaffNotifyKind;
-  /** 'new' posts a message; 'resolved' edits the one posted for the same ref. */
-  event: 'new' | 'resolved';
+  /**
+   * 'new' posts a message; 'resolved' and 'update' edit the one posted for
+   * the same ref. 'update' is a status that is not the end of the matter
+   * (a bug report marked "Looking into it"): the message shows the status
+   * but keeps its live styling.
+   */
+  event: 'new' | 'resolved' | 'update';
   /** Stable id of the underlying row — how 'resolved' finds its message. */
   ref: string;
+  /**
+   * The query after `/staff?view=` the alert links to, when the kind's
+   * default view (STAFF_VIEW) is not specific enough — a report's alert
+   * opens that report, not the list it may be filtered out of.
+   */
+  view?: string;
   /** Short non-identifying headline, e.g. "Radio Feeder · NSW". */
   title: string;
   /** Optional second line. Must not contain personal data. */
@@ -239,12 +305,7 @@ export async function notifyStaffAsync(pool: Pool | null, input: StaffNotifyInpu
   // Unconfigured is the normal state until an owner sets it up — not an error.
   if (!channelId || !guildId) return false;
 
-  const botPool = await getBotDbPool();
-  if (!botPool) return false;
-
-  // All-strings: the signing canonicaliser is shared with Python, and
-  // keeping every value a string removes any number-formatting drift.
-  const params: Record<string, string> = {
+  return enqueueBotAction('staff_notify', {
     kind: input.kind,
     event: input.event,
     ref: String(input.ref),
@@ -257,14 +318,101 @@ export async function notifyStaffAsync(pool: Pool | null, input: StaffNotifyInpu
     // JSON in a string: every param stays a string so the canonical signing
     // form is identical either side of the language boundary.
     fields: JSON.stringify(packFields(input.fields)),
-    url: `${publicBase()}/staff?view=${STAFF_VIEW[input.kind]}`,
-  };
+    url: `${siteBase()}/staff?view=${input.view || STAFF_VIEW[input.kind]}`,
+  });
+}
 
-  const requestedBy = 'backend';
-  const sig = sign('staff_notify', requestedBy, params);
-  await botPool.query(
-    'INSERT INTO pending_bot_actions (action, params, requested_by, sig) VALUES ($1, $2::jsonb, $3, $4)',
-    ['staff_notify', JSON.stringify(params), requestedBy, sig],
-  );
-  return true;
+// ---------------------------------------------------------------------------
+// Bug reports and suggestions: the public side (api/feedback.ts).
+// ---------------------------------------------------------------------------
+
+/**
+ * Tell the bot which channels one kind uses now. Sent whenever the owner
+ * changes either picker, with BOTH current values, so the bot's row for the
+ * kind is always whole. An empty id means "none": the bot takes down its
+ * how-to from an intake channel that is no longer one.
+ */
+export async function enqueueFeedbackChannels(pool: Pool, kind: FeedbackKind): Promise<boolean> {
+  const s = await readNotifySettings(pool);
+  return enqueueBotAction('feedback_channels', {
+    kind,
+    guild_id: s[NOTIFY_GUILD_KEY] ?? '',
+    intake_channel_id: s[FEEDBACK_CHANNEL_KEYS[kind].intake] ?? '',
+    board_channel_id: s[FEEDBACK_CHANNEL_KEYS[kind].board] ?? '',
+    site_url: siteBase(),
+  });
+}
+
+export interface FeedbackBoardInput {
+  /** 'new' posts the report; 'status' replies under it and edits its status; 'delete' removes it. */
+  event: 'new' | 'status' | 'delete';
+  kind: FeedbackKind;
+  id: number;
+  subject?: string;
+  body?: string;
+  /** The name shown on the board. */
+  reporter?: string;
+  source?: 'site' | 'discord';
+  status: string;
+  statusLabel: string;
+  note?: string | null;
+  actor?: string | null;
+  /**
+   * For 'status' and 'delete': where the report's post is (the feedback
+   * row's board_* columns, filled in when it was posted). The post is acted
+   * on wherever it is, even after the owner has moved or cleared the board
+   * channel — a removed report must not stay up because the setting changed.
+   */
+  board?: { guildId: string; channelId: string; messageId: string } | null;
+}
+
+/**
+ * The public board. A new report is skipped (false) when the kind has no
+ * board channel — the owner may well run intake without a board, or
+ * neither. A status change or removal goes to the post itself when the row
+ * knows where that is, else to the configured board (the bot keeps its own
+ * record of posts too), and is skipped only when there is neither.
+ * Discord-sourced reports are posted by the bot itself at filing time (it
+ * holds the attachments then), so callers send 'new' for site reports only.
+ */
+export async function enqueueFeedbackBoard(pool: Pool, input: FeedbackBoardInput): Promise<boolean> {
+  const post = input.event !== 'new' ? input.board ?? null : null;
+  let guildId: string;
+  let channelId: string;
+  if (post) {
+    guildId = post.guildId;
+    channelId = post.channelId;
+  } else {
+    const s = await readNotifySettings(pool);
+    const board = s[FEEDBACK_CHANNEL_KEYS[input.kind].board];
+    const guild = s[NOTIFY_GUILD_KEY];
+    if (!board || !guild) return false;
+    guildId = String(guild);
+    channelId = String(board);
+  }
+  return enqueueBotAction('feedback_board', {
+    event: input.event,
+    kind: input.kind,
+    id: String(input.id),
+    guild_id: guildId,
+    channel_id: channelId,
+    message_id: post?.messageId ?? '',
+    subject: input.subject ?? '',
+    body: (input.body ?? '').slice(0, 4000),
+    reporter: input.reporter ?? '',
+    source: input.source ?? '',
+    status: input.status,
+    status_label: input.statusLabel,
+    note: (input.note ?? '').slice(0, 1000),
+    actor: input.actor ?? '',
+    site_url: siteBase(),
+  });
+}
+
+/** Fire-and-forget twin of enqueueFeedbackBoard, for request handlers. */
+export function feedbackBoard(pool: Pool | null, input: FeedbackBoardInput): void {
+  if (!pool) return;
+  void enqueueFeedbackBoard(pool, input).catch((err) => {
+    log.warn({ err: (err as Error).message, id: input.id, event: input.event }, 'feedback board: enqueue failed');
+  });
 }

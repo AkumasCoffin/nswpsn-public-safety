@@ -75,6 +75,25 @@ const VERCEL_LANDING_URL = 'https://centralwatch.watchtowers.io/au';
 const API_PREWARM_URL = 'https://centralwatch.watchtowers.io/au/api/cameras';
 const CHALLENGE_REFRESH_INTERVAL_MS = 15 * 60 * 1000; // 15 min
 const CDP_CACHE_CLEAR_INTERVAL_MS = 5 * 60 * 1000; // 5 min
+// How long to wait before re-launching after a failed solve, and the ceiling
+// the backoff climbs to. Vercel blocks rapid re-tries, and the thing we are
+// waiting out is usually an upstream change rather than a flake, so there is
+// no value in hammering it — the images are 15 min stale at best anyway.
+const REINIT_BACKOFF_MS = 60 * 1000;
+const REINIT_BACKOFF_MAX_MS = 30 * 60 * 1000;
+
+/** Close a page / context / browser, in that order, ignoring what is gone. */
+async function closeQuietly(...handles: unknown[]): Promise<void> {
+  for (const h of handles) {
+    const close = (h as { close?: () => Promise<void> } | null)?.close;
+    if (typeof close !== 'function') continue;
+    try {
+      await close.call(h);
+    } catch {
+      // Already closed, or the browser died under us — either way, done.
+    }
+  }
+}
 
 class CentralwatchBrowser {
   private pw: unknown = null;
@@ -87,6 +106,8 @@ class CentralwatchBrowser {
   private mutex: Promise<unknown> = Promise.resolve();
   private challengeRefreshTimer: NodeJS.Timeout | null = null;
   private cdpClearTimer: NodeJS.Timeout | null = null;
+  private reinitTimer: NodeJS.Timeout | null = null;
+  private reinitBackoffMs = REINIT_BACKOFF_MS;
   private shuttingDown = false;
 
   isReady(): boolean {
@@ -110,8 +131,54 @@ class CentralwatchBrowser {
         'centralwatch browser init failed — degrading to cache-only',
       );
       this.ready = false;
+      void this.teardown().then(() => this.scheduleReinit());
     });
     return this.initPromise;
+  }
+
+  /**
+   * Close everything this worker holds and go back to not-ready.
+   *
+   * A failed solve used to set ready=false and stop there, leaving a full
+   * headless Chromium resident — hundreds of MB on a 10 GB host — with its two
+   * maintenance intervals still firing against a session that could no longer
+   * fetch anything. There was also no way back: init() is memoised and its
+   * only caller runs once at boot, so the images and the camera roster stayed
+   * frozen until someone restarted pm2.
+   */
+  private async teardown(): Promise<void> {
+    this.ready = false;
+    if (this.challengeRefreshTimer) {
+      clearInterval(this.challengeRefreshTimer);
+      this.challengeRefreshTimer = null;
+    }
+    if (this.cdpClearTimer) {
+      clearInterval(this.cdpClearTimer);
+      this.cdpClearTimer = null;
+    }
+    const { page, context, browser } = this;
+    this.page = null;
+    this.context = null;
+    this.browser = null;
+    this.pw = null;
+    await closeQuietly(page, context, browser);
+  }
+
+  /**
+   * Arm a re-launch, with backoff. Clearing initPromise is the part that
+   * matters: without it init() is a permanent no-op after the first call.
+   */
+  private scheduleReinit(): void {
+    if (this.shuttingDown || this.isDisabled() || this.reinitTimer) return;
+    this.initPromise = null;
+    const waitMs = this.reinitBackoffMs;
+    this.reinitBackoffMs = Math.min(this.reinitBackoffMs * 2, REINIT_BACKOFF_MAX_MS);
+    log.warn({ waitMs }, 'centralwatch: will re-launch the browser');
+    this.reinitTimer = setTimeout(() => {
+      this.reinitTimer = null;
+      void this.init();
+    }, waitMs);
+    this.reinitTimer.unref?.();
   }
 
   private async doInit(): Promise<void> {
@@ -179,13 +246,10 @@ class CentralwatchBrowser {
       close: () => Promise<void>;
     };
 
-    const context = (await browser.newContext({
-      userAgent:
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
-      viewport: { width: 1920, height: 1080 },
-      locale: 'en-AU',
-      timezoneId: 'Australia/Sydney',
-    })) as {
+    // Everything from here to the solve loop can throw, and until it does the
+    // browser is only referenced by this local — a throw used to leave a
+    // headless Chromium running with nothing holding a handle to it.
+    type CwContext = {
       newPage: () => Promise<unknown>;
       cookies: (url: string) => Promise<Array<{ name: string }>>;
       close: () => Promise<void>;
@@ -194,8 +258,7 @@ class CentralwatchBrowser {
         detach: () => Promise<void>;
       }>;
     };
-
-    const page = (await context.newPage()) as {
+    type CwPage = {
       addInitScript: (script: string) => Promise<void>;
       goto: (url: string, opts: { timeout: number; waitUntil?: string }) => Promise<unknown>;
       waitForFunction: (
@@ -208,10 +271,26 @@ class CentralwatchBrowser {
       evaluate: <T>(fn: string | ((...args: unknown[]) => T), arg?: unknown) => Promise<T>;
       close: () => Promise<void>;
     };
+    let context: CwContext;
+    let page: CwPage;
+    try {
+      context = (await browser.newContext({
+        userAgent:
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
+        viewport: { width: 1920, height: 1080 },
+        locale: 'en-AU',
+        timezoneId: 'Australia/Sydney',
+      })) as CwContext;
 
-    await page.addInitScript(
-      'Object.defineProperty(navigator, "webdriver", {get: () => undefined})',
-    );
+      page = (await context.newPage()) as CwPage;
+
+      await page.addInitScript(
+        'Object.defineProperty(navigator, "webdriver", {get: () => undefined})',
+      );
+    } catch (err) {
+      await closeQuietly(browser);
+      throw err;
+    }
 
     // Run the landing+prewarm sequence up to 3 times. Vercel sometimes lets
     // the title flip ("solved") without actually dropping the auth cookie —
@@ -293,10 +372,11 @@ class CentralwatchBrowser {
         { cookieNames },
         'centralwatch: gave up after 3 attempts — degrading to cache-only',
       );
-      try { await page.close(); } catch { /* ignore */ }
-      try { await context.close(); } catch { /* ignore */ }
-      try { await browser.close(); } catch { /* ignore */ }
+      await closeQuietly(page, context, browser);
       this.ready = false;
+      // A boot-time flake used to be terminal: nothing ever called init()
+      // again, so the cameras stayed frozen until a pm2 restart.
+      this.scheduleReinit();
       return;
     }
 
@@ -305,6 +385,9 @@ class CentralwatchBrowser {
     this.context = context;
     this.page = page;
     this.ready = true;
+    // A clean solve clears the penalty, so an outage followed by a recovery
+    // doesn't leave the next failure waiting out a half-hour backoff.
+    this.reinitBackoffMs = REINIT_BACKOFF_MS;
 
     // Start the periodic maintenance timers. They're best-effort — any
     // failure is logged and the next interval tries again.
@@ -781,6 +864,10 @@ class CentralwatchBrowser {
 
   private async refreshChallenge(): Promise<void> {
     if (!this.ready || this.shuttingDown) return;
+    // Set by the 0-cookie path below, acted on after the mutex is released:
+    // teardown() clears the very timer this is running on, so it must not
+    // happen while the exclusive section still expects a live page.
+    let relaunch = false;
     await this.runExclusive(async () => {
       const page = this.page as {
         goto: (url: string, opts: { timeout: number; waitUntil?: string }) => Promise<unknown>;
@@ -822,13 +909,12 @@ class CentralwatchBrowser {
         const cookies = await context.cookies('https://centralwatch.watchtowers.io');
         if (cookies.length === 0) {
           // A refresh that drops all cookies is worse than skipping the
-          // refresh — fetchJson will start 429ing immediately. Flag the
-          // session as not-ready so the read path falls back to the
-          // last-good JSON; next init() / restart re-solves cleanly.
-          log.warn(
-            'centralwatch: refresh produced 0 cookies — degrading to cache-only until restart',
-          );
+          // refresh — fetchJson will start 429ing immediately. The session is
+          // unusable, so throw the browser away and start a fresh one rather
+          // than keeping a Chromium resident that can no longer fetch.
+          log.warn('centralwatch: refresh produced 0 cookies — re-launching the browser');
           this.ready = false;
+          relaunch = true;
           return;
         }
         log.info(
@@ -842,6 +928,10 @@ class CentralwatchBrowser {
         );
       }
     });
+    if (relaunch) {
+      await this.teardown();
+      this.scheduleReinit();
+    }
   }
 
   private async clearBrowserCache(): Promise<void> {
@@ -866,6 +956,10 @@ class CentralwatchBrowser {
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
     this.ready = false;
+    if (this.reinitTimer) {
+      clearTimeout(this.reinitTimer);
+      this.reinitTimer = null;
+    }
     if (this.challengeRefreshTimer) {
       clearInterval(this.challengeRefreshTimer);
       this.challengeRefreshTimer = null;

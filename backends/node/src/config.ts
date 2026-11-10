@@ -34,13 +34,34 @@ const Schema = z.object({
     .enum(['dev', 'production', 'test'])
     .default(process.env['DEV_MODE'] === 'false' ? 'production' : 'dev'),
 
-  // The shared API key clients send via Authorization: Bearer / X-API-Key
-  // / ?api_key=. Same value the Python backend uses. /api/config returns
-  // it to the frontend so map.html etc. don't need it baked in.
+  // The shared static key, for the server-side callers that cannot hold a
+  // session token or a named key (the Discord bot, rdio's transcripts plugin).
+  // Accepted with no Origin limit and even as ?api_key=, so it is the most
+  // powerful credential the backend takes.
+  //
+  // REQUIRED, with NO default. It used to fall back to a literal, which meant
+  // the '.min(1) is required' check could never fire and a deploy whose .env
+  // forgot the variable silently ran on a credential published in this repo.
+  // Failing to boot is the only safe answer: there is nothing a default can
+  // be that an attacker does not also know.
   NSWPSN_API_KEY: z
-    .string()
-    .min(1, 'NSWPSN_API_KEY is required')
-    .default('nswpsn-live-2024-secure'),
+    .string({ error: 'NSWPSN_API_KEY is required — set it in backends/.env (there is no default)' })
+    .min(1, 'NSWPSN_API_KEY is required — set it in backends/.env (there is no default)'),
+
+  // Browser session tokens (services/auth/browserToken.ts): what a page holds
+  // instead of NSWPSN_API_KEY. This secret signs them, so it is what stands
+  // between the public and a forged session token.
+  //
+  // REQUIRED, for the same reason as the key above: it used to be derived from
+  // NSWPSN_API_KEY when unset. That key is no longer served to browsers, but it
+  // still sits in every server-side consumer's config and in this repo's
+  // history, so deriving from it signed session tokens with a shared secret.
+  // TTL is the token lifetime; the mint budget is per address per 10 min.
+  BROWSER_TOKEN_SECRET: z
+    .string({ error: 'BROWSER_TOKEN_SECRET is required — generate one with `openssl rand -hex 32`' })
+    .min(16, 'BROWSER_TOKEN_SECRET must be at least 16 characters'),
+  BROWSER_TOKEN_TTL_SECS: z.coerce.number().int().min(60).max(86_400).default(900),
+  SESSION_MINT_PER_10MIN: z.coerce.number().int().positive().default(60),
 
   // Postgres connection string. Optional during W1 because /api/health
   // and /api/config don't touch the DB; gets enforced in later weeks
@@ -63,6 +84,95 @@ const Schema = z.object({
   // <repo>/uploads and files land at nswpsn.forcequit.xyz/uploads/...
   // (backend cwd is backends/node, hence the ../..).
   UPLOADS_DIR: z.string().default('../../uploads'),
+
+  // --- Gridded weather (the Windy-style map field) -----------------------
+  // These three multiply out into the Open-Meteo bill, so they live together.
+  // sources/weatherGrid.ts logs the resulting spend on boot and warns if the
+  // combination leaves the free tier. Do not tighten the step without reading
+  // that line.
+  //
+  // 0.5 deg over Australia is 85x69 = 5,865 cells. At one refresh a day that
+  // is 5,865 locations/day against a 10,000/day ceiling — safe even under the
+  // pessimistic reading where every location counts as its own call.
+  WEATHER_GRID_STEP: z.coerce.number().positive().default(0.5),
+  // Marine runs on its own, coarser grid. Swell varies over hundreds of
+  // kilometres, and matching the land grid would add up to 5,865 more
+  // locations a day - past the free tier before a single retry.
+  WEATHER_MARINE_STEP: z.coerce.number().positive().default(1.0),
+  // Air quality, coarser again: smoke and haze move in plumes hundreds of
+  // kilometres across, and it is a third grid competing for the same quota.
+  WEATHER_AIR_STEP: z.coerce.number().positive().default(1.5),
+  // Locations per HTTP request, via Open-Meteo's comma-separated coordinates.
+  // Fewer round trips; the cap keeps any single URL a sane length.
+  WEATHER_GRID_BATCH: z.coerce.number().int().positive().default(250),
+  // Open-Meteo also caps 600 calls per MINUTE, and counts per location. The
+  // first production run sent 5,865 locations in six seconds and was 429'd
+  // partway through the grid. This is the shared ceiling every weather source
+  // paces against; 400 leaves headroom for the point-readout endpoint, and
+  // turns a full land refresh into a ~15 minute background job, which for a
+  // once-a-day fetch costs nothing.
+  // 0 (or any non-positive value) disables pacing entirely — for a
+  // self-hosted Open-Meteo, which has no rate limits.
+  WEATHER_LOCATIONS_PER_MIN: z.coerce.number().int().default(400),
+
+  // --- Open-Meteo upstreams ----------------------------------------------
+  // Defaults are the public API, which splits its services across FOUR
+  // hostnames — that is the only reason four URL vars exist. A self-hosted
+  // instance serves everything on one host, so OPEN_METEO_BASE_URL alone
+  // covers it: when set, forecast/marine/air/elevation derive from it as
+  // <base>/v1/<service>, and an individual *_URL var still wins if also set.
+  //
+  // FLOOD is deliberately NOT derived from the base. GloFAS is not in the
+  // S3 mirror a self-hosted instance reads from, so deriving it would point
+  // rivers at a dataset that does not exist there. It stays on the public
+  // API unless its own var is set.
+  OPEN_METEO_BASE_URL: z.string().default(''),
+  OPEN_METEO_FORECAST_URL: z.string().default('https://api.open-meteo.com/v1/forecast'),
+  OPEN_METEO_MARINE_URL: z.string().default('https://marine-api.open-meteo.com/v1/marine'),
+  OPEN_METEO_AIR_URL: z.string().default('https://air-quality-api.open-meteo.com/v1/air-quality'),
+  OPEN_METEO_FLOOD_URL: z.string().default('https://flood-api.open-meteo.com/v1/flood'),
+  OPEN_METEO_ELEVATION_URL: z.string().default('https://api.open-meteo.com/v1/elevation'),
+  // Explicit model pins, comma-separated, empty = let the API choose.
+  //
+  // MANDATORY on a self-hosted instance. Without models= the server picks its
+  // default chain, and the S3 mirror's Australian default (BOM ACCESS-G)
+  // stopped updating in June 2025 — every value comes back null and nothing
+  // errors. ukmo_global_deterministic_10km is current, hourly and 10 km.
+  OPEN_METEO_FORECAST_MODELS: z.string().default(''),
+  OPEN_METEO_MARINE_MODELS: z.string().default(''),
+  OPEN_METEO_AIR_MODELS: z.string().default(''),
+  // Batches kept in flight against a PRIVATE upstream. The public API is
+  // always fetched one batch at a time regardless — concurrency there just
+  // spends the rate window faster.
+  WEATHER_FETCH_CONCURRENCY: z.coerce.number().int().default(6),
+  // Flood refreshes on its own clock. GloFAS publishes daily, and flood is
+  // the one source that stays on the PUBLIC API even when everything else is
+  // self-hosted — tying it to the land grid's cadence (three-hourly on a
+  // self-hosted deployment) would spend the public quota eight times over
+  // for data that had not changed.
+  WEATHER_FLOOD_INTERVAL_MS: z.coerce.number().int().positive().default(24 * 60 * 60 * 1000),
+  // The LAND field's bounding box. Defaults to Australia; against a
+  // self-hosted instance it can widen to the whole Oceania viewport (the
+  // runbook's block uses 90E-180E, 55S-15N) so the field fills the screen the
+  // way Windy's does instead of ending in a rectangle mid-ocean. Marine,
+  // flood and air keep the Australian box: flood rides the public API's
+  // quota, and the others gain nothing a viewer would see.
+  WEATHER_GRID_WEST: z.coerce.number().default(112),
+  WEATHER_GRID_SOUTH: z.coerce.number().default(-44),
+  WEATHER_GRID_EAST: z.coerce.number().default(154),
+  WEATHER_GRID_NORTH: z.coerce.number().default(-10),
+
+  // One full refresh a day. Each fetch already carries 9 days of time series,
+  // so refreshing more often buys freshness of the model run, not more range.
+  WEATHER_GRID_INTERVAL_MS: z.coerce.number().int().positive().default(24 * 60 * 60_000),
+  // Marine, flood and air all fold into the land manifest and can only run
+  // once it exists. They poll often and no-op cheaply, so a cold boot picks
+  // them up minutes after the land grid lands rather than a day later.
+  WEATHER_DEPENDENT_INTERVAL_MS: z.coerce.number().int().positive().default(10 * 60_000),
+  // Days of history and forecast in each point's series. 2 + 7 = 9 days, which
+  // is inside Open-Meteo's 2-week single-call weighting.
+  WEATHER_PAST_DAYS: z.coerce.number().int().min(0).max(92).default(2),
+  WEATHER_FORECAST_DAYS: z.coerce.number().int().min(1).max(16).default(7),
 
   // ArchiveWriter flush cadence in ms. Falls back to Python's
   // seconds-based ARCHIVE_FLUSH_INTERVAL when only the legacy var is
@@ -287,6 +397,21 @@ const Schema = z.object({
     .default('false')
     .transform((s) => s === 'true'),
 
+  // Daily gap-fill of the aircraft history from adsb.lol's globe_history
+  // archive (services/adsbGlobeHistory.ts). Downloads ~3.7 GB a day.
+  ADSB_HISTORY_IMPORT: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((s) => s === 'true'),
+
+  // Kill switch for the Dorsal Watch shark-report feed. When true the source
+  // still registers but serves an empty snapshot, so /api/dorsal/reports and
+  // the beaches map layer go quiet without a redeploy.
+  DORSAL_DISABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((s) => s === 'true'),
+
   // Kill switch for the AnyTrip public-transport proxy. When true both
   // /api/transport/* endpoints return empty snapshots and never hit
   // upstream. Escape hatch if AnyTrip blocks us or the (unofficial)
@@ -302,6 +427,12 @@ const Schema = z.object({
   // /api/transport/alerts. Optional — unset means AnyTrip-only positions
   // and an empty alerts endpoint, exactly the pre-TfNSW behaviour.
   TFNSW_API_KEY: z.string().optional(),
+
+  // Transport Victoria open data (opendata.transport.vic.gov.au): the planned
+  // and unplanned road disruption APIs behind the VIC road records
+  // (sources/interstateRoads.ts). Optional — unset, VIC's records come from
+  // the Live Traffic NSW aggregate instead, as they always did.
+  VIC_TRANSPORT_API_KEY: z.string().optional(),
 
   // Kill switch for the TfNSW feeds specifically (key stays configured).
   TFNSW_DISABLED: z
@@ -513,6 +644,25 @@ if (!parsed.success) {
 }
 
 export const config = parsed.data;
+
+// One base URL covers a self-hosted instance (see the schema comment). The
+// derivation happens after parse so every module keeps reading the same
+// config.OPEN_METEO_*_URL names regardless of how the operator set them.
+if (config.OPEN_METEO_BASE_URL) {
+  const base = config.OPEN_METEO_BASE_URL.replace(/\/+$/, '');
+  const defaults: Array<[keyof typeof config, string, string]> = [
+    ['OPEN_METEO_FORECAST_URL', 'https://api.open-meteo.com/v1/forecast', `${base}/v1/forecast`],
+    ['OPEN_METEO_MARINE_URL', 'https://marine-api.open-meteo.com/v1/marine', `${base}/v1/marine`],
+    ['OPEN_METEO_AIR_URL', 'https://air-quality-api.open-meteo.com/v1/air-quality', `${base}/v1/air-quality`],
+    ['OPEN_METEO_ELEVATION_URL', 'https://api.open-meteo.com/v1/elevation', `${base}/v1/elevation`],
+    // No flood row: GloFAS is not mirrored on self-hosted instances.
+  ];
+  for (const [key, publicDefault, derived] of defaults) {
+    // Only derive when the var is still at its public default — an explicit
+    // individual setting always beats the base.
+    if (config[key] === publicDefault) (config as Record<string, unknown>)[key] = derived;
+  }
+}
 export type Config = typeof config;
 
 // Convenience for the response shape on /api/health, which Python returns

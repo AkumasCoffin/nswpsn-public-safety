@@ -13,6 +13,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { AU_STATES, type AuState } from '../lib/stateMask.js';
 
 export interface AlertProvider {
   key: string;
@@ -48,6 +49,12 @@ export interface AlertType {
   icon: string;
   severityScale: string | null;
   subtypeAware: boolean;
+  /**
+   * The one state every record of this type is in, for a preset's States
+   * filter. Absent on types whose records span states; there the record's
+   * own `state` decides, and an alert whose state is unknown passes.
+   */
+  state?: AuState;
 }
 
 export interface SeverityOption {
@@ -112,6 +119,9 @@ function validate(cat: AlertCatalog): void {
     }
     if (t.severityScale && !cat.severityScales[t.severityScale]) {
       throw new Error(`alert type ${t.key} names unknown severity scale ${t.severityScale}`);
+    }
+    if (t.state !== undefined && !(AU_STATES as readonly string[]).includes(t.state)) {
+      throw new Error(`alert type ${t.key} names unknown state ${String(t.state)}`);
     }
   }
   for (const t of cat.types) {

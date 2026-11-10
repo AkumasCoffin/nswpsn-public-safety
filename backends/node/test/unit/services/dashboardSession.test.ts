@@ -200,4 +200,71 @@ describe('loadSession', () => {
     expect(back?._sid).toBe(sid);
     expect(back?.last_seen).toBeGreaterThan(0);
   });
+
+  // The sliding window. Before this, exp was set once at login and never
+  // moved, so the dashboard logged people out a day later however much they
+  // used it — the "I have to sign in every single time" complaint.
+  function seed(sid: string, exp: number) {
+    mod._getSessionsForTests().set(sid, {
+      uid: '42',
+      username: 'tester',
+      avatar: null,
+      access_token: 'at',
+      token_type: 'Bearer',
+      refresh_token: null,
+      guilds: [],
+      gfresh: 0,
+      iat: 0,
+      exp,
+    });
+  }
+
+  it('slides expiry forward for a session past the renew threshold', async () => {
+    const secret = mod.getSessionSecret()!;
+    const now = Math.floor(Date.now() / 1000);
+    const sid = 'stale-sid';
+    // Stamped two days ago: exp is TTL-from-then, so it is due for renewal.
+    const exp = now - 2 * 86_400 + mod.DASH_SESSION_TTL_SECS;
+    seed(sid, exp);
+
+    const back = await mod.loadSession(
+      `nswpsn_dash_sess=${mod.makeCookie({ sid, exp }, secret)}`,
+    );
+    expect(back?._renewedExp).toBeDefined();
+    // Renewed to a full TTL from now, not merely nudged.
+    expect(back!.exp).toBeGreaterThanOrEqual(now + mod.DASH_SESSION_TTL_SECS - 5);
+    expect(back!.exp).toBeGreaterThan(exp);
+  });
+
+  it('does not rewrite a session renewed within the threshold', async () => {
+    const secret = mod.getSessionSecret()!;
+    const now = Math.floor(Date.now() / 1000);
+    const sid = 'fresh-sid';
+    // Stamped an hour ago — inside the 1-day throttle, so no write.
+    const exp = now - 3600 + mod.DASH_SESSION_TTL_SECS;
+    seed(sid, exp);
+
+    const back = await mod.loadSession(
+      `nswpsn_dash_sess=${mod.makeCookie({ sid, exp }, secret)}`,
+    );
+    expect(back).not.toBeNull();
+    expect(back?._renewedExp).toBeUndefined();
+    expect(back!.exp).toBe(exp);
+  });
+
+  it('renews a session issued under the old 24h TTL', async () => {
+    // Migration case: exp is only hours away, so the derived stamp is ~29
+    // days back and it renews on the very next request rather than dying.
+    const secret = mod.getSessionSecret()!;
+    const now = Math.floor(Date.now() / 1000);
+    const sid = 'legacy-sid';
+    const exp = now + 3600;
+    seed(sid, exp);
+
+    const back = await mod.loadSession(
+      `nswpsn_dash_sess=${mod.makeCookie({ sid, exp }, secret)}`,
+    );
+    expect(back?._renewedExp).toBeDefined();
+    expect(back!.exp).toBeGreaterThan(now + 29 * 86_400);
+  });
 });

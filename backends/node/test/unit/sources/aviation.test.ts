@@ -157,4 +157,27 @@ describe('aviation.fetchAviationCameraDetail', () => {
     // Second call hits the cache: no extra fetchJson invocation.
     expect(fetchJsonMock).toHaveBeenCalledTimes(1);
   });
+
+  it('holds only recent airports: expired entries go, and never more than 500', async () => {
+    vi.useFakeTimers();
+    try {
+      fetchTextMock.mockResolvedValue(NONCE_PAGE);
+      fetchJsonMock.mockResolvedValue(MODAL_RESPONSE);
+      const mod = await import('../../../src/sources/aviation.js');
+      for (let i = 0; i < 600; i++) await mod.fetchAviationCameraDetail(`made-up-${i}`);
+      expect(mod._detailCacheSizeForTests()).toBe(500);
+      // The newest stay; the first ones asked for went.
+      fetchJsonMock.mockClear();
+      await mod.fetchAviationCameraDetail('made-up-599');
+      expect(fetchJsonMock).not.toHaveBeenCalled();
+      await mod.fetchAviationCameraDetail('made-up-0');
+      expect(fetchJsonMock).toHaveBeenCalledTimes(1);
+      // Two minutes on, the next store sweeps everything that expired.
+      vi.advanceTimersByTime(120_001);
+      await mod.fetchAviationCameraDetail('sydney');
+      expect(mod._detailCacheSizeForTests()).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

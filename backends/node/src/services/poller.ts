@@ -39,6 +39,18 @@ const SKIP_ARCHIVE = new Set<string>([
   'centralwatch_cameras',
   'weather_current',
   'weather_radar', // tile metadata, not incidents — python never archived
+  // The gridded weather field. Same class as weather_radar: a source's
+  // snapshot here is a WeatherManifest (timestep axes, variable lists, tile
+  // paths), not a list of incidents — so defaultArchiveItems wrote the whole
+  // manifest as ONE row with no source_id, on every poll, with nothing to
+  // dedup against. The three dependent sources poll every 10 min and return
+  // the unchanged manifest on each 'fresh' short-circuit, which was ~430
+  // multi-KB rows a day appearing in history and the facet rollups as bogus
+  // weather_* sources with no title and no position.
+  'weather_grid',
+  'weather_marine',
+  'weather_flood',
+  'weather_air',
   'ausgrid_stats',
   'beachsafe',
   'beachwatch',

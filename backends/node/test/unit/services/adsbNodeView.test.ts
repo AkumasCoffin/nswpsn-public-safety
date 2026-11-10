@@ -27,6 +27,8 @@ let poolAvailable = true;
 /** Rows node_adsb_tracks returns — the half of the picture that outlives a
  *  restart. Empty unless a test is about the merge. */
 let storedRows: Array<Record<string, unknown>> = [];
+/** Rows adsb_identities returns: registration and type per hex. */
+let identityRows: Array<Record<string, unknown>> = [];
 /** Make the stored-track read throw, to prove the view survives losing it. */
 let storedFails = false;
 
@@ -51,6 +53,7 @@ vi.mock('../../../src/db/pool.js', () => ({
               return { rows: storedRows };
             }
             if (s.includes('FROM node_adsb_coverage')) return { rows: [] };
+            if (s.includes('FROM adsb_identities')) return { rows: identityRows };
             throw new Error('unexpected SQL: ' + s.slice(0, 60));
           },
         }
@@ -205,6 +208,7 @@ describe('adsbNodeTracks survives a restart', () => {
   beforeEach(() => {
     nodeRow = { ...ROW_NODE };
     storedRows = [];
+    identityRows = [];
     storedFails = false;
     poolAvailable = true;
   });
@@ -229,6 +233,18 @@ describe('adsbNodeTracks survives a restart', () => {
     expect(t.aircraft).toBe(2);
     expect(t.traces).toHaveLength(2);
     expect(t.points).toBe(4);
+    vi.useRealTimers();
+  });
+
+  it('labels a track with the registration and type the public feed resolved', async () => {
+    // A receiver's decoder never knows a registration; the hover label gets
+    // it from what the aggregators' databases said about that hex.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(HOUR_UTC + 30 * 60_000));
+    storedRows = [stored('aaa111', [[60, -33.0, 151.0], [600, -33.2, 151.2]])];
+    identityRows = [{ hex: 'aaa111', reg: 'VH-OQA', type: 'A388' }];
+    const t = await adsbNodeTracks('n1', 480);
+    expect(t.traces[0]).toMatchObject({ hex: 'aaa111', reg: 'VH-OQA', type: 'A388' });
     vi.useRealTimers();
   });
 

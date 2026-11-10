@@ -31,9 +31,13 @@ const {
   notifyStaffAsync,
   writeNotifySetting,
   invalidateStaffNotifySettings,
+  enqueueFeedbackChannels,
+  enqueueFeedbackBoard,
   NOTIFY_GUILD_KEY,
   NOTIFY_CHANNEL_KEYS,
+  FEEDBACK_CHANNEL_KEYS,
 } = await import('../../../src/services/staffNotify.js');
+const { verifyBotActionSig } = await import('../../../src/services/botActionSign.js');
 
 /** Main-DB pool holding app_settings. */
 let settingsRows: Array<{ key: string; value: string }> = [];
@@ -227,6 +231,31 @@ describe('notifyStaffAsync', () => {
     const sent = sentParams();
     expect(sent.url).toContain('/staff?view=takedowns');
   });
+
+  it('links to the SITE, never to this API\'s own origin', async () => {
+    // PUBLIC_BASE_URL is the API (api.forcequit.xyz on production); the site
+    // is DASHBOARD_FRONTEND_URL. A link built from the former lands on the
+    // API, which serves no pages.
+    const prevApi = process.env['PUBLIC_BASE_URL'];
+    const prevSite = process.env['DASHBOARD_FRONTEND_URL'];
+    process.env['PUBLIC_BASE_URL'] = 'https://api.example.test';
+    delete process.env['DASHBOARD_FRONTEND_URL'];
+    try {
+      configureAll();
+      await notifyStaffAsync(mainPool, { kind: 'signup_request', event: 'new', ref: 'x', title: 'T' });
+      expect(sentParams().url.startsWith('https://nswpsn.forcequit.xyz/staff?view=')).toBe(true);
+
+      vi.clearAllMocks();
+      invalidateStaffNotifySettings();
+      process.env['DASHBOARD_FRONTEND_URL'] = 'https://site.example.test/';
+      configureAll();
+      await notifyStaffAsync(mainPool, { kind: 'signup_request', event: 'new', ref: 'x', title: 'T' });
+      expect(sentParams().url).toBe('https://site.example.test/staff?view=signup');
+    } finally {
+      if (prevApi === undefined) delete process.env['PUBLIC_BASE_URL']; else process.env['PUBLIC_BASE_URL'] = prevApi;
+      if (prevSite === undefined) delete process.env['DASHBOARD_FRONTEND_URL']; else process.env['DASHBOARD_FRONTEND_URL'] = prevSite;
+    }
+  });
 });
 
 describe('new_user / new_node', () => {
@@ -300,7 +329,102 @@ describe('new_user / new_node', () => {
   });
 });
 
+describe('bug reports and suggestions', () => {
+  function configureFeedback() {
+    settingsRows = [
+      { key: NOTIFY_GUILD_KEY, value: '111111111111111111' },
+      { key: NOTIFY_CHANNEL_KEYS.bug_report, value: '777777777777777777' },
+      { key: NOTIFY_CHANNEL_KEYS.suggestion, value: '888888888888888888' },
+      { key: FEEDBACK_CHANNEL_KEYS.bug.intake, value: '900000000000000001' },
+      { key: FEEDBACK_CHANNEL_KEYS.bug.board, value: '900000000000000002' },
+    ];
+  }
+
+  it('each kind has its own private alert channel and deep-links to the reports panel', async () => {
+    configureFeedback();
+    await notifyStaffAsync(mainPool, { kind: 'bug_report', event: 'new', ref: '12', title: 'Bug report #12' });
+    expect(sentParams().channel_id).toBe('777777777777777777');
+    expect(sentParams().url).toContain('/staff?view=tickets&tab=reports&kind=bug');
+
+    vi.clearAllMocks();
+    invalidateStaffNotifySettings();
+    configureFeedback();
+    await notifyStaffAsync(mainPool, { kind: 'suggestion', event: 'new', ref: '3', title: 'Suggestion #3' });
+    expect(sentParams().channel_id).toBe('888888888888888888');
+    expect(sentParams().url).toContain('kind=suggestion');
+  });
+
+  it('an update event edits in place without being a resolution', async () => {
+    configureFeedback();
+    await notifyStaffAsync(mainPool, { kind: 'bug_report', event: 'update', ref: '12', title: 'Bug report #12 · Looking into it', status: 'Looking into it' });
+    expect(sentParams()).toMatchObject({ event: 'update', ref: '12', status: 'Looking into it' });
+  });
+
+  it('pushes a kind\'s current intake + board channels to the bot, signed, all strings', async () => {
+    configureFeedback();
+    expect(await enqueueFeedbackChannels(mainPool, 'bug')).toBe(true);
+    const args = insertArgs();
+    expect(args[0]).toBe('feedback_channels');
+    const sent = sentParams();
+    expect(sent).toEqual({
+      kind: 'bug',
+      guild_id: '111111111111111111',
+      intake_channel_id: '900000000000000001',
+      board_channel_id: '900000000000000002',
+      site_url: expect.stringMatching(/^https?:\/\//),
+    });
+    // The signature the bot will check, over exactly what was sent.
+    expect(verifyBotActionSig('test-secret', 'feedback_channels', 'backend', JSON.parse(args[1] as string), args[3])).toBe(true);
+
+    // A kind with nothing set still sends — empty ids tell the bot to take its pin down.
+    vi.clearAllMocks();
+    await enqueueFeedbackChannels(mainPool, 'suggestion');
+    expect(sentParams()).toMatchObject({ kind: 'suggestion', intake_channel_id: '', board_channel_id: '' });
+  });
+
+  it('the board: skipped without a board channel, otherwise a closed set of string keys', async () => {
+    configureFeedback();
+    expect(await enqueueFeedbackBoard(mainPool, { event: 'new', kind: 'suggestion', id: 3, status: 'open', statusLabel: 'Open' })).toBe(false);
+    expect(botQuery).not.toHaveBeenCalled();
+
+    expect(await enqueueFeedbackBoard(mainPool, {
+      event: 'status', kind: 'bug', id: 12, subject: 'Tiles', status: 'done', statusLabel: 'Fixed', note: 'Deployed', actor: 'Jordan',
+    })).toBe(true);
+    expect(insertArgs()[0]).toBe('feedback_board');
+    const sent = sentParams();
+    expect(Object.keys(sent).sort()).toEqual(
+      ['actor', 'body', 'channel_id', 'event', 'guild_id', 'id', 'kind', 'message_id', 'note', 'reporter', 'site_url', 'source', 'status', 'status_label', 'subject'],
+    );
+    for (const v of Object.values(sent)) expect(typeof v).toBe('string');
+    expect(sent).toMatchObject({ event: 'status', id: '12', channel_id: '900000000000000002', message_id: '', status_label: 'Fixed', note: 'Deployed', actor: 'Jordan' });
+  });
+
+  it('a status change or removal goes to the post itself, even once the board is unset', async () => {
+    // Nothing configured any more — the board was cleared after this report was posted.
+    settingsRows = [];
+    const post = { guildId: '111111111111111111', channelId: '900000000000000009', messageId: '123456789012345678' };
+    expect(await enqueueFeedbackBoard(mainPool, { event: 'delete', kind: 'bug', id: 12, status: 'open', statusLabel: 'Open', board: post })).toBe(true);
+    expect(sentParams()).toMatchObject({ event: 'delete', guild_id: post.guildId, channel_id: post.channelId, message_id: post.messageId });
+    // A new report has no post yet: the configured board, or nothing.
+    vi.clearAllMocks();
+    expect(await enqueueFeedbackBoard(mainPool, { event: 'new', kind: 'bug', id: 13, status: 'open', statusLabel: 'Open', board: post })).toBe(false);
+    expect(botQuery).not.toHaveBeenCalled();
+  });
+
+  it('an alert may name its own view: the report itself, not just the list', async () => {
+    configureFeedback();
+    await notifyStaffAsync(mainPool, { kind: 'bug_report', event: 'new', ref: '12', view: 'tickets&tab=reports&kind=bug&id=12', title: 'Bug report #12' });
+    expect(sentParams().url).toMatch(/\/staff\?view=tickets&tab=reports&kind=bug&id=12$/);
+  });
+});
+
 describe('writeNotifySetting', () => {
+  it('accepts the public feedback channel keys', async () => {
+    await writeNotifySetting(mainPool, FEEDBACK_CHANNEL_KEYS.suggestion.board, '123456789012345678', 'u1');
+    const sql = String((mainQuery.mock.calls.at(-1) as unknown as [string])[0]);
+    expect(sql).toContain('INSERT INTO app_settings');
+  });
+
   it('refuses a key outside the known set', async () => {
     await expect(writeNotifySetting(mainPool, 'wire_public', 'true', 'u1')).rejects.toThrow(/unknown/);
   });

@@ -52,7 +52,7 @@ import { AU_STATES } from '../lib/stateMask.js';
 import { pushConfigToNode } from '../services/nodes/configPush.js';
 import { listSurveys, runningSurveys, SURVEY_PASS_PCT } from '../services/siteSurvey.js';
 import { getPool } from '../db/pool.js';
-import { feederRadioStats } from './node-data.js';
+import { feederRadioStats, feederPagerOverview, feederPagerMessages, pagerPaging } from './node-data.js';
 
 export const feederRouter = new Hono();
 
@@ -103,7 +103,8 @@ function feederNodeView(n: NodeRow, surveying?: Map<string, number>) {
   const isAdsb = n.kind === 'adsb';
 
   // Pager nodes have no SDR-Trunk channels/tuners: their "up/decoding" signal is
-  // how many POCSAG readers are running (reported as components "reader:<label>").
+  // how many frequencies are being received. The agent reports one component
+  // per frequency ("reader:<label>"), even when they share one SDR's reader.
   const readersUp = st?.components
     ? Object.entries(st.components).filter(
         ([k, v]) => k.startsWith('reader') && String(v).toLowerCase().includes('run'),
@@ -450,9 +451,10 @@ function linuxInstaller(enrolCode: string, kind: string): string {
 // ---- Linux PAGER node installer (rtl_fm | multimon-ng POCSAG → Pagermon) -----
 // Linux/amd64+arm64 only. Installs rtl-sdr + multimon-ng, the pager agent binary
 // (served as nodeagent-pager-linux-<arch>), udev rules + the RTL kernel-module
-// blacklist, and a systemd unit. The agent auto-detects RTL dongles, assigns
-// distinct EEPROM serials ONLY when they collide, and runs one POCSAG reader per
-// frequency (1 SDR → NSW RFS; 2 → also Fire & Rescue NSW).
+// blacklist, and a systemd unit. A pager node needs ONE RTL dongle: the agent
+// receives every frequency in the state's plan off it at once (both NSW RFS and
+// Fire & Rescue NSW), leaves any spare dongle idle, and only assigns distinct
+// EEPROM serials when they collide AND more than one dongle is in use.
 function pagerLinuxInstaller(enrolCode: string): string {
   const T = shSingleQuote(enrolCode);
   const S = shSingleQuote(SERVER_URL);
@@ -474,7 +476,7 @@ function pagerLinuxInstaller(enrolCode: string): string {
     `  *) echo "unsupported architecture: $(uname -m) (pager nodes are amd64/arm64)" >&2; exit 1;;`,
     `esac`,
     ``,
-    `# Decode toolchain: rtl-sdr (rtl_fm, rtl_test, rtl_eeprom) + multimon-ng.`,
+    `# Decode toolchain: rtl-sdr (rtl_fm, rtl_sdr, rtl_test, rtl_eeprom) + multimon-ng.`,
     `echo "Installing rtl-sdr + multimon-ng..."`,
     `if command -v apt-get >/dev/null 2>&1; then`,
     `  export DEBIAN_FRONTEND=noninteractive`,
@@ -522,8 +524,8 @@ function pagerLinuxInstaller(enrolCode: string): string {
     `# Loopback relay the local readers POST decoded POCSAG lines to; the agent`,
     `# parses + relays them to the backend, which forwards to central Pagermon.`,
     `relay_addr: "127.0.0.1:17390"`,
-    `# Frequencies + POCSAG rates come from the backend config push; the agent`,
-    `# auto-detects SDRs and runs one reader per frequency (1 SDR = NSW RFS only).`,
+    `# Frequencies + POCSAG rates come from the backend config push. One SDR is`,
+    `# all a pager node needs: the agent receives every frequency in the plan at once.`,
     `YAML`,
     `chown -R nswpsn-node:nswpsn-node /etc/nswpsn-node`,
     `chmod 0750 /etc/nswpsn-node && chmod 0640 /etc/nswpsn-node/agent.yaml`,
@@ -1180,16 +1182,51 @@ feederRouter.get('/api/feeder/nodes/:id/site-surveys', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// GET /api/feeder/nodes/:id/messages — the owner views their pager node's recent
-// decoded pages (the same rolling buffer staff see in the drawer). Owner-gated;
-// pager nodes only (radio nodes have no decoded-message buffer).
+// GET /api/feeder/nodes/:id/pager-overview
+// GET /api/feeder/nodes/:id/pager-messages?window=24h|7d|30d&filtered=0|1&limit=50&offset=0
+//
+// The owner's view of their own pager node, from the stored pages: an overview
+// (24 hours and 7 days), and the node's messages with traffic and filtered
+// apart. Same implementation as the staff pager views in node-data.ts, so the
+// two never disagree about what was filtered. Gated on ownership, like /stats
+// and /adsb; a node of another kind is a caller bug, not an empty result.
+//
+// These replace /messages, which read the in-memory ring buffer: 50 decodes,
+// nine in ten of them filtered, gone on every restart.
 // ---------------------------------------------------------------------------
-feederRouter.get('/api/feeder/nodes/:id/messages', async (c) => {
+feederRouter.get('/api/feeder/nodes/:id/pager-overview', async (c) => {
   const node = await ownedNode(c);
   if (!node) return c.json({ error: 'not your node' }, 404);
-  if (node.kind !== 'pager') return c.json({ messages: [] });
-  c.header('Cache-Control', 'no-store');
-  return c.json({ messages: hub.recentPagerMessages(node.id) });
+  if (node.kind !== 'pager') return c.json({ error: 'not a pager node' }, 400);
+  try {
+    const pool = await getPool();
+    if (!pool) return c.json({ error: 'database unavailable' }, 503);
+    c.header('Cache-Control', 'no-store');
+    return c.json(await feederPagerOverview(pool, node.id));
+  } catch (err) {
+    log.error({ err, id: node.id }, 'Error building feeder pager overview');
+    return c.json({ error: 'Failed to load overview' }, 500);
+  }
+});
+
+feederRouter.get('/api/feeder/nodes/:id/pager-messages', async (c) => {
+  const node = await ownedNode(c);
+  if (!node) return c.json({ error: 'not your node' }, 404);
+  if (node.kind !== 'pager') return c.json({ error: 'not a pager node' }, 400);
+  try {
+    const pool = await getPool();
+    if (!pool) return c.json({ error: 'database unavailable' }, 503);
+    const url = new URL(c.req.url);
+    const wRaw = (url.searchParams.get('window') ?? '24h').toLowerCase();
+    const window = (['24h', '7d', '30d'] as const).find((w) => w === wRaw) ?? '24h';
+    const filtered = url.searchParams.get('filtered') === '1';
+    const { limit, offset } = pagerPaging(url);
+    c.header('Cache-Control', 'no-store');
+    return c.json(await feederPagerMessages(pool, node, { window, filtered, limit, offset }));
+  } catch (err) {
+    log.error({ err, id: node.id }, 'Error listing feeder pager messages');
+    return c.json({ error: 'Failed to load messages' }, 500);
+  }
 });
 
 // ---------------------------------------------------------------------------

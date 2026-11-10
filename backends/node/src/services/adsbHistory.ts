@@ -39,7 +39,7 @@ export const HISTORY_TRAIL_MAX_MIN = 30;
  */
 export const HISTORY_MAX_TRACKS = 4000;
 
-const HOUR_MS = 3_600_000;
+const MINUTE_MS = 60_000;
 
 export interface HistoryTrack {
   hex: string;
@@ -83,24 +83,28 @@ export function adsbHistoryOldestMs(nowMs: number = Date.now()): number {
 }
 
 interface Row {
-  hex: string;
-  hour_bucket: Date;
-  callsign: string | null;
-  reg: string | null;
-  type: string | null;
-  es_tag: string | null;
-  sources: string[] | null;
-  points: unknown;
+  minute: Date;
+  aircraft: unknown;
+}
+
+/** One aircraft's entry in a stored minute (migration 139). */
+interface StoredAircraft {
+  c?: string | null;
+  r?: string | null;
+  t?: string | null;
+  e?: string | null;
+  s?: string[] | null;
+  p?: Array<[number, number, number, number | null]> | null;
 }
 
 /**
  * Every aircraft present between `at - trail` and `at`.
  *
- * Rows are stored one per aircraft per hour, so a window can span two or three
- * buckets and one aircraft can contribute a row from each. They are stitched
- * back into a single track per hex here rather than in the client, because the
- * hour boundary is a storage detail and nothing downstream should have to know
- * about it.
+ * Rows are one per minute (plus the odd second row for a minute two processes
+ * shared across a restart), each holding every aircraft heard in it. A window
+ * is at most 31 of them, read by primary key, and each aircraft is stitched
+ * back into one track here: the minute boundary is a storage detail and
+ * nothing downstream should have to know about it.
  */
 export async function adsbHistoryAt(
   atMsRaw: number,
@@ -121,102 +125,71 @@ export async function adsbHistoryAt(
   const t0 = atMs - trailMinutes * 60_000;
   const t1 = atMs;
 
-  // The hour bound is what makes this an index range scan instead of a table
-  // sweep: it is the leading column of idx_adsb_tracks_hour, and it is always
-  // one to three values wide. last_seen/first_seen then discard the aircraft
-  // that were present in those hours but not during the window itself.
-  const hourFrom = Math.floor(t0 / HOUR_MS) * HOUR_MS;
-  const hourTo = Math.floor(t1 / HOUR_MS) * HOUR_MS;
-
   const r = await pool.query<Row>(
-    `SELECT hex, hour_bucket, callsign, reg, type, es_tag, sources, points
-       FROM adsb_tracks
-      WHERE hour_bucket >= $1::timestamptz
-        AND hour_bucket <= $2::timestamptz
-        AND last_seen  >= $3::timestamptz
-        AND first_seen <= $4::timestamptz
-      ORDER BY hex, hour_bucket`,
+    `SELECT minute, aircraft
+       FROM adsb_track_chunks
+      WHERE minute >= $1::timestamptz
+        AND minute <= $2::timestamptz
+      ORDER BY minute, seq`,
     [
-      new Date(hourFrom).toISOString(),
-      new Date(hourTo).toISOString(),
-      new Date(t0).toISOString(),
+      new Date(Math.floor(t0 / MINUTE_MS) * MINUTE_MS).toISOString(),
       new Date(t1).toISOString(),
     ],
   );
 
-  // Which hour the viewed instant falls in. Sources are recorded per hour, so
-  // this is the row whose attribution actually describes the moment on screen.
-  const viewedHour = Math.floor(atMs / HOUR_MS) * HOUR_MS;
-
   const byHex = new Map<string, HistoryTrack>();
-  /** Sources from the viewed hour alone, where that hour has a row. */
-  const viewedHourSources = new Map<string, string[]>();
+  /** Per hex: sources of the newest minute it was heard in at or before `at`,
+   *  and that minute. Rows arrive oldest first, so the last one wins. */
+  const latestSources = new Map<string, { minute: number; sources: Set<string> }>();
   for (const row of r.rows) {
-    const hourMs = row.hour_bucket.getTime();
-    const raw = Array.isArray(row.points) ? row.points : [];
-    if (hourMs === viewedHour && row.sources) {
-      viewedHourSources.set(row.hex, Array.from(new Set(row.sources)));
-    }
+    const minuteMs = row.minute.getTime();
+    const raw = row.aircraft;
+    if (!raw || typeof raw !== 'object') continue;
+    for (const [hex, entry] of Object.entries(raw as Record<string, StoredAircraft>)) {
+      if (!entry) continue;
+      let track = byHex.get(hex);
+      if (!track) {
+        track = {
+          hex, callsign: null, reg: null, type: null, esTag: null, sources: [], points: [],
+        };
+        byHex.set(hex, track);
+      }
+      // The newest non-null wins: identity arrives late and only improves.
+      track.callsign = entry.c ?? track.callsign;
+      track.reg = entry.r ?? track.reg;
+      track.type = entry.t ?? track.type;
+      track.esTag = entry.e ?? track.esTag;
 
-    let track = byHex.get(row.hex);
-    if (!track) {
-      track = {
-        hex: row.hex,
-        callsign: row.callsign,
-        reg: row.reg,
-        type: row.type,
-        esTag: row.es_tag,
-        // De-duplicated here rather than in SQL: the writer's union can leave
-        // one repeat behind (see the CASE in adsbTrackArchive), and a repeated
-        // source would double a count nobody wants doubled.
-        sources: Array.from(new Set(row.sources ?? [])),
-        points: [],
-      };
-      byHex.set(row.hex, track);
-    } else {
-      // A later hour may know the callsign the earlier one did not.
-      track.callsign = track.callsign ?? row.callsign;
-      track.reg = track.reg ?? row.reg;
-      track.type = track.type ?? row.type;
-      track.esTag = track.esTag ?? row.es_tag;
-      if (row.sources) {
-        track.sources = Array.from(new Set([...track.sources, ...row.sources]));
+      let heardBy = false;
+      for (const p of entry.p ?? []) {
+        const tMs = minuteMs + p[0];
+        if (tMs < t0 || tMs > t1) continue;
+        track.points.push([tMs, p[1], p[2], p[3]]);
+        heardBy = true;
+      }
+      // Attribution is per minute: which receivers heard this aircraft in the
+      // minute closest to the instant on screen. A minute's second row (two
+      // processes sharing it) adds to it rather than replacing it.
+      if (heardBy && entry.s && minuteMs <= t1) {
+        const cur = latestSources.get(hex);
+        if (!cur || minuteMs > cur.minute) {
+          latestSources.set(hex, { minute: minuteMs, sources: new Set(entry.s) });
+        } else if (minuteMs === cur.minute) {
+          for (const s of entry.s) cur.sources.add(s);
+        }
       }
     }
-
-    for (const p of raw as Array<[number, number, number, number | null]>) {
-      const tMs = hourMs + p[0] * 1000;
-      // Clipped here rather than in SQL: the points live inside a jsonb array,
-      // so the row-level bounds above can only ever be a coarse filter.
-      if (tMs < t0 || tMs > t1) continue;
-      track.points.push([tMs, p[1], p[2], p[3]]);
-    }
-  }
-
-  // Narrow each track's sources to the hour being VIEWED.
-  //
-  // The union above spans every hour the trail touches, which is up to three.
-  // That made the map's receiver filter show aircraft a node had heard at some
-  // other point in the window — scrub to 14:05 and something the receiver only
-  // caught at 14:55 was still attributed to it, because both instants live in
-  // the same union.
-  //
-  // Per-hour is as fine as this can get: the stored points carry no source of
-  // their own, so which receiver heard any individual position is not
-  // recoverable. Where the viewed hour has no row for an aircraft — its trail
-  // reaches into the window from an earlier hour — the union stays, being the
-  // only attribution there is.
-  for (const [hex, t] of byHex) {
-    const narrowed = viewedHourSources.get(hex);
-    if (narrowed) t.sources = narrowed;
   }
 
   // An aircraft whose every point fell outside the window contributed a row
-  // (its hour overlapped) but nothing to draw.
+  // but nothing to draw.
   const all: HistoryTrack[] = [];
   for (const t of byHex.values()) {
     if (t.points.length === 0) continue;
     t.points.sort((a, b) => a[0] - b[0]);
+    // Two rows of one minute can both hold a fix seen by both processes.
+    t.points = t.points.filter((p, i, arr) => i === 0 || p[0] !== arr[i - 1]![0]);
+    t.sources = Array.from(latestSources.get(t.hex)?.sources ?? []);
     all.push(t);
   }
 

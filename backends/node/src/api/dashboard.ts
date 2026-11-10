@@ -73,6 +73,7 @@ import {
   guildIconUrl,
   userAvatarUrl,
 } from '../services/discordApi.js';
+import { requestIsFirstParty } from '../services/auth/firstParty.js';
 import { validateFilters, FilterValidationError } from '../services/dashboardFilterValidator.js';
 import {
   ALERT_TYPES,
@@ -220,6 +221,20 @@ async function requireSession(c: Context): Promise<DashSession | Response> {
   if (!session) {
     return dashErr(c, 'invalid_session', 'Sign in via /api/dashboard/auth/login.', 401);
   }
+  // loadSession slid the server-side expiry forward; the cookie carries its
+  // own copy of exp and loadSession rejects on THAT, so without re-issuing it
+  // here the sliding window would do nothing — the row would live for 30 days
+  // while the browser kept presenting a cookie that expires on the old clock.
+  if (session._renewedExp && session._sid) {
+    const secret = getSessionSecret();
+    if (secret) {
+      const refreshed = makeCookie(
+        { sid: session._sid, exp: session._renewedExp } as SessionCookiePayload,
+        secret,
+      );
+      setSignedCookie(c, DASH_SESSION_COOKIE, refreshed, DASH_SESSION_TTL_SECS);
+    }
+  }
   return session;
 }
 
@@ -231,6 +246,32 @@ async function requireAdmin(c: Context): Promise<DashSession | Response> {
   }
   return result;
 }
+
+// ---------------------------------------------------------------------------
+// CSRF: a state-changing dashboard request has to come from one of our own
+// pages.
+//
+// The session cookie is SameSite=None (dashboard.html is served from the site
+// host and talks to this API host, so the browser treats the call as
+// cross-site), /api/dashboard/* skips the API-key gate, and the handlers below
+// authenticate on the cookie alone. That combination meant any other site
+// could POST as a signed-in dashboard user — a form with enctype=text/plain
+// needs no preflight, and c.req.json() parses the body regardless of its
+// content type — queueing bot broadcasts or writing alert presets into their
+// guild. Origin / Sec-Fetch-Site is what distinguishes the real page from
+// that, and a browser sends it on exactly the requests this has to stop.
+//
+// GET stays open: reads are already protected by CORS (an attacker page can
+// send one but cannot read the response), and the OAuth callback is a
+// cross-site top-level navigation with no Origin at all.
+// ---------------------------------------------------------------------------
+dashboardRouter.use('/api/dashboard/*', async (c, next) => {
+  const method = c.req.method.toUpperCase();
+  if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS' && !requestIsFirstParty(c)) {
+    return dashErr(c, 'bad_origin', 'This request must come from the dashboard.', 403);
+  }
+  await next();
+});
 
 // ---------------------------------------------------------------------------
 // L1 defense-in-depth: a router-level guard on every /api/dashboard/admin/*

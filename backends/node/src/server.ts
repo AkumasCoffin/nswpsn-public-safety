@@ -19,6 +19,7 @@ import { actAmbulanceRouter } from './api/act-ambulance.js';
 import { bomRouter } from './api/bom.js';
 import { trafficRouter } from './api/traffic.js';
 import { beachRouter } from './api/beach.js';
+import { dorsalRouter } from './api/dorsal.js';
 import { weatherRouter } from './api/weather.js';
 import { pagerRouter } from './api/pager.js';
 import { firmsRouter } from './api/firms.js';
@@ -28,6 +29,7 @@ import { radioPublicRouter } from './api/radio-public.js';
 import { endeavourRouter } from './api/endeavour.js';
 import { ausgridRouter } from './api/ausgrid.js';
 import { essentialRouter } from './api/essential.js';
+import { outagesRouter } from './api/outages.js';
 import { heartbeatRouter } from './api/heartbeat.js';
 import { statsRouter } from './api/stats.js';
 // Incidents / editor / users (W5).
@@ -38,6 +40,7 @@ import { fleetRouter } from './api/fleet.js';
 import { profilesRouter } from './api/profiles.js';
 import { editorRouter } from './api/editor.js';
 import { ticketsRouter } from './api/tickets.js';
+import { feedbackRouter } from './api/feedback.js';
 import { staffNotifyRouter } from './api/staffNotify.js';
 import { staffNoticesRouter } from './api/staffNotices.js';
 import { referralsRouter } from './api/referrals.js';
@@ -53,6 +56,7 @@ import { qldFireRouter } from './api/qld-fire.js';
 import { vicEmergencyRouter } from './api/vic-emergency.js';
 import { waEmergencyRouter } from './api/wa-emergency.js';
 import { saFireRouter } from './api/sa-fire.js';
+import { firesRouter } from './api/fires.js';
 import { agencyRouter } from './api/agency.js';
 import { marinetrafficRouter } from './api/marinetraffic.js';
 import { newsRouter } from './api/news.js';
@@ -78,15 +82,25 @@ import { nodeIngestRouter } from './api/node-ingest.js';
 import { scannerIngestRouter } from './api/scanner-ingest.js';
 import { nodeDataRouter } from './api/node-data.js';
 import { requireApiKey } from './services/auth/apiKey.js';
+import { apiKeyUsage } from './services/auth/apiKeyUsage.js';
+import { isFirstPartyOrigin } from './services/auth/firstParty.js';
 import { optionalSupabaseJwt } from './services/auth/supabaseJwt.js';
+import { sessionRouter } from './api/session.js';
+import { apiKeysRouter } from './api/apiKeys.js';
+// The versioned public data API (/api/v1/) and its description. The reference
+// page that renders it is on the site (api-docs.html), not here.
+import { mirror } from './api/v1/mirror.js';
+import { notFound, onError } from './api/v1/respond.js';
+import { openapiRouter } from './api/v1/openapi.js';
+import { unversionedPath } from './lib/apiVersion.js';
 import { log } from './lib/log.js';
 
 // Paths that should never appear in the request log even on
 // success — they fire constantly and drown out everything else.
 // Failures still show up because the success-only filter below
-// only short-circuits on 2xx/3xx.
+// only short-circuits on 2xx/3xx. Their /api/v1/ twins are just as quiet.
 const QUIET_PATHS_RE =
-  /^\/(?:api\/heartbeat|api\/check-editor\/|api\/config|api\/health|api\/status)/;
+  /^\/api\/(?:v1\/)?(?:heartbeat|check-editor\/|config|health|status)/;
 
 const SLOW_REQUEST_MS = 500;
 
@@ -206,7 +220,16 @@ const requestLogger: MiddlewareHandler = async (c, next) => {
   // signal under {"method":"GET",…} on every line. Embed everything in
   // the message string instead — production ndjson keeps it grep-able,
   // dev pretty-print shows the same clean line.
-  const line = `${method} ${path} → ${status} ${ms}ms ${clientTag(client)}`;
+  // Which credential class got the request through the gate (apiKey.ts). A
+  // named key is tagged by its lookup prefix — enough to tell keys apart in
+  // a tail, never the key itself. Absent on public paths and refusals.
+  const authClass = c.get('authClass');
+  const authTag = !authClass
+    ? ''
+    : authClass === 'apikey'
+      ? ` auth=key:${c.get('apiKeyPrefix') ?? '?'}`
+      : ` auth=${authClass}`;
+  const line = `${method} ${path} → ${status} ${ms}ms ${clientTag(client)}${authTag}`;
 
   if (status >= 500) {
     log.warn(`5xx ${line}`);
@@ -234,6 +257,10 @@ export function createApp() {
   // Custom request logger — see comment on requestLogger above.
   app.use('*', requestLogger);
 
+  // Per-key usage counts (apiKeyUsage.ts). Outside the credential gate, so
+  // it sees the gate's refusals of a key as well as what the route answered.
+  app.use('*', apiKeyUsage);
+
   // Brotli/gzip compression. The /api/data/history full payloads and
   // (~1-2 MB raw) compress ~10×. Cloudflare/
   // Apache may also gzip in front; double-compression is detected by
@@ -246,7 +273,8 @@ export function createApp() {
   // and dashboard panel re-renders. SWR=300s lets stale responses tide
   // a request over while we revalidate in the background.
   // Skipped for auth-sensitive endpoints (/api/config, /api/dashboard/*),
-  // per-user state (/api/heartbeat), and POST/PUT/DELETE.
+  // per-user state (/api/heartbeat), and POST/PUT/DELETE. A path's /api/v1/
+  // twin (api/v1/mirror.ts) is cached alike.
   const CACHEABLE_PATHS = [
     '/api/data/history',
     '/api/data/history/filters',
@@ -263,6 +291,8 @@ export function createApp() {
     '/api/aviation/cameras',
     '/api/bom/warnings',
     '/api/rfs/incidents',
+    '/api/fires',
+    '/api/outages',
     '/api/traffic/incidents',
     '/api/traffic/cameras',
     '/api/beachwatch',
@@ -278,7 +308,12 @@ export function createApp() {
   app.use('*', async (c, next) => {
     await next();
     if (c.req.method !== 'GET') return;
-    const path = new URL(c.req.url).pathname;
+    // Only an answer worth repeating. A browser that kept a 401 for 30 s
+    // (and 300 more stale) would hand it straight back to the retry that
+    // follows it — api-session.js re-mints after a 401 and asks again at
+    // once — and a kept 503 would outlast the outage it reports.
+    if (c.res.status < 200 || c.res.status >= 300) return;
+    const path = unversionedPath(new URL(c.req.url).pathname);
     if (!CACHEABLE_PATHS.includes(path)) return;
     if (!c.res.headers.has('Cache-Control')) {
       c.res.headers.set(
@@ -315,25 +350,17 @@ export function createApp() {
   // cookie. Listing exact origins removes that pivot. The public
   // map/live/logs pages are served from nswpsn.forcequit.xyz, which is
   // included, so they keep working.
-  const ALLOWED_ORIGIN_RE =
-    /^https?:\/\/(localhost(:\d+)?|127\.0\.0\.1(:\d+)?|nswpsn\.forcequit\.xyz|forcequit\.xyz|www\.forcequit\.xyz|nswpsn\.org|www\.nswpsn\.org)$/i;
-  // Operator-extensible without a code change: CORS_ALLOWED_ORIGINS is a
-  // comma-separated list of EXACT origins (e.g. "https://foo.example")
-  // that are additionally allowed. Empty/whitespace entries are ignored.
-  const EXTRA_ALLOWED_ORIGINS = new Set(
-    (process.env['CORS_ALLOWED_ORIGINS'] ?? '')
-      .split(',')
-      .map((o) => o.trim())
-      .filter((o) => o.length > 0),
-  );
+  //
+  // The allowlist itself (the regex plus CORS_ALLOWED_ORIGINS) lives in
+  // services/auth/firstParty.ts, shared with the browser-token gate: the set
+  // of origins that may read responses must be the set that may hold a
+  // session token, or a page CORS admits would fail every fetch.
   app.use(
     '*',
     cors({
       origin: (origin) => {
         if (!origin) return '*'; // file://, curl, server-to-server
-        if (ALLOWED_ORIGIN_RE.test(origin)) return origin;
-        if (EXTRA_ALLOWED_ORIGINS.has(origin)) return origin;
-        return null;
+        return isFirstPartyOrigin(origin) ? origin : null;
       },
       credentials: true,
       allowHeaders: ['Authorization', 'Content-Type', 'X-API-Key', 'Accept'],
@@ -364,23 +391,61 @@ export function createApp() {
   // Register route modules. Each router defines its own paths under
   // /api/...; mounting at '/' keeps the handlers' URLs identical to
   // the Python equivalents.
+  //
+  // mirror() serves the routes it names under /api/v1/ as well, with the
+  // same handler chain (api/v1/mirror.ts). Only the public data API is
+  // versioned — docs/api.md has the list and the policy.
   app.route('/', healthRouter);
+  mirror(app, healthRouter, ['/api/health']);
   app.route('/', configRouter);
+  app.route('/', sessionRouter);
   // Simple sources
   app.route('/', rfsRouter);
+  // Not the incidents: API keys read every fire service together, at /api/v1/fires.
+  mirror(app, rfsRouter, ['/api/rfs/fdr']);
   app.route('/', actAmbulanceRouter);
+  mirror(app, actAmbulanceRouter, ['/api/act-ambulance/incidents']);
   app.route('/', bomRouter);
+  mirror(app, bomRouter, ['/api/bom/warnings']);
   app.route('/', trafficRouter);
+  // Not /api/traffic/cameras: camera images are not part of the API.
+  mirror(app, trafficRouter, [
+    '/api/traffic/incidents', '/api/traffic/incidents/raw',
+    '/api/traffic/roadwork', '/api/traffic/roadwork/raw',
+    '/api/traffic/flood', '/api/traffic/flood/raw',
+    '/api/traffic/fire', '/api/traffic/fire/raw',
+    '/api/traffic/majorevent', '/api/traffic/majorevent/raw',
+    '/api/traffic/alpine', '/api/traffic/alpine/raw',
+    '/api/traffic/lga', '/api/traffic/lga/raw',
+    '/api/traffic/lga-incidents', '/api/traffic/all-feeds',
+  ]);
   app.route('/', beachRouter);
+  // Not /api/beachsafe/details: nothing fills its store; it goes when old paths are retired.
+  mirror(app, beachRouter, ['/api/beachwatch', '/api/beachsafe', '/api/beachsafe/beach/:slug']);
+  app.route('/', dorsalRouter);
+  mirror(app, dorsalRouter, ['/api/dorsal/reports']);
   app.route('/', weatherRouter);
+  mirror(app, weatherRouter, [
+    '/api/weather/current', '/api/weather/radar', '/api/weather/grid/manifest', '/api/weather/grid', '/api/weather/point',
+  ]);
   app.route('/', pagerRouter);
+  mirror(app, pagerRouter, ['/api/pager/hits']);
   app.route('/', firmsRouter);
+  mirror(app, firmsRouter, ['/api/firms/hotspots']);
   app.route('/', adsbRouter);
+  // Not /api/adsb/receivers: node status, never part of the public API.
+  mirror(app, adsbRouter, ['/api/adsb/aircraft', '/api/adsb/history', '/api/adsb/trails', '/api/adsb/photo/:hex']);
   app.route('/', radioPublicRouter);
-  // Power + heartbeat + stats
+  // Not on /api/v1/: the site list is this site's own reference data, and
+  // monitored-sites is node status.
+  // Power + heartbeat + stats. The per-distributor outage routes are this
+  // site's and the bot's; API keys read every distributor together, at
+  // /api/v1/outages (api/outages.ts).
   app.route('/', endeavourRouter);
   app.route('/', ausgridRouter);
   app.route('/', essentialRouter);
+  app.route('/', outagesRouter);
+  mirror(app, outagesRouter, ['/api/outages']);
   app.route('/', heartbeatRouter);
   app.route('/', statsRouter);
   // Incidents + editor + users (W5)
@@ -391,38 +456,71 @@ export function createApp() {
   app.route('/', profilesRouter);
   app.route('/', editorRouter);
   app.route('/', ticketsRouter);
+  app.route('/', feedbackRouter);
   app.route('/', staffNotifyRouter);
   app.route('/', staffNoticesRouter);
   app.route('/', referralsRouter);
   app.route('/', usersRouter);
-  // Data-history archive reads (W6)
+  app.route('/', apiKeysRouter);
+  // Data-history archive reads (W6). On /api/v1/ these are /api/v1/history…
+  // (lib/apiVersion.ts). Not /sources or /stats: counts across every source,
+  // for this site's own pages; no key reaches them.
   app.route('/', dataHistoryRouter);
-  // Aviation cameras + news RSS + summaries (W7)
+  mirror(app, dataHistoryRouter, [
+    '/api/data/history', '/api/data/history/filters', '/api/data/history/incident/:source/:source_id',
+  ]);
+  // Aviation cameras + news RSS + summaries (W7). No camera and no news
+  // route is on /api/v1/: camera images and other outlets' news are not part
+  // of the API.
   app.route('/', aviationRouter);
   app.route('/', qldCamerasRouter);
   app.route('/', ntFireRouter);
   app.route('/', boundariesRouter);
+  // Not on /api/v1/: boundaries are this site's own reference data, which API keys do not read.
   app.route('/', whisperRouter);
   app.route('/', qldFireRouter);
   app.route('/', vicEmergencyRouter);
   app.route('/', waEmergencyRouter);
   app.route('/', saFireRouter);
+  // Every fire service in one feed (api/fires.ts), with the QFD and DFES
+  // warnings. The per-agency incident and warning routes above are this
+  // site's and the bot's; API keys read this one. The NT
+  // feed asks not to be re-published (sources/ntFire.ts); the owner decided to
+  // carry it, with NTFRS credited in the description.
+  app.route('/', firesRouter);
+  mirror(app, firesRouter, ['/api/fires']);
   app.route('/', agencyRouter);
+  mirror(app, agencyRouter, ['/api/agency/extended', '/api/agency/extended/:slug']);
   app.route('/', marinetrafficRouter);
+  // Not /api/marinetraffic/vessel-image/:id: nothing uses it, and it goes when old paths are retired.
+  mirror(app, marinetrafficRouter, ['/api/marinetraffic/vessels', '/api/marinetraffic/vessel/:id']);
   app.route('/', newsRouter);
   app.route('/', summariesRouter);
+  // Not /api/summaries/trigger: owner tooling.
+  mirror(app, summariesRouter, ['/api/summaries/latest', '/api/summaries']);
   app.route('/', transcriptsRouter);
+  // Not on /api/v1/: API keys read the summaries, not transcripts.
   // Centralwatch reads + dashboard 503 stubs (W8)
   app.route('/', centralwatchRouter);
   app.route('/', dashboardRouter);
   // Uptime-Kuma-shaped status endpoint
   app.route('/', statusRouter);
+  mirror(app, statusRouter, ['/api/status']);
   // What3Words proxy
   app.route('/', w3wRouter);
   // AnyTrip public-transport proxy. Deliberately NOT in CACHEABLE_PATHS —
   // that middleware ignores query strings, so a CDN would cross-serve one
   // viewport's vehicles to every viewport.
   app.route('/', transportRouter);
+  mirror(app, transportRouter, [
+    '/api/transport/vehicles',
+    '/api/transport/shape/:id',
+    '/api/transport/trip/:date/:tripId/:instance',
+    '/api/transport/departures/:stopId',
+    '/api/transport/lines',
+    '/api/transport/stops',
+    '/api/transport/alerts',
+  ]);
   // System / debug / admin (cache clear, debug/* echoes, admin/db/*)
   app.route('/', systemRouter);
   // Feeder nodes. node-updates FIRST so its exact `/api/nodes/versions`
@@ -437,6 +535,13 @@ export function createApp() {
   // Feeder node event analytics (staff Data tab, owner|dev only)
   app.route('/', nodeDataRouter);
 
+  // The API description, filtered per key.
+  app.route('/', openapiRouter);
+
+  // JSON for /api/v1/; every other path keeps Hono's plain-text answers.
+  app.notFound(notFound);
+  app.onError(onError);
+
   // Root route — endpoint catalogue. Mirrors python's `/` response at
   // external_api_proxy.py:11431 so any monitoring / smoke-test relying
   // on the catalogue shape keeps working.
@@ -450,7 +555,8 @@ export function createApp() {
         'live-data',
         'data-history',
         'pager-hits',
-        'police-heatmap',
+        // 'police-heatmap' was advertised here after its routes were retired
+        // with the Waze ingest; the frontend's loaders are hard-guarded off.
         'discord-dashboard',
         'rdio-transcripts',
         'editor-requests',
@@ -466,6 +572,7 @@ export function createApp() {
           '/api/essential/{outages,planned,future}',
           '/api/beachwatch',
           '/api/beachsafe',
+          '/api/dorsal/reports',
           '/api/aviation/cameras',
           '/api/centralwatch/cameras',
           '/api/news/rss',

@@ -13,7 +13,7 @@
 import type { Pool } from 'pg';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
-import { deleteCfImage, deleteR2Object } from './wire.js';
+import { deleteCfImage, deleteUnreferencedR2Object } from './wire.js';
 
 export const RECOVERY_DAYS = 5;
 const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
@@ -37,11 +37,17 @@ async function mediaRefsFor(pool: Pool, parentType: string, parentId: string): P
   return { cfIds, r2Keys };
 }
 
-/** Delete an R2 object only when no wire_media row still references it. */
+/**
+ * Delete an R2 object only when nothing references it any more.
+ *
+ * This used to look in wire_media alone, which was the whole object store as
+ * far as the purge knew. It isn't: a key stored on a fleet vehicle, an avatar
+ * or a watermark would pass the check and be deleted out from under its owner.
+ * `deleteUnreferencedR2Object` asks across all four tables, and keeps the
+ * object when it cannot get an answer.
+ */
 async function safeDeleteR2(pool: Pool, key: string): Promise<void> {
-  if (!key) return;
-  const r = await pool.query('SELECT 1 FROM wire_media WHERE r2_key = $1 OR poster_r2_key = $1 LIMIT 1', [key]);
-  if (r.rowCount === 0) await deleteR2Object(key);
+  await deleteUnreferencedR2Object(pool, key);
 }
 
 async function purgeArticles(pool: Pool): Promise<number> {
@@ -81,7 +87,10 @@ async function purgeFleet(pool: Pool): Promise<number> {
   for (const row of due.rows) {
     await pool.query('DELETE FROM fleet_vehicles WHERE id = $1', [row.id]);
     for (const im of Array.isArray(row.images) ? row.images : []) {
-      if (im.key) await deleteR2Object(im.key);
+      // Reference-checked, not unconditional: image keys were client-supplied
+      // for as long as this feature has existed, so a vehicle's list can carry
+      // a key that belongs to somebody else's post or avatar.
+      if (im.key) await safeDeleteR2(pool, im.key);
     }
   }
   return due.rowCount ?? 0;

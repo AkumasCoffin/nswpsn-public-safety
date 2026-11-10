@@ -33,13 +33,13 @@ Before changing anything, read [`../OPERATING-RULES.md`](../OPERATING-RULES.md).
    │   src/services/       poller · node hub · whisper router · LLM      │
    │   src/store/live.ts   LiveStore — current state, in memory          │
    │   src/store/archive.ts ArchiveWriter — history, into Postgres       │
-   │   src/api/*.ts        57 route modules, composed by src/server.ts  │
+   │   src/api/*.ts        61 route modules, composed by src/server.ts  │
    └───────┬──────────────────────────┬─────────────────────┬───────────┘
            │                          │                     │
            ▼                          ▼                     ▼
    static site (repo root)      Discord bot            PostgreSQL
    Leaflet, no build step       discord-bot/bot.py     (canonical store)
-   map · live · logs · wire     presets · dispatch     119 migrations
+   map · live · logs · wire     presets · dispatch     129 migrations
 ```
 
 Three things are **outside** the backend and must not be confused with it:
@@ -131,17 +131,23 @@ Take NSW RFS incidents.
 5. **Serve.** `src/api/rfs.ts` reads LiveStore and answers
    `GET /api/rfs/incidents`. `src/server.ts` mounts it. The global
    `requireApiKey` gate applies; `/api/health`, `/api/config`, `/api/heartbeat`
-   and a short list of others are public. A browser-usable key is handed out by
-   `/api/config`, which is why CORS is a narrow allowlist of exact first-party
-   origins rather than a wildcard.
+   and a short list of others are public. A page authenticates with a
+   short-lived browser session token it requests from
+   `POST /api/session/token`; the token is issued only to first-party origins
+   and bound to the requesting browser, which is why CORS and the token gate
+   share one narrow allowlist of exact first-party origins
+   (`src/services/auth/firstParty.ts`) rather than a wildcard.
 6. **Draw.** `map.html` fetches `/api/rfs/incidents` and adds Leaflet markers.
-   For a set of cheap GETs the response carries
-   `Cache-Control: public, max-age=30, stale-while-revalidate=300`, so repeat
-   hits are absorbed by the CDN.
+   For a set of cheap GETs (`CACHEABLE_PATHS` in `src/server.ts`) a 2xx
+   answer carries `Cache-Control: public, max-age=30, stale-while-revalidate=300`,
+   so a browser re-reading within 30 s does not ask again. Cloudflare passes
+   API answers through uncached (`cf-cache-status: DYNAMIC`). A refusal or a
+   failure gets no such header: kept, a 401 would be handed straight back to
+   the page's retry with a fresh token.
 
 ### Registry contents
 
-36 entries on a default boot — 38 are declared, and the two Ausgrid sources do
+39 entries on a default boot — 41 are declared, and the two Ausgrid sources do
 not register unless `AUSGRID_DISABLED` is set to `false`
 (`backends/node/src/sources/ausgrid.ts:262`), which it is not by default.
 Cadences range from 8s (`adsb_aircraft`) to 30m (`weather_current`). The full
@@ -241,15 +247,28 @@ instance, so cutting a node's feed is toggling its `enabled` flag in the staff
 panel — not juggling rdio keys. The node never holds that credential. The same
 applies to the pager path and `PAGERMON_INGEST_API_KEY`.
 
+NSW Police Force talkgroups (10450–10485, 11701–11708, 12001–12275,
+12501–12515; `isNswPfTalkgroup`) are acknowledged and **not** forwarded. The
+force is encrypted, so an upload on one is a call whose encryption the decoder
+missed and its audio is noise. Central rdio has none of these talkgroups and used
+to answer 200 and discard them. They are not counted now.
+
 ### 6. The backend records the reception
 
 `src/services/nodeEvents.ts` writes `node_radio_events`.
 
 The non-obvious part: those rows come **only** from the activity feed, not from
 the audio upload. Activity events carry the real P25 identity; the upload only
-calls `markRecorded()` to flag the closest matching event row `recorded=true`
-with its audio size. So a reception exists in the record whether or not anyone
+folds an automatic patch's calls together (`mergeAutomaticPatch`, from its
+`patches` field). So a reception exists in the record whether or not anyone
 could hear it — which is exactly right for an encrypted talkgroup.
+
+Nothing records whether a reception's audio reached rdio. It used to: each
+upload was matched back to one reception row and flagged it, which never lined
+up cleanly (the two sides stamp time from different clocks) and only said which
+node's copy got there. The staff Overview's **Ingested** tile now counts every
+transmission on a talkgroup rdio is programmed for, encrypted ones excepted;
+missing channels are found from rdio's own logs.
 
 **Grouping.** One transmission heard by N nodes arrives as N receptions. Rows
 within ±5s on the same `(systemId, target)` share one logical id — the detail-row
@@ -259,8 +278,11 @@ start their own group. The ±5s window is not arbitrary: it is SDR-Trunk's own
 `CrossSiteCallDeduplicator.SAME_CALL_WINDOW_MILLISECONDS`.
 
 Each write lands a detail row (30-day retention —
-`src/services/nodeEventsPruner.ts`) and rolls into permanent hourly buckets
-(`node_radio_hourly`, `node_radio_hourly_sys`) in the same transaction.
+`src/services/nodeEventsPruner.ts`, which drops a whole day's partition at a
+time; the table is partitioned by UTC day since migration `135`). The hourly rollups are not written here: an
+hourly job (`src/services/nodeHourlyRollup.ts`) derives each completed hour from
+the detail rows into `node_radio_hourly`, `_sys`, `_rx`, `_unit` (kept) and
+`_heard` (kept 32 days), which is what the staff Data tab reads.
 
 Every `record*` and `mark*` function is fire-safe: a failure is logged and
 swallowed. Capture must never affect the relay path.
@@ -301,8 +323,8 @@ matching repeater pin as *Monitoring*. The comment block at `map.html:18386` is 
 touch any of it: the agents re-report every ~60s regardless of traffic, so the
 badge is *"a live lock, not a traffic echo"*.
 
-Both are listed in `CACHEABLE_PATHS` (`src/server.ts:259-260`), so the CDN
-absorbs repeat hits.
+Both are listed in `CACHEABLE_PATHS` (`src/server.ts`), so a browser keeps
+each answer for 30 s.
 
 "Right now" is SDR-Trunk's own `site_last_seen_ms` — when the decoder last
 actually heard the site — inside a five-minute window. Three predicates are
@@ -384,7 +406,8 @@ review.
 The radio-adjacent feed that *does* produce pins is pager:
 
 ```
-POCSAG page → pager node (rtl_fm | multimon-ng → internal/pagerdecode)
+POCSAG page → pager node (rtl_fm | multimon-ng, or rtl_sdr | channelize | multimon-ng
+              when one SDR carries several frequencies → internal/pagerdecode)
             → POST /api/node-ingest/pager-upload
             → central Pagermon
             → src/sources/pager.ts polls PAGERMON_URL every 60s
@@ -486,11 +509,18 @@ must not prevent the channel list from landing.
 by `/api/node-updates/manifest`, kind-aware: a pager node is served
 `pager-agent` as its `agent` component) at start, every 6h, and on
 `cmd{action:'update'}`. Download to `.pending`, sha256-verify, swap, restart. An
-empty sha256 means "nothing to do" — not an error.
+empty sha256 means "nothing to do" — not an error. The agent sha256 values
+committed in that file are empty and are **not** the ones served: the backend
+hashes whatever artifact is present in `<webroot>/downloads` when it serves the
+manifest, so only an artifact genuinely missing from that directory is skipped.
 
 **A Go agent change does not reach any node until its version is bumped in that
-manifest.** `scripts/deploy.sh` skips the Go rebuild entirely when the built
-binary already reports the manifest version.
+manifest, and bumping it is enough.** `scripts/deploy.sh` skips the Go rebuild
+entirely when the built binary already reports the manifest version, so the bump
+is what triggers the rebuild — and a running node then fetches, verifies and
+self-replaces on its next check. A version bump is a deploy to the live fleet,
+gated only by the global auto-update switch for the automatic passes. Details:
+[`components/forked-runtimes.md`](components/forked-runtimes.md#how-a-version-bump-reaches-a-running-node).
 
 **Live view.** A staff browser's WebSocket gets shaped node rows
 (`src/services/nodeLive.ts`). Those read from `src/services/nodeCallWindow.ts`, a
@@ -549,7 +579,7 @@ News and media posts, written in `wire-compose.html` and read at `wire.html`.
 
 | Store | Owner | Access |
 |---|---|---|
-| Backend PostgreSQL | AusAware | read/write. 119 numbered migrations in `src/db/migrations`, applied by `src/db/migrate.ts` at boot and by `npm run migrate` on deploy |
+| Backend PostgreSQL | AusAware | read/write. 129 numbered migrations in `src/db/migrations`, applied by `src/db/migrate.ts` at boot and by `npm run migrate` on deploy |
 | rdio-scanner PostgreSQL | central rdio-scanner | **read-only** via `RDIO_DATABASE_URL` (`src/services/rdio.ts`) |
 | Bot PostgreSQL | Discord bot | read via `BOT_DATA_DATABASE_URL` for the dashboard; the bot writes it |
 | Supabase | — | **authentication and identity only** |
@@ -582,13 +612,15 @@ What is genuinely gone:
   comment says it: *"Irreversible, and deliberately so — this is the last of the
   Waze data."*
 
-**The leftovers are extensive.** Four of them are live breakage — the frontend
-asks for routes that no longer exist:
-
-- `map.html:3827` and `map.html:9489` fetch `/api/waze/police-heatmap`
-- `map.html:10864` fetches `/api/waze/police`
-- `src/server.ts:453` still advertises `police-heatmap` in the root endpoint
-  catalogue
+**The leftovers are extensive**, but the frontend is no longer among them: the
+site makes no Waze requests. `map.html` still *contains* the two loaders — the
+`fetch` of `/api/waze/police-heatmap` at `map.html:9528` and of
+`/api/waze/police` at `map.html:10903` — but both functions return immediately on
+a `WAZE_RETIRED = true` constant (`map.html:3863`), and the controls that used to
+call them are gone. The guard is at each function's first line on purpose, so
+that "the site makes no Waze requests" does not depend on an exhaustive reading
+of the call sites; clearing the constant and reverting the UI commit is what
+would bring the layer back.
 
 The rest is dead reference rather than breakage, and there is a lot of it —
 roughly 88 mentions across 16 non-migration files under `backends/node/src`.
@@ -615,10 +647,21 @@ any of it.
 
 1. `optionalSupabaseJwt` runs first (`src/services/auth/supabaseJwt.ts`), so a
    logged-in user is identified before any gate.
-2. `requireApiKey` (`src/services/auth/apiKey.ts`) is the global
-   `NSWPSN_API_KEY` gate. It short-circuits for OPTIONS preflights, a list of
-   public endpoints, anything outside `/api`, and any request already
-   authenticated as a Supabase user.
+2. `requireApiKey` (`src/services/auth/apiKey.ts`) is the credential gate.
+   It short-circuits for OPTIONS preflights, a list of public endpoints,
+   anything outside `/api`, and any request already authenticated as a
+   Supabase user; otherwise it accepts one of three classes — a browser
+   session token (`bt1.…`, valid only with a first-party `Origin` and only
+   for the browser it was minted for), a named API key (`ak_…`, from the
+   `api_keys` table, refused whenever a browser `Origin` is present, and
+   GET-only on what its scopes cover — `src/services/auth/apiKeyScopes.ts`;
+   a user requests one from their profile, staff approve it and choose its
+   scopes, and the user then generates it so only they ever see the
+   plaintext — `src/api/apiKeys.ts`), or the
+   static `NSWPSN_API_KEY` for the Discord bot and rdio's transcripts
+   plugin. Browsers are never given the static key. On `/api/v1/` paths the
+   gate's refusals use the versioned API's error shape; on `/api/` they keep
+   their old bodies.
 3. Role checks (`src/services/auth/roles.ts`) gate the staff surfaces. Roles
    live in the backend PostgreSQL, not in Supabase.
 4. Node agents use `X-Node-Token` + `X-Node-Install`
@@ -660,6 +703,7 @@ anything else (`src/server.ts`).
 | Component | Doc | Entry point |
 |---|---|---|
 | Backend | [`components/backend.md`](components/backend.md) | `backends/node/src/index.ts` |
+| Public data API (`/api/v1/`) | [`api.md`](api.md) | `backends/node/src/api/v1/` |
 | Public site | [`components/public-site.md`](components/public-site.md) | repo-root `*.html` |
 | Discord bot | [`components/discord-bot.md`](components/discord-bot.md) | `discord-bot/bot.py` |
 | Radio node | [`components/radio-node.md`](components/radio-node.md) | `feeder-nodes/radio-node/cmd/nodeagent/main.go` |

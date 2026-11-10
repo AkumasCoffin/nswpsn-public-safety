@@ -41,6 +41,28 @@ export const READ_POOL_MAX = Math.max(2, Number(process.env['PG_POOL_MAX'] ?? '4
 const WRITER_POOL_MAX = Math.max(2, Number(process.env['PG_WRITER_POOL_MAX'] ?? '8') || 8);
 
 /**
+ * Give every client this pool hands out an 'error' listener.
+ *
+ * pg-pool attaches its own error listener only while a client is IDLE and
+ * removes it the moment pool.connect() checks the client out — and pg's Client
+ * emits 'error' when the connection ends unexpectedly, mid-query included. An
+ * 'error' emit with no listener throws, which index.ts turns into
+ * uncaughtException and exit(1): a Postgres restart or a reset between the VMs
+ * during an archive flush took the whole API down and lost the batch being
+ * written. The pool still discards the broken client on release (_queryable is
+ * false by then), so all this changes is whether we survive it; the query
+ * itself still rejects and its caller still handles that.
+ */
+function logClientErrors(pool: Pool, label: string): void {
+  pool.on('connect', (client) => {
+    client.on('error', (err) => {
+      // eslint-disable-next-line no-console
+      console.error(`pg ${label} client error:`, err);
+    });
+  });
+}
+
+/**
  * Read pool. Sized for concurrent /api/data/history requests (each
  * issues up to 10 queries — 5 families × {data, count}). Bumped from
  * 20 to 40 in the perf pass since two simultaneous logs.html loads
@@ -59,6 +81,20 @@ export async function getPool(): Promise<Pool | null> {
     // Each new connection gets a default statement_timeout. Individual
     // queries can override with SET LOCAL inside a transaction.
     statement_timeout: 30_000,
+    // JIT off for every read connection. Postgres JIT-compiles a statement
+    // once its ESTIMATED cost passes jit_above_cost — and on this workload the
+    // estimate is the problem: subqueries, COUNT(DISTINCT) over composite
+    // keys and range predicates the planner cannot see all inflate it. The
+    // staff overview's totals query was the measured case: ~1.5M rows
+    // estimated, ~7.5k actual, and 824ms of a 906ms run spent compiling
+    // expressions for ~80ms of work. That one is fixed at the source
+    // (node-data.ts ROLLUP_EDGE_EXPR), but the raw drill-down queries have
+    // the same shape, and on a 2-vCPU database host compile time is CPU stolen
+    // from everything else. Reads here are short; JIT does not pay for itself.
+    //
+    // Not on the writer pool: the hourly rollup builds are genuinely large
+    // and run off the request path, where JIT can earn its keep.
+    options: '-c jit=off',
     // Cap how long a connection sits idle before pg recycles it. Keeps
     // long-lived processes from accumulating zombie sessions.
     idleTimeoutMillis: 60_000,
@@ -71,6 +107,7 @@ export async function getPool(): Promise<Pool | null> {
     // eslint-disable-next-line no-console
     console.error('pg pool error:', err);
   });
+  logClientErrors(_pool, 'read');
 
   return _pool;
 }
@@ -100,6 +137,7 @@ export async function getWriterPool(): Promise<Pool | null> {
     // eslint-disable-next-line no-console
     console.error('pg writer pool error:', err);
   });
+  logClientErrors(_writerPool, 'writer');
   return _writerPool;
 }
 

@@ -24,6 +24,7 @@
  * updated row counts.
  */
 import { getPool } from '../db/pool.js';
+import { partitionsEndingBy, type PartitionRow } from '../db/partitions.js';
 import { log } from '../lib/log.js';
 import { pruneOldSnapshots } from './statsArchiver.js';
 import {
@@ -47,6 +48,8 @@ const DEFAULT_INTERVAL_SECS = Number.parseInt(
 // window, and the status page and the ADS-B history view both report it. See
 // lib/retention.ts for why that is one definition and not three.
 const DEFAULT_RETENTION_DAYS = DATA_RETENTION_DAYS;
+/** api_key_usage_hourly keeps this long; see the prune below. */
+const API_KEY_USAGE_RETENTION_DAYS = 90;
 
 const ARCHIVE_TABLES = [
   'archive_traffic',
@@ -78,48 +81,15 @@ const stats: CleanupStats = {
 let timer: NodeJS.Timeout | null = null;
 let running = false;
 
-interface PartitionRow {
-  parent: string;
-  partition: string;
-  range_to: string;
-  row_count: string;
-}
-
 /**
  * Find every monthly partition whose upper bound (range_to) is at or
- * before the cutoff. Postgres stores partition bounds in
- * pg_class.relpartbound; we parse the FROM/TO via pg_get_expr.
+ * before the cutoff. See db/partitions.ts.
  */
-async function findExpiredPartitions(
-  client: { query: (sql: string, params?: unknown[]) => Promise<{ rows: PartitionRow[] }> },
+function findExpiredPartitions(
+  client: Parameters<typeof partitionsEndingBy>[0],
   cutoffIso: string,
 ): Promise<PartitionRow[]> {
-  const sql = `
-    WITH parts AS (
-      SELECT
-        parent.relname::text AS parent,
-        child.relname::text AS partition,
-        pg_get_expr(child.relpartbound, child.oid) AS bound
-      FROM pg_inherits
-      JOIN pg_class parent ON parent.oid = pg_inherits.inhparent
-      JOIN pg_class child  ON child.oid  = pg_inherits.inhrelid
-      WHERE parent.relname = ANY($1::text[])
-    )
-    SELECT
-      parent,
-      partition,
-      -- bound is "FOR VALUES FROM ('YYYY-MM-DD ...') TO ('YYYY-MM-DD ...')".
-      -- Pull the second timestamp.
-      regexp_replace(bound, $2, '\\1') AS range_to,
-      0::text AS row_count
-    FROM parts
-    WHERE bound LIKE 'FOR VALUES FROM%'
-      AND regexp_replace(bound, $2, '\\1')::timestamptz <= $3::timestamptz
-  `;
-  const re =
-    "FOR VALUES FROM \\(.+\\) TO \\('([^']+)'\\)";
-  const r = await client.query(sql, [ARCHIVE_TABLES, re, cutoffIso]);
-  return r.rows;
+  return partitionsEndingBy(client, ARCHIVE_TABLES, cutoffIso);
 }
 
 /**
@@ -220,6 +190,42 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
       const expired = await findExpiredPartitions(client, cutoff);
       for (const p of expired) {
         try {
+          // 1a. Re-arm the still-live sidecar rows that are about to lose
+          // their only parent row.
+          //
+          // Write-time dedup (migration 018) stores a parent row only when
+          // data_hash changes, and latest_fetched_at points at that row. A
+          // record still in the feed but unchanged for longer than retention —
+          // a months-long roadwork, a far-ahead planned outage — therefore has
+          // its single parent row inside a partition this loop is dropping,
+          // while its sidecar row stays alive because last_seen_at keeps
+          // advancing. The hash still matches on every poll, so the writer
+          // never stores it again, and the unique=1 history query, which joins
+          // the sidecar to the parent on fetched_at = latest_fetched_at, finds
+          // nothing: the record disappears from logs.html while /filters, which
+          // reads the sidecar alone, still counts it.
+          //
+          // Clearing data_hash is the whole repair — lookupExistingHashes
+          // treats a NULL hash as "no comparison basis", so the next poll
+          // stores a parent row again and latest_fetched_at moves onto it.
+          // Deliberately BEFORE the drop: a failure here leaves the partition
+          // in place to be retried next pass, where dropping first would orphan
+          // the row for good.
+          const rearmed = await client.query(
+            `UPDATE ${p.parent}_latest
+                SET data_hash = NULL
+              WHERE data_hash IS NOT NULL
+                AND latest_fetched_at < $1::timestamptz
+                AND last_seen_at >= $2::timestamptz`,
+            [p.range_to, cutoff],
+          );
+          if ((rearmed.rowCount ?? 0) > 0) {
+            log.info(
+              { table: `${p.parent}_latest`, rows: rearmed.rowCount, partition: p.partition },
+              'cleanup: re-armed live records losing their stored row',
+            );
+          }
+
           // Count rows BEFORE drop so we can report deletion totals.
           const cnt = await client.query<{ n: string }>(
             `SELECT COUNT(*)::text AS n FROM ${p.partition}`,
@@ -346,24 +352,30 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
         );
       }
 
-      // 2c-bis. Prune persisted aircraft tracks (migration 103). Plain
-      // DELETE rather than a partition drop: one row per aircraft per hour is
-      // ~20-25k rows/day, so a whole retention window is under a million and
-      // the partition machinery the archive_* tables need would be pure
-      // overhead here. Parameterised interval for the same NaN reason as 2d.
+      // 2c-bis. Prune aircraft history (migration 139): one row per minute,
+      // ~1,440 a day, and the per-hex identities no write has refreshed in the
+      // window (the archive re-sends a flying aircraft's at least daily).
+      // Plain DELETE rather than a partition drop: a whole retention window is
+      // ~45k rows. Parameterised interval for the same NaN reason as 2d.
       try {
-        const trackDays = Number.isFinite(retentionDays) ? retentionDays : DEFAULT_RETENTION_DAYS;
+        const chunkDays = Number.isFinite(retentionDays) ? retentionDays : DEFAULT_RETENTION_DAYS;
         const r = await client.query(
-          `DELETE FROM adsb_tracks
-            WHERE hour_bucket < (NOW() - ($1 || ' days')::interval)`,
-          [String(trackDays)],
+          `DELETE FROM adsb_track_chunks
+            WHERE minute < (NOW() - ($1 || ' days')::interval)`,
+          [String(chunkDays)],
         );
-        if ((r.rowCount ?? 0) > 0) {
-          rowsDeleted += r.rowCount ?? 0;
-          log.info({ rows: r.rowCount }, 'cleanup: pruned adsb_tracks');
+        const ids = await client.query(
+          `DELETE FROM adsb_identities
+            WHERE updated_at < (NOW() - ($1 || ' days')::interval)`,
+          [String(chunkDays)],
+        );
+        const n = (r.rowCount ?? 0) + (ids.rowCount ?? 0);
+        if (n > 0) {
+          rowsDeleted += n;
+          log.info({ chunks: r.rowCount, identities: ids.rowCount }, 'cleanup: pruned aircraft history');
         }
       } catch (err) {
-        log.warn({ err: (err as Error).message }, 'cleanup: adsb-tracks prune failed');
+        log.warn({ err: (err as Error).message }, 'cleanup: aircraft-history prune failed');
       }
 
       // 2c-ter. Prune stored coverage envelopes (migration 104). One row per
@@ -418,6 +430,23 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
         }
       } catch (err) {
         log.warn({ err: (err as Error).message }, 'cleanup: node-hourly prune failed');
+      }
+
+      // 2c-sexies. Per-key API usage (migration 127). Its own fixed window
+      // rather than DATA_RETENTION_DAYS: the staff view reads at most 30 days,
+      // and a key's lifetime count lives on api_keys.requests_total.
+      try {
+        const r = await client.query(
+          `DELETE FROM api_key_usage_hourly
+            WHERE hour < (NOW() - ($1 || ' days')::interval)`,
+          [String(API_KEY_USAGE_RETENTION_DAYS)],
+        );
+        if ((r.rowCount ?? 0) > 0) {
+          rowsDeleted += r.rowCount ?? 0;
+          log.info({ rows: r.rowCount }, 'cleanup: pruned api_key_usage_hourly');
+        }
+      } catch (err) {
+        log.warn({ err: (err as Error).message }, 'cleanup: api-key usage prune failed');
       }
 
       // 2d. Prune archive_*_latest sidecar entries we haven't seen in

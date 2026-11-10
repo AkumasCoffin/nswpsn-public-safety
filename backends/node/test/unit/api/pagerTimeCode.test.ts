@@ -7,7 +7,7 @@
  * four-digit page is never mistaken for one.
  */
 import { describe, it, expect } from 'vitest';
-import { isPagerTimeCode } from '../../../src/api/node-ingest.js';
+import { isPagerTimeCode } from '../../../src/services/pagerFilter.js';
 
 describe('pager clock ticks', () => {
   it('drops a bare time of day', () => {
@@ -53,7 +53,7 @@ describe('pager clock ticks', () => {
  * retries in a day, surviving restarts because the queue is disk-backed.
  * Undeliverable has to be decided at the relay, once, with an ack.
  */
-import { isPagerTimeCode as _reuse, pagerNoiseReason } from '../../../src/api/node-ingest.js';
+import { isPagerTimeCode as _reuse, pagerNoiseReason } from '../../../src/services/pagerFilter.js';
 
 /**
  * Bit-error garbage and tone-only pages. Live examples drove the thresholds:

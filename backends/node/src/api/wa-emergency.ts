@@ -5,11 +5,80 @@
  * Both serve out of LiveStore in the same property shape as
  * /api/rfs/incidents, so the map renders every agency on the Fires
  * layer through one path.
+ *
+ * Both are this site's routes, for the map and the Discord bot, and neither
+ * is on /api/v1/: API keys read DFES's incidents and warnings alongside every
+ * other fire service at /api/v1/fires (api/fires.ts). Neither declares a
+ * scope, so no scoped key reaches them.
  */
 import { Hono } from 'hono';
-import { waIncidentsSnapshot, waWarningsSnapshot } from '../sources/waEmergency.js';
+import { z } from 'zod';
+import { describeRoute } from 'hono-openapi';
+import { waIncidentsSnapshot, waWarningsSnapshot, type WaSnapshot } from '../sources/waEmergency.js';
+import { geo } from './v1/respond.js';
+import {
+  assertShape,
+  feature,
+  featureCollection,
+  GATED_ERRORS,
+  incidentProperties,
+  Layer,
+  okJson,
+  PointGeometry,
+  Rings,
+  type SameShape,
+} from './v1/schemas.js';
 
 export const waEmergencyRouter = new Hono();
 
-waEmergencyRouter.get('/api/wa-emergency/incidents', (c) => c.json(waIncidentsSnapshot()));
-waEmergencyRouter.get('/api/wa-emergency/warnings', (c) => c.json(waWarningsSnapshot()));
+// The answers' shape. Incidents and warnings share one record shape; the
+// fields that belong to only one are empty in the other.
+const WaRecords = featureCollection(
+  feature(
+    PointGeometry,
+    incidentProperties({
+      layer: Layer(['fire', 'flood', 'hazard']),
+      polygons: Rings.describe('Warning areas, as polygon outer rings of [longitude, latitude]'),
+      eventRef: z.string().describe('The event the record belongs to; incidents and warnings join on it'),
+      incidentRef: z.string().describe("Warnings: the incident's event id"),
+      headline: z.string().describe('Warnings: the public advice'),
+      alertLine: z.string(),
+      whatToDo: z.string(),
+      peopleAffected: z.string(),
+      action: z.string().describe('Warnings: e.g. "Monitor conditions"'),
+      actionType: z.string(),
+      capSeverity: z.string(),
+      capUrgency: z.string(),
+      capCertainty: z.string(),
+      cadId: z.string().describe('Incidents only'),
+      region: z.string(),
+      is_active: z.boolean(),
+      agency: z.literal('DFES'),
+      source: z.enum(['wa_incident', 'wa_warning']),
+    }),
+  ),
+).meta({ id: 'WaEmergencyRecords' });
+assertShape<SameShape<z.infer<typeof WaRecords>, WaSnapshot>>();
+
+waEmergencyRouter.get(
+  '/api/wa-emergency/incidents',
+  describeRoute({
+    operationId: 'getWaEmergencyIncidents',
+    tags: ['Incidents'],
+    summary: 'WA DFES incidents',
+    description: 'Current WA Department of Fire and Emergency Services incidents.',
+    responses: { ...okJson(WaRecords, 'A GeoJSON FeatureCollection of incidents'), ...GATED_ERRORS },
+  }),
+  (c) => geo(c, waIncidentsSnapshot()),
+);
+waEmergencyRouter.get(
+  '/api/wa-emergency/warnings',
+  describeRoute({
+    operationId: 'getWaEmergencyWarnings',
+    tags: ['Fires'],
+    summary: 'WA DFES warnings',
+    description: 'Current WA Department of Fire and Emergency Services public warnings with their warning areas.',
+    responses: { ...okJson(WaRecords, 'A GeoJSON FeatureCollection of warnings'), ...GATED_ERRORS },
+  }),
+  (c) => geo(c, waWarningsSnapshot()),
+);

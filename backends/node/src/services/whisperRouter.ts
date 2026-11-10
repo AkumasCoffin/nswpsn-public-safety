@@ -227,6 +227,23 @@ function hasFreeSlot(b: WhisperBackend): boolean {
   return b.inFlight < maxInFlightFor(b);
 }
 
+/**
+ * Whether a backend may take work RIGHT NOW — the same test
+ * whisperCandidates() applies, minus its quarantine-expiry bookkeeping.
+ *
+ * A queued call captured its candidate list when it arrived, and by the time a
+ * slot frees, that backend may have started draining, been quarantined, or
+ * gone DOWN. Handing it the queued work was the exact failure draining exists
+ * to prevent: every pc completion immediately started another transcription on
+ * pc, so pc's inFlight never reached 0 and the PC could never stop — and if
+ * the watcher gave up and stopped whisper anyway, those transcripts were lost.
+ */
+function stillEligible(b: WhisperBackend, now = Date.now()): boolean {
+  if (!b.healthy || b.draining) return false;
+  if (b.quarantinedUntil !== null && now < b.quarantinedUntil) return false;
+  return true;
+}
+
 /** Take a slot. Callers MUST pair this with releaseSlot in a finally. */
 function takeSlot(b: WhisperBackend): void {
   b.inFlight += 1;
@@ -241,39 +258,68 @@ function takeSlot(b: WhisperBackend): void {
  */
 function releaseSlot(b: WhisperBackend): void {
   b.inFlight -= 1;
+  notifyWaiters(b);
+}
+
+/**
+ * Hand this backend's freed slot to the longest-waiting caller.
+ *
+ * Gated on stillEligible: a backend that is draining (or quarantined, or
+ * DOWN) must let its in-flight work finish and reach 0, not immediately pull
+ * the next queued call in behind it.
+ */
+function notifyWaiters(b: WhisperBackend): void {
+  if (!stillEligible(b)) return;
   const next = b.waiters.shift();
   if (next) next();
 }
 
 /**
- * Wait until any of `candidates` has a free slot. Resolves with that backend,
- * or null if nothing freed within SLOT_WAIT_MS.
+ * Wait until one of `candidates` is both eligible and has a free slot.
+ * Resolves with that backend, or null when none can take the call — either
+ * because nothing freed within SLOT_WAIT_MS or because every candidate has
+ * since stopped qualifying, in which case there is nothing to wait for.
  */
 async function waitForSlot(candidates: WhisperBackend[]): Promise<WhisperBackend | null> {
   if (!candidates.length) return null;
+  if (!candidates.some((b) => stillEligible(b))) return null;
   return new Promise<WhisperBackend | null>((resolve) => {
     let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      // Leave no dangling callbacks behind: a waiter that fired after the
-      // timeout would consume a slot nobody is going to use.
-      for (const b of candidates) {
-        const i = b.waiters.indexOf(wake);
-        if (i >= 0) b.waiters.splice(i, 1);
-      }
-      resolve(null);
-    }, SLOT_WAIT_MS);
+    const timer = setTimeout(() => settle(null), SLOT_WAIT_MS);
 
-    function wake(): void {
+    function settle(freed: WhisperBackend | null): void {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      // Leave no dangling callbacks behind: a waiter that fired after this
+      // would consume a slot nobody is going to use.
       for (const b of candidates) {
         const i = b.waiters.indexOf(wake);
         if (i >= 0) b.waiters.splice(i, 1);
       }
-      resolve(candidates.find((b) => hasFreeSlot(b)) ?? null);
+      resolve(freed);
+    }
+
+    function wake(): void {
+      if (settled) return;
+      const eligible = candidates.filter((b) => stillEligible(b));
+      // Nothing left that may take this call: give up now rather than hold
+      // rdio's connection open for the rest of the wait window.
+      if (eligible.length === 0) {
+        settle(null);
+        return;
+      }
+      const freed = eligible.find((b) => hasFreeSlot(b));
+      if (!freed) {
+        // Woken to re-evaluate (a drain was set) rather than because a usable
+        // slot appeared. Stay queued — and re-arm on every candidate, because
+        // whatever woke us shifted this callback off its own waiter list.
+        for (const b of candidates) {
+          if (!b.waiters.includes(wake)) b.waiters.push(wake);
+        }
+        return;
+      }
+      settle(freed);
     }
 
     for (const b of candidates) b.waiters.push(wake);
@@ -444,15 +490,22 @@ export async function whisperForward(
   const untried = [...candidates];
 
   while (untried.length) {
-    let b = untried.find((c) => hasFreeSlot(c)) ?? null;
+    // stillEligible as well as free: the list was built when the call
+    // arrived, and a backend can start draining or be quarantined while an
+    // earlier attempt on this same call is still running.
+    let b = untried.find((c) => stillEligible(c) && hasFreeSlot(c)) ?? null;
     if (!b) {
       // Everything is busy. Queue rather than shed: a slow transcript beats
       // a lost one, and over-committing here is precisely what buries a
       // queue inside whisper where nothing can see or manage it.
+      const waitStarted = Date.now();
       const freed = await waitForSlot(untried);
       if (!freed) {
-        detail = `all backends busy for ${Math.round(SLOT_WAIT_MS / 1000)}s`;
-        log.warn({ waited: SLOT_WAIT_MS }, 'whisper: gave up waiting for a slot');
+        // Measured, not assumed: waitForSlot also returns null the moment
+        // every candidate stops qualifying, which is not a 120s wait.
+        const waitedMs = Date.now() - waitStarted;
+        detail = `no backend could take it after ${Math.round(waitedMs / 1000)}s`;
+        log.warn({ waitedMs }, 'whisper: gave up waiting for a slot');
         break;
       }
       b = freed;
@@ -539,6 +592,14 @@ export function whisperSetDrain(name: string, draining: boolean): WhisperBackend
   if (!b) return null;
   b.draining = draining;
   log.info({ backend: b.name, draining, inFlight: b.inFlight }, 'whisper drain set');
+  // Waiters queued on this backend captured their candidate list before the
+  // drain, so they have to be told to look again: if something else can take
+  // the work they move to it, and if nothing can they fail now instead of
+  // waiting out the window. Without this a drain was invisible to anything
+  // already queued.
+  if (draining) {
+    for (const w of b.waiters.splice(0)) w();
+  }
   return b;
 }
 

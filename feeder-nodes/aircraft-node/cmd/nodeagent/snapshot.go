@@ -182,9 +182,11 @@ func runSnapshotLoop(ctx context.Context, m *aircraftManager, q *queue.Queue) {
 	reads := 0
 	trail := newPositionTrail()
 
-	// warnedNotReady keeps the "decoder hasn't written anything yet" message to
-	// one line per outage instead of one every 5 seconds.
+	// warnedNotReady / warnedStale keep the "nothing written yet" and "nothing
+	// written lately" messages to one line per outage instead of one every 5
+	// seconds.
 	warnedNotReady := false
+	warnedStale := false
 
 	for {
 		select {
@@ -201,27 +203,41 @@ func runSnapshotLoop(ctx context.Context, m *aircraftManager, q *queue.Queue) {
 
 		air, err := m.reader.Aircraft()
 		if err != nil {
-			if errors.Is(err, decoderjson.ErrNotReady) {
+			switch {
+			// ErrStale wraps ErrNotReady, so it has to be asked about first.
+			// Worth its own line: a file that is there but frozen means the
+			// decoder died, was stopped, or is crash-looping, which reads very
+			// differently in a log from one that has not appeared yet.
+			case errors.Is(err, decoderjson.ErrStale):
+				if !warnedStale {
+					log.Printf("snapshot: decoder output has stopped updating (%v) — reporting nothing rather than re-sending the aircraft it last saw", err)
+					warnedStale = true
+				}
+			case errors.Is(err, decoderjson.ErrNotReady):
 				if !warnedNotReady {
 					log.Printf("snapshot: decoder has not written aircraft.json yet (%s)", m.cfg.JSONDir)
 					warnedNotReady = true
 				}
-			} else {
+			default:
 				// Only on an upload tick, or a decoder that is down logs this
 				// once a second forever.
 				if upload {
 					log.Printf("snapshot: reading aircraft.json failed: %v", err)
 				}
 			}
-			// No aircraft data means no usable heartbeat figures either.
+			// No aircraft data means no usable heartbeat figures either. The
+			// carried positions go too: they describe a world that has stopped
+			// being reported, and holding them would put a stale trail on the
+			// first upload after the decoder came back.
 			if upload {
 				m.setStats(wsclient.AdsbStats{})
+				trail.take()
 			}
 			continue
 		}
-		if warnedNotReady {
+		if warnedNotReady || warnedStale {
 			log.Printf("snapshot: decoder output is flowing")
-			warnedNotReady = false
+			warnedNotReady, warnedStale = false, false
 		}
 
 		// Every read contributes to the carried positions; only the fifth

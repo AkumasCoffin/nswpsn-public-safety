@@ -50,6 +50,7 @@ Consequences you have to work with:
 | `/staff` | `staff.html` | Role-gated operations surface |
 | `/dashboard` | `dashboard.html` | Discord-OAuth management UI for the bot |
 | `/login`, `/signup`, `/profile` | … | Accounts |
+| `/api-docs` | `api-docs.html` | The API reference, signed in: what the person's active API keys can read (all of it for staff), in the vendored Scalar viewer. See [`../api.md`](../api.md) |
 | `/verify-email`, `/reset-password`, `/change-password` | … | Account flows |
 | `/about`, `/contact`, `/links`, `/privacy`, `/terms` | … | Static content |
 | `/map-editor` | `map-editor.html` | **A redirect stub.** The editor merged into `map.html`, which enables editor mode automatically when a signed-in user has the role. The stub only keeps old links working |
@@ -84,6 +85,7 @@ describes the public surface as audio-free.
 | `config.sample.js` | Config template — copy to `config.js` |
 | `agency-data.json` | Agency directory `agency.html` reads |
 | `assets/`, `data/`, `shared/` | Icons, geo and reference datasets, the alert catalog |
+| `vendor/scalar/` | The API reference viewer (Scalar, MIT), committed as published — no CDN. Its README says how to update it |
 
 ## `config.js`
 
@@ -94,9 +96,15 @@ template and fill it in:
 cp config.sample.js config.js
 ```
 
-It carries the Supabase project URL and anon key, the API base URL, and the API
-key. `.htaccess` explicitly allows `config.js`, `auth-common.js` and
-`analytics.js` to be served while blocking most other paths.
+It carries the Supabase project URL and anon key and the API base URL — and
+**no API key**. Pages authenticate with a short-lived browser session token
+from `api-session.js` (see below); the backend's `NSWPSN_API_KEY` is for
+server-side callers and must not be put in this file. A logged-in user who
+needs scripted access requests a personal key from the "API keys" card in the
+profile modal (`auth-common.js`) instead — it is for curl and scripts, and the
+backend refuses it from any web page. `.htaccess` explicitly
+allows `config.js`, `auth-common.js`, `api-session.js` and `analytics.js` to
+be served while blocking most other paths.
 
 ## The cache-busting rule
 
@@ -171,25 +179,116 @@ only thing standing between an upload and code execution.
 ## How a page gets data
 
 Every page talks to the backend over `/api/...` at the API base URL from
-`config.js`, authenticating with the key `/api/config` hands out. Nothing on the
-public site reads a database directly.
+`config.js`. The credential is a **browser session token**: `api-session.js`
+(`window.AusApi`) asks `POST /api/session/token` for one on first use, keeps it
+in `sessionStorage`, refreshes it before its 15-minute expiry and retries one
+401. The backend issues it only to first-party pages and binds it to the
+requesting browser, so it is useless from curl, a scraper or a typed URL. Each
+page keeps its own `apiFetch`/`userHeaders` helper and reads the token from
+`AusApi`; logged-in users send their Supabase JWT instead, unchanged. Nothing
+on the public site reads a database directly.
+
+The profile modal (`auth-common.js`) also carries an **API keys** card where a
+logged-in user requests a personal key — optionally ticking which feeds it
+should read, live or history, in the same feed table staff grant from (staff
+choose the key's actual feeds when they approve) — generates it once staff
+approve (the plaintext is shown once and never again), re-issues it or deletes
+it. Each key and request says what it reads, in words ("Fires · live, history;
+Weather · live"), from `GET /api/api-keys/scope-catalog`; against an API that
+predates the feed table the card leaves the table out. With an active key the
+card offers **API docs**, which opens this site's `/api-docs` in a new tab — the
+reference as far as the person's active keys reach, read signed in
+([`../api.md`](../api.md)); the one-time reveal of a new key links to it too,
+beside a curl example on `/api/v1/fires`. A bell notification about a request
+links to `/#api-keys`, which opens that card.
+
+The staff page's API keys tab (`staff.html`) grants from the same table: a row
+per feed with what it covers, a box for each window the feed has, All live /
+All history / Clear, and the member's ask pre-ticked and marked so it stays
+visible after the ticks change. The same table edits a live key's feeds
+(`POST /api/staff/api-keys/:id/scopes`); a key on the old `read` list opens on
+an empty table, ticking which replaces it.
 
 ```
 map.html  ──►  /api/rfs/incidents        (RFS fires)
-          ──►  /api/traffic/*            (seven hazard kinds + cameras)
-          ──►  /api/bom/warnings         (weather)
-          ──►  /api/endeavour/*, /api/ausgrid/outages, /api/essential/*
-          ──►  /api/pager/hits           (pager pins — map.html:6265)
-          ──►  /api/firms/hotspots       (satellite hotspots)
-          ──►  /api/adsb/aircraft, /api/adsb/trails
-          ──►  /api/transport/*          (public transport)
-          ──►  /api/radio/grn-sites      (repeater site geography — 18474)
-          ──►  /api/radio/monitored-sites  (repeater "Monitoring" badges — 18451)
+          ──►  /api/{qld-fire/incidents,nt-fire,sa-fire,vic-emergency,wa-emergency/incidents}
+                                         (the other states' fire services — site routes;
+                                          API keys read them merged, at /api/v1/fires)
+          ──►  /api/{qld-fire,wa-emergency}/warnings  (site routes; keys read them in /api/v1/fires)
+          ──►  /api/v1/act-ambulance/incidents
+          ──►  /api/v1/traffic/*         (seven hazard kinds; incidents, roadwork,
+                                          flood and major events for NSW, QLD,
+                                          VIC, SA and ACT)
+          ──►  /api/traffic/cameras      (cameras: site routes, never on /api/v1/)
+          ──►  /api/endeavour/{current,maintenance,future}, /api/essential/outages
+                                         (site routes; keys read them merged, at /api/v1/outages)
+          ──►  /api/v1/pager/hits        (pager pins; a 503 keeps the last pins)
+          ──►  /api/v1/history           (an incident's change trail)
+          ──►  /api/v1/firms/hotspots    (satellite hotspots)
+          ──►  /api/v1/adsb/{aircraft,trails,history,photo/:hex}
+          ──►  /api/adsb/receivers       (node status — never on /api/v1/)
+          ──►  /api/v1/transport/*       (public transport)
+          ──►  /api/aviation/cameras, /api/v1/marinetraffic/*
+          ──►  /api/{centralwatch/cameras,qld/cameras,qld/flood-cameras}
+          ──►  /api/centralwatch/image/:id  (public, for <img src>)
+          ──►  /api/v1/{beachwatch,beachsafe,beachsafe/beach/:slug}
+          ──►  /api/v1/weather/{current,radar,point,grid/manifest,grid}
+          ──►  /api/boundaries/:kind     (boundary overlays — site-only, not /api/v1/)
+          ──►  /api/radio/grn-sites      (repeater site geography)
+          ──►  /api/radio/monitored-sites  (repeater "Monitoring" badges)
+          ──►  /api/v1/dorsal/reports?hours=168  (SharkSmart layer)
           ──►  /api/incidents            (community-added)
 
-live.html ──►  per-source counts, /api/summaries/latest, /api/news/rss,
-               /api/stats/history, /api/heartbeat
+live.html ──►  per-source counts, /api/rfs/incidents, /api/v1/bom/warnings
+               (weather), /api/v1/traffic/*, /api/{endeavour,essential}/*,
+               /api/ausgrid/stats, /api/v1/{beachwatch,beachsafe},
+               /api/v1/summaries/latest, /api/news/rss (site route), /api/stats/history,
+               /api/heartbeat
+
+logs.html ──►  /api/v1/history, /api/v1/history/filters,
+               /api/v1/pager/hits, /api/v1/summaries
 ```
+
+The feeds on `/api/v1/` answer as they do on `/api/`, except that a non-GeoJSON
+body is wrapped in `data` — so `live.html` reads BOM's warnings, the power
+lists, BeachSafe, news and the latest summary from `response.data`, and
+`map.html` and `logs.html` unwrap the rest the same way (GeoJSON — traffic,
+transport lines, cameras, beaches, sharks, current weather, pager hits — stays
+bare). `map.html`'s staged prefetch marks the wrapped feeds `unwrap: true` so
+`layerCache` holds what the layer loaders fetch themselves. Stored history's
+`*_iso` times are UTC on `/api/v1/`, and a page past the 10,000 offset cap is a
+`validation_failed` carrying `details.max_offset`, which `logs.html` checks for.
+The council-name list (`/api/boundaries/lga-names`, used by the signup and
+location forms) and the boundary overlays stay on `/api/` as site routes
+([`../api.md`](../api.md)).
+
+**SharkSmart is its own layer, not a beach feed, and that is deliberate.**
+Beachwatch and BeachSafe both describe the standing state of a beach and merge
+into one pin per beach (`_allMergedBeaches`, with `hasBeachwatch` /
+`hasBeachSafe` flags on a single record). A shark report is a timestamped
+*event* at a place — four sightings at one beach in a week are four things that
+happened — so it could not join that merge without being flattened. It has its
+own `sharkLayer`, button and panel. Only **Sightings, Drone sightings, Warnings
+and Tag & release** start switched on — receiver detections (a tagged shark
+passing a listening station) are 56% of the feed's volume and would swamp the
+rest, and bites, closures and carcasses are deliberately opt-in rather than
+pushed at a reader who only wanted to know whether the drone saw anything.
+
+Drone is its own category rather than a kind of sighting. It is the second most
+common encounter upstream (~20% of reports), and a lifeguard drone overflight is
+a different claim from someone on the sand saying they saw a shape; folding them
+together left the drone flights unfilterable and invisible as a group.
+
+Nothing in the layer carries an OFFICIAL badge. Dorsal's `official` flag only
+records that the report was posted by their own account rather than by a member
+of the public — it is not a verification, and on a layer called SharkSmart a
+badge reading OFFICIAL is read as government confirmation. The flag stays in the
+feed and the archived row; it is the *display* that was removed, in the map
+tooltip, the logs row and the Discord card alike.
+
+The layer requests `?hours=168` explicitly because the endpoint's own default is
+48 hours, which exists for the Discord bot's dedup window rather than for the
+map.
 
 **The repeater layer is two endpoints, and neither one carries a reception.**
 `/api/radio/grn-sites` is the *geography* — the GRN site list, served from the

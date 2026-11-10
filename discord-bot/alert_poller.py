@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import logging
 import re
+from collections import Counter
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Optional
 
@@ -27,22 +28,27 @@ class AlertPoller:
         # API endpoints mapping.
         # NOTE: Some canonical alert_types share a single backend fetch and are
         # split out by `_extract_items` / dispatcher inspection:
-        #   - 'bom_land' uses /api/bom/warnings (the warnings response is split
+        #   - 'bom_land' uses /api/v1/bom/warnings (the warnings response is split
         #     into bom_land / bom_marine by category at extraction time).
         #   - 'endeavour_planned' uses /api/endeavour/planned (current outages
         #     come back as 'endeavour_current').
         #   - 'essential_unplanned'/'essential_future' point at the Essential
         #     Energy backend endpoints.
-        #   - 'cfa'/'deeca' share /api/vic-emergency/events — one feed
-        #     carries every Victorian publisher; _extract_items splits on
-        #     properties.agency (SES/EMV/ESTA items are not alertable types).
+        #   - 'cfa'/'deeca'/'vicses'/'emv'/'esta' share
+        #     /api/vic-emergency/events — one feed carries every Victorian
+        #     publisher; _extract_items splits on properties.agency. All five
+        #     are alertable (the comment here claimed the last three were not,
+        #     which stopped being true when the catalog gained them).
         #   - The interstate feeds are all RFS-shaped GeoJSON, refreshed
         #     upstream every 2 min (NT: 5 min) — the 60s cycle just sees an
         #     unchanged snapshot on the off-beats; seen-dedup absorbs it.
-        #   - 'wire_article'/'wire_fleet' poll The Wire's public lists. While
-        #     The Wire is not live the backend answers visible:false (an API
-        #     key alone carries no user session) and check_alerts skips them
-        #     WITHOUT consuming the bootstrap — see the gate there.
+        #   - 'wire_article'/'wire_fleet' poll The Wire's public lists. The
+        #     Wire went public (app_settings.wire_public) and both types left
+        #     the catalog's `soon` state, so they are subscribable now. The
+        #     visible:false gate in check_alerts stays regardless: wire_public
+        #     is an owner toggle that can go back off, and an API key alone
+        #     carries no user session, so "not readable" must keep meaning
+        #     "skip without consuming the bootstrap" rather than "no posts".
         #   - 'firms' returns thousands of satellite fire pixels; _extract_items
         #     collapses them into ~100m clusters per pass (see _cluster_firms).
         # Endpoint per alert type, from shared/alert-catalog.json. Types with
@@ -197,6 +203,17 @@ class AlertPoller:
             # (which bump updated_at, never the id) can never re-alert.
             return f"{alert_type}_{item.get('id', '')}"
 
+        elif alert_type == 'shark_report':
+            # Upstream's own report id, which is stable — 4000 sampled, 4000
+            # distinct. Keyed on the id ALONE, deliberately: Dorsal can edit a
+            # report (there is an "Updated report" encounter type), and a
+            # corrected species is not a second shark. The id must also stay
+            # stable for longer than the feed window, or a report still being
+            # served when seen_alerts prunes at 7 days would re-fire — which
+            # is why the endpoint's default window is 48 hours.
+            props = item.get('properties', {})
+            return f"shark_{props.get('report_id', '')}"
+
         elif alert_type == 'user_incident':
             # User incidents from Supabase - use incident ID + latest log ID for update tracking
             incident_id = item.get('id', '')
@@ -290,6 +307,19 @@ class AlertPoller:
                                 return _aware(datetime.fromisoformat(s.replace('Z', '+00:00')))
                             except ValueError:
                                 pass
+
+            elif alert_type == 'shark_report':
+                # When the shark was seen, not when we noticed. The backend
+                # normalises upstream's epoch-ms into both an ISO string and
+                # epoch seconds; prefer the seconds, which cannot be
+                # misparsed, and keep the ISO as the fallback.
+                props = item.get('properties', {})
+                unix = props.get('reported_at_unix')
+                if isinstance(unix, (int, float)) and unix > 0:
+                    return datetime.fromtimestamp(unix, tz=timezone.utc)
+                ts = props.get('reported_at') or ''
+                if ts:
+                    return _aware(datetime.fromisoformat(str(ts).replace('Z', '+00:00')))
 
             elif alert_type == 'wire_article':
                 # First-publish time — stamped once server-side; edits bump
@@ -419,6 +449,119 @@ class AlertPoller:
             out.append(rep)
         return out
 
+    # A cycle with more than this many new items in one source, making up more
+    # than this share of it, is an upstream id change, not news (see
+    # _new_alerts_for).
+    REBASELINE_MIN_NEW = 200
+    REBASELINE_SHARE = 0.5
+    # The same test for each state of a feed merging several states' records,
+    # with a lower floor: one state may have only a few hundred.
+    REBASELINE_STATE_MIN_NEW = 50
+
+    @staticmethod
+    def _record_state(item: Any) -> str:
+        """The state a record says it is in (properties.state), '' for none."""
+        props = item.get('properties') if isinstance(item, dict) else None
+        return str(props.get('state') or '') if isinstance(props, dict) else ''
+
+    async def _new_alerts_for(self, loop, alert_type: str, data: Any) -> List[Dict[str, Any]]:
+        """The alerts in one fetched feed that have not been seen, marked seen."""
+        items = self._extract_items(alert_type, data)
+
+        # On a source's first SUCCESSFUL fetch after startup, bootstrap
+        # it: mark every currently-active item as seen without firing
+        # an alert. Without this, a restart after downtime surfaces
+        # every active outage / incident / pager hit as "new" — the
+        # bot then tries to send thousands of messages at once,
+        # saturates the 500-message queue, and drops a bunch of them
+        # as "Message queue full". Production saw 2126 alerts on a
+        # single restart cycle.
+        #
+        # Per-source (not a global first-cycle flag) so a source whose
+        # first fetch failed still gets bootstrapped when it recovers,
+        # instead of flooding on cycle 2. Counted as bootstrapped only once
+        # the batch is written, so a failed write is tried again next cycle.
+        if alert_type not in self._bootstrapped:
+            logger.info(
+                f"  → {alert_type}: Bootstrapping {len(items)} items "
+                "(marking as seen, no alerts)"
+            )
+            batch = [(alert_type, self._get_alert_id(alert_type, item)) for item in items]
+            await loop.run_in_executor(None, self.db.mark_alerts_seen_batch, batch)
+            self._bootstrapped.add(alert_type)
+            return []
+        logger.debug(f"  → {alert_type}: {len(items)} items")
+
+        # Build candidate list and check all at once (one DB query per few
+        # hundred instead of one per alert). De-dupe by id WITHIN this cycle:
+        # two distinct items can resolve to the same alert id (the
+        # stable-fields fallback for Waze alerts with no upstream uuid
+        # collides when type/subtype/street/rounded-location match — e.g.
+        # several flood road-closures on the same street). Without de-duping,
+        # filter_unseen_alerts returns that id once per copy and we post
+        # the identical alert several times in one batch.
+        item_by_id = {}
+        candidates = []
+        for item in items:
+            aid = self._get_alert_id(alert_type, item)
+            if aid in item_by_id:
+                continue
+            item_by_id[aid] = item
+            candidates.append((alert_type, aid))
+
+        # Run synchronous DB calls in executor to avoid blocking the event loop
+        unseen = await loop.run_in_executor(None, self.db.filter_unseen_alerts, candidates)
+        if not unseen:
+            logger.debug(f"  → No new {alert_type} alerts")
+            return []
+
+        # Mark all unseen as seen in one batch commit
+        await loop.run_in_executor(None, self.db.mark_alerts_seen_batch, unseen)
+
+        # Most of a feed new at once is not news: the ids changed upstream —
+        # a source swapped behind an endpoint (the interstate road feeds
+        # moving off Live Traffic's aggregate), or a new id scheme — and the
+        # bot was not restarted to bootstrap it. Re-baseline quietly instead
+        # of posting the whole feed to every channel subscribed without a
+        # region. Real bursts stay well under half a feed.
+        if len(unseen) > self.REBASELINE_MIN_NEW and len(unseen) > len(candidates) * self.REBASELINE_SHARE:
+            logger.warning(
+                f"re-baselining {alert_type}: {len(unseen)} of {len(candidates)} items new at once"
+            )
+            return []
+
+        # A feed merging several states' records (the road feeds) can have one
+        # state's ids change — SA's roadworks becoming one record per job, VIC
+        # moving to Transport Victoria's own API — while staying well under
+        # half new as a whole. The same test for each state absorbs that state
+        # alone, and the others' news still goes out.
+        state_of = {aid: self._record_state(item_by_id[aid]) for _, aid in candidates}
+        if len(set(state_of.values()) - {''}) > 1:
+            total = Counter(state_of.values())
+            new = Counter(state_of[aid] for _, aid in unseen)
+            quiet = {
+                s for s, n in new.items()
+                if s and n > self.REBASELINE_STATE_MIN_NEW and n > total[s] * self.REBASELINE_SHARE
+            }
+            for s in sorted(quiet):
+                logger.warning(
+                    f"re-baselining {alert_type} for {s}: {new[s]} of {total[s]} items new at once"
+                )
+            unseen = [u for u in unseen if state_of[u[1]] not in quiet]
+
+        alerts = []
+        for _, alert_id in unseen:
+            item = item_by_id[alert_id]
+            source_ts = self._get_alert_timestamp(alert_type, item)
+            alerts.append({
+                'type': alert_type,
+                'id': alert_id,
+                'data': item,
+                'timestamp': source_ts.isoformat()
+            })
+            logger.info(f"New alert: {alert_type} - {alert_id}")
+        return alerts
+
     async def check_alerts(self) -> List[Dict[str, Any]]:
         """Check all alert types for new alerts"""
         new_alerts = []
@@ -464,7 +607,10 @@ class AlertPoller:
             if isinstance(data, Exception):
                 logger.warning(f"Fetch error for {alert_type}: {data}")
                 continue
-            if not data:
+            # An empty list counts as no data too, as it always has: the
+            # bootstrap waits for a feed with something in it. /api/v1/ wraps
+            # a bare list, so there an empty one arrives as {data: []}.
+            if not data or (isinstance(data, dict) and 'data' in data and not data['data']):
                 logger.debug(f"  → No data returned for {alert_type}")
                 continue
 
@@ -479,72 +625,14 @@ class AlertPoller:
                 logger.debug(f"  → {alert_type}: The Wire is not live — skipping")
                 continue
 
-            items = self._extract_items(alert_type, data)
-            original_count = len(items)
+            # A source that fails here (a database error on its ids, say) is
+            # skipped for this cycle. It used to end the cycle, and with it
+            # every other source's alerts, user incidents and radio summaries.
+            try:
+                new_alerts.extend(await self._new_alerts_for(loop, alert_type, data))
+            except Exception as e:
+                logger.error(f"Error checking {alert_type} alerts: {e}")
 
-            # On a source's first SUCCESSFUL fetch after startup, bootstrap
-            # it: mark every currently-active item as seen without firing
-            # an alert. Without this, a restart after downtime surfaces
-            # every active outage / incident / pager hit as "new" — the
-            # bot then tries to send thousands of messages at once,
-            # saturates the 500-message queue, and drops a bunch of them
-            # as "Message queue full". Production saw 2126 alerts on a
-            # single restart cycle.
-            #
-            # Per-source (not a global first-cycle flag) so a source whose
-            # first fetch failed still gets bootstrapped when it recovers,
-            # instead of flooding on cycle 2.
-            if alert_type not in self._bootstrapped:
-                self._bootstrapped.add(alert_type)
-                logger.info(
-                    f"  → {alert_type}: Bootstrapping {original_count} items "
-                    "(marking as seen, no alerts)"
-                )
-                batch = [(alert_type, self._get_alert_id(alert_type, item)) for item in items]
-                await loop.run_in_executor(None, self.db.mark_alerts_seen_batch, batch)
-                items = []
-            else:
-                logger.debug(f"  → {alert_type}: {len(items)} items")
-
-            # Build candidate list and check all at once (single DB query
-            # instead of N). De-dupe by id WITHIN this cycle: two distinct
-            # items can resolve to the same alert id (the stable-fields
-            # fallback for Waze alerts with no upstream uuid collides when
-            # type/subtype/street/rounded-location match — e.g. several flood
-            # road-closures on the same street). Without de-duping,
-            # filter_unseen_alerts returns that id once per copy and we post
-            # the identical alert several times in one batch.
-            item_by_id = {}
-            candidates = []
-            for item in items:
-                aid = self._get_alert_id(alert_type, item)
-                if aid in item_by_id:
-                    continue
-                item_by_id[aid] = item
-                candidates.append((alert_type, aid))
-
-            # Run synchronous DB calls in executor to avoid blocking the event loop
-            unseen = await loop.run_in_executor(None, self.db.filter_unseen_alerts, candidates)
-
-            if unseen:
-                # Mark all unseen as seen in one batch commit
-                await loop.run_in_executor(None, self.db.mark_alerts_seen_batch, unseen)
-
-                for _, alert_id in unseen:
-                    item = item_by_id[alert_id]
-                    source_ts = self._get_alert_timestamp(alert_type, item)
-                    alert = {
-                        'type': alert_type,
-                        'id': alert_id,
-                        'data': item,
-                        'timestamp': source_ts.isoformat()
-                    }
-                    new_alerts.append(alert)
-                    logger.info(f"New alert: {alert_type} - {alert_id}")
-
-            if not unseen:
-                logger.debug(f"  → No new {alert_type} alerts")
-        
         # Check user incidents from Supabase
         user_incident_alerts = await self._check_user_incidents()
         if user_incident_alerts:
@@ -654,7 +742,7 @@ class AlertPoller:
         return new_alerts
 
     async def _check_radio_summary(self) -> List[Dict[str, Any]]:
-        """Poll /api/summaries/latest and emit an alert when a new summary id
+        """Poll /api/v1/summaries/latest and emit an alert when a new summary id
         appears. The backend releases scheduled hourly rows just before the
         top-of-hour (release_at ~= hour-top - 30s) so this naturally fires
         within one poll tick of a new summary going live.
@@ -674,11 +762,11 @@ class AlertPoller:
         if not presets:
             return []
 
-        payload = await self._fetch('/api/summaries/latest')
+        payload = await self._fetch('/api/v1/summaries/latest')
         if not payload:
             return []
 
-        row = payload.get('hourly')
+        row = (payload.get('data') or {}).get('hourly')
         if not row or not row.get('id'):
             return []
 
@@ -907,7 +995,12 @@ class AlertPoller:
         return new_messages
     
     async def _fetch_pager_from_api(self) -> List[Dict[str, Any]]:
-        """Fetch recent pager messages (NSW paging network) from the backend"""
+        """Fetch recent pager messages (NSW paging network) from the backend.
+
+        Stays on /api/, not /api/v1/: when the database is slow or down,
+        /api/pager/hits still answers from the hits the backend holds in
+        memory, where /api/v1/pager/hits answers 503 and alerts would stop.
+        """
         url = f"{self.api_base_url}/api/pager/hits"
         headers = {
             'Authorization': f'Bearer {self.api_key}',

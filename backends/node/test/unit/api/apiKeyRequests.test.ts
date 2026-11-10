@@ -1,0 +1,792 @@
+/**
+ * API key request flow — who may do what, the caps, the claim transaction
+ * (plaintext once, never stored, never to staff), the approve/reject claim
+ * race, and the notification matrix (Discord on request, bell on decision).
+ */
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { Hono } from 'hono';
+
+interface Call { sql: string; params?: unknown[] }
+const calls: Call[] = [];
+// A queued { error } entry makes that query throw instead — how a unique
+// violation or a dead connection is simulated.
+let resultQueue: Array<{ rows: unknown[]; rowCount?: number; error?: Error }> = [];
+
+function next() {
+  const r = resultQueue.shift() ?? { rows: [] };
+  if (r.error) throw r.error;
+  return r;
+}
+// Transaction bookends and the per-user advisory lock return nothing and
+// consume nothing from the queue, so tests only script the data queries.
+const PLUMBING = /^(BEGIN|COMMIT|ROLLBACK)|pg_advisory_xact_lock/;
+
+const fakeClient = {
+  query: vi.fn(async (sql: string, params?: unknown[]) => {
+    calls.push({ sql, ...(params ? { params } : {}) });
+    if (PLUMBING.test(sql)) return { rows: [] };
+    return next();
+  }),
+  release: vi.fn(),
+};
+const fakePool = {
+  query: vi.fn(async (sql: string, params?: unknown[]) => {
+    calls.push({ sql, ...(params ? { params } : {}) });
+    const r = next();
+    return { rowCount: r.rows.length, ...r };
+  }),
+  connect: vi.fn(async () => fakeClient),
+};
+
+vi.mock('../../../src/db/pool.js', () => ({
+  getPool: vi.fn(async () => fakePool),
+}));
+
+vi.mock('../../../src/services/auth/supabaseJwt.js', () => ({
+  requireSupabaseJwt: async (c: { get: (k: string) => unknown; json: (b: unknown, s: number) => unknown }, next: () => Promise<void>) => {
+    if (!c.get('userId')) return c.json({ error: 'auth required' }, 401);
+    await next();
+  },
+}));
+
+let staff = false;
+vi.mock('../../../src/services/auth/roles.js', async (orig) => {
+  const actual = await orig<typeof import('../../../src/services/auth/roles.js')>();
+  return { ...actual, canManageUsers: vi.fn(async () => staff) };
+});
+
+const bells: Array<Record<string, unknown>> = [];
+vi.mock('../../../src/services/wireComments.js', () => ({
+  notify: vi.fn(async (_pool: unknown, n: Record<string, unknown>) => { bells.push(n); }),
+  displayNameMap: vi.fn(async () => new Map<string, string>([['user-1', 'Current Name']])),
+}));
+
+const discord: Array<Record<string, unknown>> = [];
+vi.mock('../../../src/services/staffNotify.js', () => ({
+  notifyStaff: (_pool: unknown, input: Record<string, unknown>) => { discord.push(input); },
+}));
+
+vi.mock('../../../src/api/users.js', () => ({
+  getUsername: vi.fn(async () => 'Staff Person'),
+}));
+
+const { apiKeysRouter, MAX_ACTIVE_KEYS_PER_USER } = await import('../../../src/api/apiKeys.js');
+const { resolveApiKey, _clearApiKeyCache } = await import('../../../src/services/auth/apiKeys.js');
+const { FEEDS, scoped } = await import('../../../src/services/auth/apiKeyScopes.js');
+const { createHash } = await import('node:crypto');
+
+function makeApp(opts: { userId?: string | null; userName?: string | null } = {}) {
+  const app = new Hono();
+  app.use('*', async (c, next) => {
+    if (opts.userId !== null) {
+      c.set('userId', opts.userId ?? 'user-1');
+      if (opts.userName !== null) c.set('userName', opts.userName ?? 'Test User');
+    }
+    await next();
+  });
+  app.route('/', apiKeysRouter);
+  return app;
+}
+
+const json = (body: unknown) => ({
+  method: 'POST' as const,
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify(body),
+});
+
+const REQUEST = (over: Record<string, unknown> = {}) => ({
+  id: 5, user_id: 'user-1', user_name: 'Test User', name: 'home-assistant', reason: 'Pull incidents into my dashboard',
+  status: 'pending', rate_limit_per_min: null, expires_at: null, review_note: null,
+  reviewed_by: null, reviewed_by_name: null, reviewed_at: null, key_id: null, claimed_at: null, created_at: 't',
+  requested_scopes: [], scopes: [], ...over,
+});
+
+/** A scope set in the new form, canonical: two cells of the staff table. */
+const GRANT = ['fires:live', 'warnings:history'];
+
+const UUID = '0b6e1f6a-6d0c-4b8e-9a51-2f3c4d5e6f70';
+
+const KEY = (over: Record<string, unknown> = {}) => ({
+  id: 'k-uuid', user_id: 'user-1', name: 'home-assistant', prefix: 'abcdefghij', key_hash: 'deadbeef',
+  scopes: ['read'], rate_limit_per_min: 120, created_at: 't', last_used_at: null, expires_at: null, revoked_at: null, ...over,
+});
+
+beforeEach(() => {
+  calls.length = 0;
+  resultQueue = [];
+  bells.length = 0;
+  discord.length = 0;
+  staff = false;
+});
+
+describe('user routes', () => {
+  it('401 without a session', async () => {
+    expect((await makeApp({ userId: null }).request('/api/api-keys/me')).status).toBe(401);
+    expect((await makeApp({ userId: null }).request('/api/api-keys/requests', json({}))).status).toBe(401);
+  });
+
+  it('GET /me never leaks a hash and reports whether a request may be made', async () => {
+    resultQueue = [
+      { rows: [REQUEST({ status: 'approved', key_id: 'k-uuid' })] },
+      { rows: [KEY(), KEY({ prefix: 'zzzzzzzzzz', revoked_at: 'r' })] },
+    ];
+    const res = await makeApp().request('/api/api-keys/me');
+    expect(res.status).toBe(200);
+    const body = await res.json() as Record<string, unknown>;
+    expect(JSON.stringify(body)).not.toContain('deadbeef');
+    expect(body.canRequest).toBe(true);
+    expect(body.limits).toEqual({ maxActiveKeys: MAX_ACTIVE_KEYS_PER_USER });
+    const keys = body.keys as Array<Record<string, unknown>>;
+    expect(keys[0]).toMatchObject({ prefix: 'abcdefghij', active: true });
+    expect(keys[1]).toMatchObject({ active: false });
+    expect(keys[0]).not.toHaveProperty('key_hash');
+    expect(keys[0]).not.toHaveProperty('userId');
+    expect((body.requests as Array<Record<string, unknown>>)[0]).toMatchObject({ claimed: true });
+  });
+
+  it('GET /me says no new request while one is pending or approved-but-ungenerated', async () => {
+    resultQueue = [{ rows: [REQUEST()] }, { rows: [] }];
+    let body = await (await makeApp().request('/api/api-keys/me')).json() as Record<string, unknown>;
+    expect(body.canRequest).toBe(false);
+
+    resultQueue = [{ rows: [REQUEST({ status: 'approved' })] }, { rows: [] }];
+    body = await (await makeApp().request('/api/api-keys/me')).json() as Record<string, unknown>;
+    expect(body.canRequest).toBe(false);
+    expect((body.requests as Array<Record<string, unknown>>)[0]).toMatchObject({ lapsed: false });
+  });
+
+  it('GET /me: a lapsed grant (approved, ungenerated, expiry passed) no longer blocks and is flagged', async () => {
+    const past = new Date(Date.now() - 1000).toISOString();
+    resultQueue = [{ rows: [REQUEST({ status: 'approved', expires_at: past })] }, { rows: [] }];
+    const body = await (await makeApp().request('/api/api-keys/me')).json() as Record<string, unknown>;
+    expect(body.canRequest).toBe(true);
+    expect((body.requests as Array<Record<string, unknown>>)[0]).toMatchObject({ lapsed: true, claimed: false });
+  });
+
+  it('rejects a short name or reason', async () => {
+    const app = makeApp();
+    expect((await app.request('/api/api-keys/requests', json({ name: 'x', reason: 'long enough reason' }))).status).toBe(400);
+    expect((await app.request('/api/api-keys/requests', json({ name: 'fine', reason: 'short' }))).status).toBe(400);
+    expect((await app.request('/api/api-keys/requests', json({ name: 'x'.repeat(61), reason: 'long enough reason' }))).status).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('409 when a request is already open; 409 at the live-key cap — both rolled back', async () => {
+    resultQueue = [{ rows: [{ n: '1' }] }];
+    expect((await makeApp().request('/api/api-keys/requests', json({ name: 'fine', reason: 'long enough reason' }))).status).toBe(409);
+    expect(calls.some((q) => q.sql.startsWith('ROLLBACK'))).toBe(true);
+    // The open-request count is the SQL twin of the /me rule: pending OR approved-and-ungenerated.
+    const open = calls.find((q) => q.sql.includes('FROM api_key_requests WHERE user_id'));
+    expect(open?.sql).toContain("status = 'approved' AND key_id IS NULL");
+
+    calls.length = 0;
+    resultQueue = [{ rows: [{ n: '0' }] }, { rows: [{ n: String(MAX_ACTIVE_KEYS_PER_USER) }] }];
+    expect((await makeApp().request('/api/api-keys/requests', json({ name: 'fine', reason: 'long enough reason' }))).status).toBe(409);
+    expect(calls.some((q) => q.sql.startsWith('COMMIT'))).toBe(false);
+    expect(discord).toHaveLength(0);
+  });
+
+  it('creates a pending request under the per-user lock and alerts Discord with the display name only', async () => {
+    resultQueue = [{ rows: [{ n: '0' }] }, { rows: [{ n: '0' }] }, { rows: [REQUEST()] }];
+    const res = await makeApp().request('/api/api-keys/requests', json({ name: 'home-assistant', reason: 'Pull incidents into my dashboard' }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, request: { id: 5, status: 'pending', claimed: false } });
+    const order = calls.map((q) => q.sql.split(/\s+/)[0]);
+    expect(order[0]).toBe('BEGIN');
+    expect(calls[1]!.sql).toContain('pg_advisory_xact_lock');
+    expect(calls[1]!.params).toEqual(['api-keys:user-1']);
+    expect(order[order.length - 1]).toBe('COMMIT');
+    const ins = calls.find((q) => q.sql.includes('INSERT INTO api_key_requests'));
+    expect(ins?.params).toEqual(['user-1', 'Test User', 'home-assistant', 'Pull incidents into my dashboard', []]);
+    expect(discord).toHaveLength(1);
+    expect(discord[0]).toMatchObject({ kind: 'api_key_request', event: 'new', ref: '5' });
+    const fields = discord[0]!.fields as Array<{ name: string; value: string }>;
+    expect(fields.find((f) => f.name === 'From')?.value).toBe('Test User');
+    expect(fields.find((f) => f.name === 'Scopes asked for')?.value).toBe('none asked for');
+    expect(JSON.stringify(discord[0])).not.toContain('user-1');
+    expect(bells).toHaveLength(0);
+  });
+
+  it('a request may ask for scopes: stored canonically, shown to staff; nonsense and `read` are refused', async () => {
+    resultQueue = [{ rows: [{ n: '0' }] }, { rows: [{ n: '0' }] }, { rows: [REQUEST({ requested_scopes: GRANT })] }];
+    const res = await makeApp().request('/api/api-keys/requests',
+      json({ name: 'home-assistant', reason: 'Pull incidents into my dashboard', scopes: ['Warnings:History', 'fires:live', ' FIRES:LIVE'] }));
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { request: Record<string, unknown> }).request).toMatchObject({ requestedScopes: GRANT, scopes: [] });
+    const ins = calls.find((q) => q.sql.includes('INSERT INTO api_key_requests'));
+    expect(ins?.params?.[4]).toEqual(GRANT);
+    const fields = discord[0]!.fields as Array<{ name: string; value: string }>;
+    expect(fields.find((f) => f.name === 'Scopes asked for')?.value).toBe(GRANT.join(', '));
+
+    calls.length = 0;
+    const app = makeApp();
+    // An unknown feed, a window the feed does not offer, `read`, a wildcard,
+    // the retired source/type/window grammar, and not a list at all.
+    for (const scopes of [['nope:live'], ['cameras:history'], ['read'], ['*:history'], ['source:rfs', 'type:incidents', 'window:live'], 'fires:live']) {
+      const bad = await app.request('/api/api-keys/requests', json({ name: 'fine', reason: 'long enough reason', scopes }));
+      expect(bad.status, JSON.stringify(scopes)).toBe(400);
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it('GET /scope-catalog lists every feed, with only the windows some route serves; 401 without a session', async () => {
+    expect((await makeApp({ userId: null }).request('/api/api-keys/scope-catalog')).status).toBe(401);
+    // Nothing in this file mounts a data route, so declare what is served here:
+    // the live fire feed, and stored history (every feed the archive holds).
+    scoped({ feed: 'fires', window: 'live' });
+    scoped({ feed: '*', window: 'history' });
+    type Catalog = {
+      feeds: Array<{ key: string; label: string; covers: string; windows: string[] }>;
+      windows: Array<{ key: string; label: string; description: string }>;
+      legacy: string;
+    };
+    const body = (await (await makeApp().request('/api/api-keys/scope-catalog')).json()) as Catalog;
+    // Every feed, in the table's order, labelled as the table labels it.
+    expect(body.feeds.map((f) => f.key)).toEqual(Object.keys(FEEDS));
+    for (const f of body.feeds) {
+      const feed = FEEDS[f.key as keyof typeof FEEDS];
+      expect(f, f.key).toMatchObject({ label: feed.label, covers: feed.covers });
+    }
+    const windows = Object.fromEntries(body.feeds.map((f) => [f.key, f.windows]));
+    expect(windows['fires']).toEqual(['live', 'history']);
+    expect(windows['warnings']).toEqual(['history']);
+    expect(windows['pager']).toEqual(['history']);
+    // Offered by the table but served by nothing here: not offered.
+    expect(windows['aircraft']).toEqual([]);
+    expect(windows['summaries']).toEqual([]);
+    // Camera images and news outlets' feeds are no feed at all.
+    expect(Object.keys(windows)).not.toContain('cameras');
+    expect(Object.keys(windows)).not.toContain('news');
+    expect(body.windows.map((w) => w.key)).toEqual(['live', 'history']);
+    expect(body.legacy).toBe('read');
+  });
+
+  it('a nameless account is identified to Discord by an id fragment, never the whole id', async () => {
+    resultQueue = [{ rows: [{ n: '0' }] }, { rows: [{ n: '0' }] }, { rows: [REQUEST({ user_id: 'abcdefgh-1234-5678' })] }];
+    const res = await makeApp({ userId: 'abcdefgh-1234-5678', userName: null }).request(
+      '/api/api-keys/requests', json({ name: 'home-assistant', reason: 'Pull incidents into my dashboard' }));
+    expect(res.status).toBe(200);
+    const fields = discord[0]!.fields as Array<{ name: string; value: string }>;
+    expect(fields.find((f) => f.name === 'From')?.value).toBe('abcdefgh');
+    expect(JSON.stringify(discord[0])).not.toContain('abcdefgh-1234-5678');
+  });
+
+  it('a unique violation on the pending index is reported as the same 409, not a 500', async () => {
+    const dup = Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' });
+    resultQueue = [{ rows: [{ n: '0' }] }, { rows: [{ n: '0' }] }, { rows: [], error: dup }];
+    const res = await makeApp().request('/api/api-keys/requests', json({ name: 'fine', reason: 'long enough reason' }));
+    expect(res.status).toBe(409);
+    expect(calls.some((q) => q.sql.startsWith('ROLLBACK'))).toBe(true);
+    expect(discord).toHaveLength(0);
+  });
+
+  describe('claim', () => {
+    it('404 for a request that is not yours (or does not exist)', async () => {
+      resultQueue = [{ rows: [] }];
+      const res = await makeApp().request('/api/api-keys/requests/5/claim', { method: 'POST' });
+      expect(res.status).toBe(404);
+      expect(calls.some((q) => q.sql.startsWith('ROLLBACK'))).toBe(true);
+      const sel = calls.find((q) => q.sql.includes('FOR UPDATE'));
+      expect(sel?.params).toEqual([5, 'user-1']);
+    });
+
+    it('409 while pending, 409 when rejected, 409 once already claimed', async () => {
+      const app = makeApp();
+      resultQueue = [{ rows: [REQUEST({ status: 'pending' })] }];
+      expect((await app.request('/api/api-keys/requests/5/claim', { method: 'POST' })).status).toBe(409);
+      resultQueue = [{ rows: [REQUEST({ status: 'rejected' })] }];
+      expect((await app.request('/api/api-keys/requests/5/claim', { method: 'POST' })).status).toBe(409);
+      resultQueue = [{ rows: [REQUEST({ status: 'approved', key_id: 'k-uuid' })] }];
+      const twice = await app.request('/api/api-keys/requests/5/claim', { method: 'POST' });
+      expect(twice.status).toBe(409);
+      expect(((await twice.json()) as { error: string }).error).toContain('only once');
+      expect(calls.some((q) => q.sql.includes('INSERT INTO api_keys'))).toBe(false);
+    });
+
+    it('409 for a lapsed grant, and nothing is minted or consumed', async () => {
+      const past = new Date(Date.now() - 60_000).toISOString();
+      resultQueue = [{ rows: [REQUEST({ status: 'approved', expires_at: past })] }];
+      const res = await makeApp().request('/api/api-keys/requests/5/claim', { method: 'POST' });
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { error: string }).error).toContain('lapsed');
+      expect(calls.some((q) => q.sql.includes('INSERT INTO api_keys'))).toBe(false);
+      expect(calls.some((q) => q.sql.includes('SET key_id'))).toBe(false);
+      expect(calls.some((q) => q.sql.startsWith('ROLLBACK'))).toBe(true);
+    });
+
+    it('takes the per-user lock before reading the request', async () => {
+      resultQueue = [{ rows: [] }];
+      await makeApp().request('/api/api-keys/requests/5/claim', { method: 'POST' });
+      expect(calls[0]!.sql).toBe('BEGIN');
+      expect(calls[1]!.sql).toContain('pg_advisory_xact_lock');
+      expect(calls[2]!.sql).toContain('FOR UPDATE');
+    });
+
+    it('409 at the cap even when approved', async () => {
+      resultQueue = [
+        { rows: [REQUEST({ status: 'approved' })] },
+        { rows: [{ n: String(MAX_ACTIVE_KEYS_PER_USER) }] },
+      ];
+      expect((await makeApp().request('/api/api-keys/requests/5/claim', { method: 'POST' })).status).toBe(409);
+      expect(calls.some((q) => q.sql.includes('INSERT INTO api_keys'))).toBe(false);
+    });
+
+    it('mints the key with the scopes staff granted', async () => {
+      resultQueue = [
+        { rows: [REQUEST({ status: 'approved', requested_scopes: ['fires:history', 'fires:live', 'pager:live', 'warnings:history'], scopes: GRANT })] },
+        { rows: [{ n: '0' }] },
+        { rows: [KEY({ scopes: GRANT })] },
+        { rows: [] },
+      ];
+      const res = await makeApp().request('/api/api-keys/requests/5/claim', { method: 'POST' });
+      expect(res.status).toBe(200);
+      // The grant, not the ask.
+      expect(calls.find((q) => q.sql.includes('INSERT INTO api_keys'))!.params![4]).toEqual(GRANT);
+      expect(((await res.json()) as { key: Record<string, unknown> }).key).toMatchObject({ scopes: GRANT });
+    });
+
+    it('mints inside the transaction with the granted limit/expiry, links the key, returns the plaintext once', async () => {
+      resultQueue = [
+        { rows: [REQUEST({ status: 'approved', rate_limit_per_min: 30, expires_at: '2027-01-01T00:00:00.000Z' })] },
+        { rows: [{ n: '0' }] },
+        { rows: [KEY({ rate_limit_per_min: 30, expires_at: '2027-01-01T00:00:00.000Z' })] }, // INSERT api_keys RETURNING
+        { rows: [] },                                                                      // link request
+      ];
+      const res = await makeApp().request('/api/api-keys/requests/5/claim', { method: 'POST' });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { plaintext: string; key: Record<string, unknown> };
+      expect(body.plaintext).toMatch(/^ak_[A-Za-z0-9]{10}_[A-Za-z0-9_-]{32}$/);
+      expect(body.key).not.toHaveProperty('key_hash');
+
+      const ins = calls.find((q) => q.sql.includes('INSERT INTO api_keys'));
+      expect(ins).toBeDefined();
+      // userId, name, prefix, hash, scopes, rpm, expires
+      expect(ins!.params![0]).toBe('user-1');
+      expect(ins!.params![1]).toBe('home-assistant');
+      // A grant with no scopes recorded (approved before scopes existed) means the old feed list.
+      expect(ins!.params![4]).toEqual(['read']);
+      expect(ins!.params![5]).toBe(30);
+      expect(ins!.params![6]).toBeInstanceOf(Date);
+      // The hash is sha256 of the plaintext, and the plaintext itself never reaches SQL.
+      expect(String(ins!.params![3])).toMatch(/^[0-9a-f]{64}$/);
+      expect(calls.some((q) => (q.params ?? []).includes(body.plaintext))).toBe(false);
+
+      const link = calls.find((q) => q.sql.includes('SET key_id'));
+      expect(link?.params).toEqual([5, 'k-uuid']);
+      const order = calls.map((q) => q.sql.split(/\s+/)[0]);
+      expect(order[0]).toBe('BEGIN');
+      expect(order[order.length - 1]).toBe('COMMIT');
+      expect(bells).toHaveLength(0);
+      expect(discord).toHaveLength(0);
+    });
+
+    it('a failing mint rolls back and tells the user nothing was issued', async () => {
+      resultQueue = [
+        { rows: [REQUEST({ status: 'approved' })] },
+        { rows: [{ n: '0' }] },
+        { rows: [] }, // INSERT returns no row → createApiKey throws
+      ];
+      const res = await makeApp().request('/api/api-keys/requests/5/claim', { method: 'POST' });
+      expect(res.status).toBe(500);
+      expect(calls.some((q) => q.sql.startsWith('ROLLBACK'))).toBe(true);
+      expect(calls.some((q) => q.sql.startsWith('COMMIT'))).toBe(false);
+    });
+  });
+
+  it('GET /me reads only keys the owner has not deleted', async () => {
+    resultQueue = [{ rows: [] }, { rows: [KEY({ requests_total: '1204', reissued_at: '2026-10-01T00:00:00Z' })] }];
+    const body = await (await makeApp().request('/api/api-keys/me')).json() as { keys: Array<Record<string, unknown>> };
+    const sel = calls.find((q) => q.sql.includes('FROM api_keys WHERE user_id'));
+    expect(sel?.sql).toContain('deleted_at IS NULL');
+    // BIGINT arrives as text; the owner sees a number.
+    expect(body.keys[0]).toMatchObject({ requestsTotal: 1204, reissuedAt: '2026-10-01T00:00:00Z' });
+  });
+
+  it('the owner revoke route is gone — Delete replaced it', async () => {
+    expect((await makeApp().request('/api/api-keys/abcdefghij/revoke', { method: 'POST' })).status).toBe(404);
+  });
+
+  describe('re-issue', () => {
+    it('400 on a bad prefix; 404 for a key that is not yours or was deleted', async () => {
+      const app = makeApp();
+      expect((await app.request('/api/api-keys/not-a-prefix!/reissue', { method: 'POST' })).status).toBe(400);
+      resultQueue = [{ rows: [] }];
+      expect((await app.request('/api/api-keys/abcdefghij/reissue', { method: 'POST' })).status).toBe(404);
+      const sel = calls.find((q) => q.sql.includes('FOR UPDATE'));
+      expect(sel?.sql).toContain('deleted_at IS NULL');
+      expect(sel?.params).toEqual(['abcdefghij', 'user-1']);
+      expect(calls.some((q) => q.sql.startsWith('ROLLBACK'))).toBe(true);
+    });
+
+    it('409 for a revoked or expired key, and nothing is changed', async () => {
+      const app = makeApp();
+      resultQueue = [{ rows: [KEY({ revoked_at: 'r' })] }];
+      const revoked = await app.request('/api/api-keys/abcdefghij/reissue', { method: 'POST' });
+      expect(revoked.status).toBe(409);
+      expect(((await revoked.json()) as { error: string }).error).toContain('revoked');
+      resultQueue = [{ rows: [KEY({ expires_at: new Date(Date.now() - 1000).toISOString() })] }];
+      expect((await app.request('/api/api-keys/abcdefghij/reissue', { method: 'POST' })).status).toBe(409);
+      expect(calls.some((q) => q.sql.includes('SET prefix'))).toBe(false);
+    });
+
+    it('swaps the secret on the same row under the per-user lock and returns the new plaintext once', async () => {
+      resultQueue = [
+        { rows: [KEY()] },                                                  // SELECT … FOR UPDATE
+        { rows: [{ prefix: 'abcdefghij' }] },                               // reissueApiKey: old prefix
+        { rows: [KEY({ prefix: 'newprefix0', reissued_at: 'now' })] },      // UPDATE … RETURNING
+      ];
+      const res = await makeApp().request('/api/api-keys/abcdefghij/reissue', { method: 'POST' });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { plaintext: string; key: Record<string, unknown> };
+      expect(body.plaintext).toMatch(/^ak_[A-Za-z0-9]{10}_[A-Za-z0-9_-]{32}$/);
+      expect(body.key).toMatchObject({ id: 'k-uuid', prefix: 'newprefix0' });
+      expect(body.key).not.toHaveProperty('key_hash');
+
+      const order = calls.map((q) => q.sql.trim().split(/\s+/)[0]);
+      expect(order[0]).toBe('BEGIN');
+      expect(calls[1]!.sql).toContain('pg_advisory_xact_lock');
+      expect(order[order.length - 1]).toBe('COMMIT');
+      const upd = calls.find((q) => q.sql.includes('SET prefix'));
+      // Same row; a fresh hash; only while the key is still live.
+      expect(upd!.params![0]).toBe('k-uuid');
+      expect(String(upd!.params![2])).toMatch(/^[0-9a-f]{64}$/);
+      expect(upd!.sql).toContain('revoked_at IS NULL AND deleted_at IS NULL');
+      expect(calls.some((q) => (q.params ?? []).includes(body.plaintext))).toBe(false);
+    });
+
+    it('a revoke that lands between the read and the swap wins: 409, rolled back', async () => {
+      resultQueue = [{ rows: [KEY()] }, { rows: [{ prefix: 'abcdefghij' }] }, { rows: [] }];
+      expect((await makeApp().request('/api/api-keys/abcdefghij/reissue', { method: 'POST' })).status).toBe(409);
+      expect(calls.some((q) => q.sql.startsWith('ROLLBACK'))).toBe(true);
+      expect(calls.some((q) => q.sql.startsWith('COMMIT'))).toBe(false);
+    });
+  });
+
+  it('delete: one owner-scoped UPDATE that revokes and hides; a second delete is 404', async () => {
+    const app = makeApp();
+    expect((await app.request('/api/api-keys/not-a-prefix!/delete', { method: 'POST' })).status).toBe(400);
+
+    resultQueue = [{ rows: [], rowCount: 1 }];
+    expect((await app.request('/api/api-keys/abcdefghij/delete', { method: 'POST' })).status).toBe(200);
+    const upd = calls.find((q) => q.sql.includes('deleted_at = now()'));
+    expect(upd?.sql).toContain('revoked_at = COALESCE(revoked_at, now())');
+    expect(upd?.sql).toContain('deleted_at IS NULL');
+    expect(upd?.params).toEqual(['abcdefghij', 'user-1']);
+    expect(bells).toHaveLength(0);
+
+    // Someone else's key, or already deleted: the UPDATE matches nothing.
+    resultQueue = [{ rows: [], rowCount: 0 }];
+    expect((await app.request('/api/api-keys/abcdefghij/delete', { method: 'POST' })).status).toBe(404);
+  });
+});
+
+describe('staff routes', () => {
+  it('403 for a non-staff user on every staff route; 401 with no user', async () => {
+    const app = makeApp();
+    expect((await app.request('/api/staff/api-keys/requests')).status).toBe(403);
+    expect((await app.request('/api/staff/api-keys')).status).toBe(403);
+    expect((await app.request('/api/staff/api-keys/requests/5/approve', json({}))).status).toBe(403);
+    expect((await app.request(`/api/staff/api-keys/${UUID}/revoke`, { method: 'POST' })).status).toBe(403);
+    expect((await app.request(`/api/staff/api-keys/${UUID}/scopes`, json({ scopes: GRANT }))).status).toBe(403);
+    expect((await app.request(`/api/staff/api-keys/${UUID}/usage`)).status).toBe(403);
+    expect((await makeApp({ userId: null }).request('/api/staff/api-keys/requests')).status).toBe(401);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('lists requests with the owner id + current name, defaulting to pending', async () => {
+    staff = true;
+    resultQueue = [{ rows: [REQUEST()] }, { rows: [{ n: 1 }] }];
+    const res = await makeApp({ userId: 'staff-1' }).request('/api/staff/api-keys/requests');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { requests: Array<Record<string, unknown>>; pendingCount: number };
+    expect(body.pendingCount).toBe(1);
+    expect(body.requests[0]).toMatchObject({ id: 5, userId: 'user-1', userName: 'Current Name', status: 'pending' });
+    expect(calls[0]!.params).toEqual(['pending']);
+
+    resultQueue = [{ rows: [] }, { rows: [{ n: 0 }] }];
+    await makeApp({ userId: 'staff-1' }).request('/api/staff/api-keys/requests?status=all');
+    expect(calls.find((q) => q.sql.includes('FROM api_key_requests ORDER BY'))).toBeDefined();
+  });
+
+  it('approve validates limit / expiry / note', async () => {
+    staff = true;
+    const app = makeApp({ userId: 'staff-1' });
+    expect((await app.request('/api/staff/api-keys/requests/5/approve', json({ rateLimitPerMin: 0 }))).status).toBe(400);
+    expect((await app.request('/api/staff/api-keys/requests/5/approve', json({ rateLimitPerMin: 1.5 }))).status).toBe(400);
+    expect((await app.request('/api/staff/api-keys/requests/5/approve', json({ rateLimitPerMin: 99999 }))).status).toBe(400);
+    expect((await app.request('/api/staff/api-keys/requests/5/approve', json({ expiresAt: '2001-01-01' }))).status).toBe(400);
+    expect((await app.request('/api/staff/api-keys/requests/5/approve', json({ expiresAt: 'soon' }))).status).toBe(400);
+    expect((await app.request('/api/staff/api-keys/requests/5/approve', json({ note: 'n'.repeat(501) }))).status).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('approve is an atomic pending→approved claim that stores the grant, bells the user, resolves Discord', async () => {
+    staff = true;
+    const in1y = new Date(Date.now() + 365 * 24 * 3600 * 1000);
+    resultQueue = [{ rows: [REQUEST({ status: 'approved', rate_limit_per_min: 60, review_note: 'enjoy' })] }];
+    const res = await makeApp({ userId: 'staff-1' }).request(
+      '/api/staff/api-keys/requests/5/approve',
+      json({ scopes: GRANT, rateLimitPerMin: 60, expiresAt: in1y.toISOString(), note: 'enjoy' }),
+    );
+    expect(res.status).toBe(200);
+    const upd = calls.find((q) => q.sql.includes("SET status = 'approved'"));
+    expect(upd?.sql).toContain("status = 'pending'");
+    expect(upd?.params?.[0]).toBe(5);
+    expect(upd?.params?.[1]).toBe(60);
+    expect(upd?.params?.[2]).toBeInstanceOf(Date);
+    expect(upd?.params?.[3]).toBe('enjoy');
+    expect(upd?.params?.[4]).toBe('staff-1');
+    expect(upd?.params?.[6]).toEqual(GRANT);
+    expect(bells).toHaveLength(1);
+    expect(bells[0]).toMatchObject({ userId: 'user-1', type: 'api_key_approved', link: '/#api-keys' });
+    expect(String(bells[0]!.body)).toContain('enjoy');
+    expect(discord[0]).toMatchObject({ kind: 'api_key_request', event: 'resolved', ref: '5', status: 'approved', actor: 'Staff Person' });
+    // Approval never mints.
+    expect(calls.some((q) => q.sql.includes('INSERT INTO api_keys'))).toBe(false);
+  });
+
+  it('approve loses the claim → 409 already-<status>, 404 when gone', async () => {
+    staff = true;
+    const app = makeApp({ userId: 'staff-1' });
+    resultQueue = [{ rows: [] }, { rows: [{ status: 'rejected' }] }];
+    const lost = await app.request('/api/staff/api-keys/requests/5/approve', json({ scopes: ['read'] }));
+    expect(lost.status).toBe(409);
+    expect(((await lost.json()) as { error: string }).error).toBe('already rejected');
+    resultQueue = [{ rows: [] }, { rows: [] }];
+    expect((await app.request('/api/staff/api-keys/requests/5/approve', json({ scopes: ['read'] }))).status).toBe(404);
+    expect(bells).toHaveLength(0);
+  });
+
+  it('approve must say what the key reads: scopes are required and checked; `read` alone is a deliberate legacy grant', async () => {
+    staff = true;
+    const app = makeApp({ userId: 'staff-1' });
+    const bad = [
+      undefined,
+      [],
+      ['read', 'fires:live'],
+      ['fires:live', 'summaries:live'], // a window the feed does not offer
+      ['fires:*'],
+      ['source:rfs', 'type:incidents', 'window:live'],
+    ];
+    for (const scopes of bad) {
+      const res = await app.request('/api/staff/api-keys/requests/5/approve', json({ scopes }));
+      expect(res.status, JSON.stringify(scopes)).toBe(400);
+    }
+    expect(calls).toHaveLength(0);
+    resultQueue = [{ rows: [REQUEST({ status: 'approved', scopes: ['read'] })] }];
+    expect((await app.request('/api/staff/api-keys/requests/5/approve', json({ scopes: ['read'] }))).status).toBe(200);
+    expect(calls.find((q) => q.sql.includes("SET status = 'approved'"))?.params?.[6]).toEqual(['read']);
+  });
+
+  it('reject stores the note and sends it to the user; 409 when not pending', async () => {
+    staff = true;
+    const app = makeApp({ userId: 'staff-1' });
+    resultQueue = [{ rows: [REQUEST({ status: 'rejected', review_note: 'no automated scraping' })] }];
+    const res = await app.request('/api/staff/api-keys/requests/5/reject', json({ note: 'no automated scraping' }));
+    expect(res.status).toBe(200);
+    expect(bells[0]).toMatchObject({ userId: 'user-1', type: 'api_key_rejected', body: 'no automated scraping', link: '/#api-keys' });
+    expect(discord[0]).toMatchObject({ kind: 'api_key_request', event: 'resolved', status: 'rejected' });
+
+    resultQueue = [{ rows: [] }];
+    expect((await app.request('/api/staff/api-keys/requests/5/reject', json({}))).status).toBe(409);
+  });
+
+  it('withdraw flips only an approved-and-ungenerated grant to rejected and tells the user', async () => {
+    staff = true;
+    const app = makeApp({ userId: 'staff-1' });
+    resultQueue = [{ rows: [REQUEST({ status: 'rejected', review_note: 'changed our mind' })] }];
+    const res = await app.request('/api/staff/api-keys/requests/5/withdraw', json({ note: 'changed our mind' }));
+    expect(res.status).toBe(200);
+    const upd = calls.find((q) => q.sql.includes("SET status = 'rejected'"));
+    expect(upd?.sql).toContain("status = 'approved' AND key_id IS NULL");
+    expect(bells[0]).toMatchObject({ userId: 'user-1', type: 'api_key_rejected', link: '/#api-keys' });
+    expect(String(bells[0]!.title)).toContain('withdrawn');
+    expect(discord[0]).toMatchObject({ kind: 'api_key_request', event: 'resolved', status: 'withdrawn' });
+
+    // Already generated (or pending, or gone): nothing to withdraw.
+    resultQueue = [{ rows: [] }];
+    expect((await app.request('/api/staff/api-keys/requests/5/withdraw', json({}))).status).toBe(409);
+  });
+
+  it('lists every key with owner names and no hashes', async () => {
+    staff = true;
+    resultQueue = [{ rows: [KEY(), KEY({ user_id: 'user-2', prefix: 'zzzzzzzzzz' })] }];
+    const res = await makeApp({ userId: 'staff-1' }).request('/api/staff/api-keys');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { keys: Array<Record<string, unknown>> };
+    expect(JSON.stringify(body)).not.toContain('deadbeef');
+    expect(body.keys[0]).toMatchObject({ prefix: 'abcdefghij', userId: 'user-1', userName: 'Current Name', active: true });
+    expect(body.keys[1]).toMatchObject({ userId: 'user-2', userName: null });
+  });
+
+  it('each key carries its 24h and 7-day usage by class; deleted keys stay listed for staff', async () => {
+    staff = true;
+    resultQueue = [
+      { rows: [KEY(), KEY({ id: 'k2', prefix: 'zzzzzzzzzz', deleted_at: 'd', revoked_at: 'd' })] },
+      {
+        rows: [
+          { key_id: 'k-uuid', in_day: true, cls: 'ok', unversioned: false, n: 10 },
+          { key_id: 'k-uuid', in_day: true, cls: 'notFound', unversioned: true, n: 2 },
+          { key_id: 'k-uuid', in_day: false, cls: 'ok', unversioned: true, n: 30 },
+          { key_id: 'k-uuid', in_day: false, cls: 'rateLimited', unversioned: false, n: 4 },
+        ],
+      },
+    ];
+    const res = await makeApp({ userId: 'staff-1' }).request('/api/staff/api-keys');
+    const body = (await res.json()) as { keys: Array<Record<string, unknown>> };
+    expect(body.keys[0]!.usage).toEqual({
+      h24: { requests: 12, ok: 10, notFound: 2, refused: 0, rateLimited: 0, otherClient: 0, serverError: 0 },
+      d7: { requests: 46, ok: 40, notFound: 2, refused: 0, rateLimited: 4, otherClient: 0, serverError: 0 },
+      // Of the 7 days, the requests still made on an unversioned /api/ path.
+      unversionedD7: 32,
+    });
+    // A key with no use reads as zeros, not as missing.
+    expect((body.keys[1]!.usage as { d7: { requests: number } }).d7.requests).toBe(0);
+    expect(body.keys[1]).toMatchObject({ deletedAt: 'd', active: false });
+    const agg = calls.find((q) => q.sql.includes('FROM api_key_usage_hourly'));
+    expect(agg?.params).toEqual([24, 168]);
+  });
+
+  it('a failed usage read leaves the key list up, with usage null', async () => {
+    staff = true;
+    resultQueue = [{ rows: [KEY()] }, { rows: [], error: new Error('relation does not exist') }];
+    const res = await makeApp({ userId: 'staff-1' }).request('/api/staff/api-keys');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { keys: Array<Record<string, unknown>> };
+    expect(body.keys[0]).toMatchObject({ prefix: 'abcdefghij', usage: null });
+  });
+
+  describe('one key\'s usage', () => {
+    it('400 on a non-uuid id, 404 for an unknown key', async () => {
+      staff = true;
+      const app = makeApp({ userId: 'staff-1' });
+      expect((await app.request('/api/staff/api-keys/abcdefghij/usage')).status).toBe(400);
+      expect(calls).toHaveLength(0);
+      resultQueue = [{ rows: [] }];
+      expect((await app.request(`/api/staff/api-keys/${UUID}/usage`)).status).toBe(404);
+    });
+
+    it('24h: hourly buckets, totals summed from the series, paths merged across classes', async () => {
+      staff = true;
+      const h1 = new Date('2026-10-27T01:00:00Z');
+      const h2 = new Date('2026-10-27T02:00:00Z');
+      resultQueue = [
+        { rows: [KEY({ id: UUID })] },
+        {
+          rows: [
+            { at: h1, cls: null, n: 0 },
+            { at: h2, cls: 'ok', n: 5 },
+            { at: h2, cls: 'notFound', n: 3 },
+          ],
+        },
+        {
+          rows: [
+            { path: '/api/rfs/incidents', cls: 'ok', n: 5, last_hour: h2 },
+            { path: '/api/rfs/nope', cls: 'notFound', n: 3, last_hour: h1 },
+          ],
+        },
+        { rows: [{ n: 2, unversioned: 3 }] },
+      ];
+      const res = await makeApp({ userId: 'staff-1' }).request(`/api/staff/api-keys/${UUID}/usage?window=24h`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body).toMatchObject({ window: '24h', bucket: 'hour', pathCount: 2, unversioned: 3 });
+      // Unversioned use is counted from the path as stored: /api/… but not /api/v1/….
+      expect(calls.find((q) => q.sql.includes('COUNT(DISTINCT path)'))?.sql).toContain("path !~ '^([A-Z]+ )?/api/v1/'");
+      expect(body.totals).toEqual({ requests: 8, ok: 5, notFound: 3, refused: 0, rateLimited: 0, otherClient: 0, serverError: 0 });
+      const series = body.series as Array<Record<string, unknown>>;
+      expect(series).toHaveLength(2);
+      expect(series[0]).toMatchObject({ at: h1.toISOString(), requests: 0 });
+      expect(series[1]).toMatchObject({ at: h2.toISOString(), ok: 5, notFound: 3 });
+      expect((body.paths as Array<Record<string, unknown>>)[0]).toMatchObject({ path: '/api/rfs/incidents', requests: 5, lastSeen: h2.toISOString() });
+      // Every read is scoped to this key and this window's hours.
+      const reads = calls.filter((q) => q.sql.includes('api_key_usage_hourly'));
+      expect(reads).toHaveLength(3);
+      for (const r of reads) expect(r.params).toEqual([UUID, 24]);
+    });
+
+    it('7d and 30d are Sydney days; an unknown window falls back to 24h', async () => {
+      staff = true;
+      const app = makeApp({ userId: 'staff-1' });
+      resultQueue = [{ rows: [KEY({ id: UUID })] }, { rows: [{ at: '2026-10-27', cls: 'ok', n: 1 }] }, { rows: [] }, { rows: [{ n: 0 }] }];
+      let body = (await (await app.request(`/api/staff/api-keys/${UUID}/usage?window=7d`)).json()) as Record<string, unknown>;
+      expect(body).toMatchObject({ window: '7d', bucket: 'day' });
+      expect((body.series as Array<Record<string, unknown>>)[0]).toMatchObject({ at: '2026-10-27', ok: 1 });
+      expect(calls.find((q) => q.sql.includes('generate_series'))?.sql).toContain("AT TIME ZONE 'Australia/Sydney'");
+      expect(calls.find((q) => q.sql.includes('generate_series'))?.params).toEqual([UUID, 168]);
+
+      calls.length = 0;
+      resultQueue = [{ rows: [KEY({ id: UUID })] }, { rows: [] }, { rows: [] }, { rows: [{ n: 0 }] }];
+      body = (await (await app.request(`/api/staff/api-keys/${UUID}/usage?window=1y`)).json()) as Record<string, unknown>;
+      expect(body).toMatchObject({ window: '24h', bucket: 'hour' });
+    });
+  });
+
+  describe('edit scopes', () => {
+    it('sets a live key\'s scopes, tells the owner, and drops the cached row so it bites at once', async () => {
+      staff = true;
+      const plain = 'ak_abcdefghij_' + 'S'.repeat(32);
+      const hash = createHash('sha256').update(plain).digest('hex');
+      _clearApiKeyCache();
+      // Cache the key as it is now ({read}).
+      resultQueue = [{ rows: [KEY({ id: UUID, key_hash: hash })] }];
+      expect((await resolveApiKey(plain)).ok).toBe(true);
+      calls.length = 0;
+
+      resultQueue = [{ rows: [KEY({ id: UUID, key_hash: hash, scopes: GRANT })] }];
+      const res = await makeApp({ userId: 'staff-1' }).request(`/api/staff/api-keys/${UUID}/scopes`, json({ scopes: GRANT }));
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { key: Record<string, unknown> }).key).toMatchObject({ scopes: GRANT });
+      const upd = calls.find((q) => q.sql.includes('SET scopes'));
+      expect(upd?.params).toEqual([UUID, GRANT]);
+      // Only a live key: revoked, expired and deleted keys are not edited.
+      expect(upd?.sql).toContain('revoked_at IS NULL AND deleted_at IS NULL');
+      expect(bells[0]).toMatchObject({ userId: 'user-1', type: 'api_key_scopes_changed', link: '/#api-keys', exceptUserId: 'staff-1' });
+      expect(String(bells[0]!.body)).toBe('It now reads: fires:live, warnings:history.');
+
+      // The next use reads the table again rather than the cached {read} row.
+      calls.length = 0;
+      resultQueue = [{ rows: [KEY({ id: UUID, key_hash: hash, scopes: GRANT })] }];
+      const again = await resolveApiKey(plain);
+      expect(again.ok && again.row.scopes).toEqual(GRANT);
+      expect(calls.some((q) => q.sql.includes('FROM api_keys WHERE prefix'))).toBe(true);
+    });
+
+    it('400 on a bad id or bad scopes, 404 for no such key, 409 for a dead one', async () => {
+      staff = true;
+      const app = makeApp({ userId: 'staff-1' });
+      expect((await app.request('/api/staff/api-keys/abcdefghij/scopes', json({ scopes: GRANT }))).status).toBe(400);
+      expect((await app.request(`/api/staff/api-keys/${UUID}/scopes`, json({ scopes: ['ships:history'] }))).status).toBe(400);
+      expect(calls).toHaveLength(0);
+      resultQueue = [{ rows: [] }, { rows: [] }];
+      expect((await app.request(`/api/staff/api-keys/${UUID}/scopes`, json({ scopes: GRANT }))).status).toBe(404);
+      resultQueue = [{ rows: [] }, { rows: [{ id: UUID }] }];
+      expect((await app.request(`/api/staff/api-keys/${UUID}/scopes`, json({ scopes: GRANT }))).status).toBe(409);
+      expect(bells).toHaveLength(0);
+    });
+  });
+
+  it('staff revoke is by id (a re-issue changes the prefix), works on any key and bells the owner (not themselves)', async () => {
+    staff = true;
+    const app = makeApp({ userId: 'staff-1' });
+    resultQueue = [{ rows: [{ user_id: 'user-1', name: 'home-assistant', revoked_at: null }] }, { rows: [{ prefix: 'abcdefghij' }] }];
+    expect((await app.request(`/api/staff/api-keys/${UUID}/revoke`, { method: 'POST' })).status).toBe(200);
+    const upd = calls.find((q) => q.sql.includes('SET revoked_at = now()'));
+    expect(upd?.sql).toContain('WHERE id = $1');
+    expect(upd?.params).toEqual([UUID]);
+    expect(bells[0]).toMatchObject({ userId: 'user-1', type: 'api_key_revoked', exceptUserId: 'staff-1' });
+
+    resultQueue = [{ rows: [{ user_id: 'user-1', name: 'x', revoked_at: 'r' }] }];
+    expect((await app.request(`/api/staff/api-keys/${UUID}/revoke`, { method: 'POST' })).status).toBe(409);
+    resultQueue = [{ rows: [] }];
+    expect((await app.request(`/api/staff/api-keys/${UUID}/revoke`, { method: 'POST' })).status).toBe(404);
+    // A prefix is not an id: the old prefix of a re-issued key names no key at all.
+    expect((await app.request('/api/staff/api-keys/abcdefghij/revoke', { method: 'POST' })).status).toBe(400);
+
+    // Lost race: the owner revoked it between staff's read and write → 409 and NO second bell.
+    bells.length = 0;
+    resultQueue = [{ rows: [{ user_id: 'user-1', name: 'x', revoked_at: null }] }, { rows: [] }];
+    expect((await app.request(`/api/staff/api-keys/${UUID}/revoke`, { method: 'POST' })).status).toBe(409);
+    expect(bells).toHaveLength(0);
+  });
+});

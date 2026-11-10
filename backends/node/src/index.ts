@@ -32,7 +32,7 @@ import { closePool } from './db/pool.js';
 import { runMigrations } from './db/migrate.js';
 import { createApp } from './server.js';
 import type { Server } from 'node:http';
-import { attachNodeWebSockets } from './api/node-ws.js';
+import { attachNodeWebSockets, closeNodeWebSockets } from './api/node-ws.js';
 import { liveStore } from './store/live.js';
 import { archiveWriter } from './store/archive.js';
 import {
@@ -79,6 +79,7 @@ import {
   stopRdioIncidentAlertLoop,
 } from './services/rdioIncidentAlerts.js';
 import {
+  ensureNodeEventPartitions,
   startNodeEventsPruner,
   stopNodeEventsPruner,
 } from './services/nodeEventsPruner.js';
@@ -96,10 +97,16 @@ import {
   startAdsbDailyFlush,
   stopAdsbDailyFlush,
 } from './services/nodes/adsbNodeStore.js';
+import { stopAdsbTrackArchive } from './services/adsbTrackArchive.js';
+import { startAdsbGlobeHistory, stopAdsbGlobeHistory } from './services/adsbGlobeHistory.js';
 import {
   startNodeUptimeFlush,
   stopNodeUptimeFlush,
 } from './services/nodes/nodeUptime.js';
+import {
+  startApiKeyUsageFlush,
+  stopApiKeyUsageFlush,
+} from './services/auth/apiKeyUsage.js';
 
 // Pre-flight: hydrate the live store, run migrations, register every
 // source, and start the persist + flush + poll + activity-mode loops
@@ -135,6 +142,9 @@ async function preflight(): Promise<void> {
   } catch (err) {
     log.error({ err }, 'boot: ensureArchivePartitions failed');
   }
+  // Same for the radio detail table's day partitions (migration 135), before
+  // the port binds and the node ingest routes take traffic. Never throws.
+  await ensureNodeEventPartitions();
   archiveWriter.startFlushLoop();
   startActivityMode(); // sweeper for stale heartbeats; toggles polling cadence
   startFilterCacheRefresh(); // 5-min archive-backed facet refresh for /api/data/history/filters
@@ -147,8 +157,10 @@ async function preflight(): Promise<void> {
   startNodeEventsPruner(); // hourly 30-day prune of node_radio_events / node_pager_events
   startNodeHourlyRollup(); // hourly rebuild of node_radio_hourly* from the detail table
   startAdsbDailyFlush(); // 1-min flush of ADS-B per-node daily counters
+  startAdsbGlobeHistory(); // daily gap-fill of aircraft history from adsb.lol's archive
   startNodeUptimeFlush(); // 1-min flush of per-node presence (all kinds)
-  startWhisperHealth();    // probe the faster-whisper backends rdio transcribes through
+  startApiKeyUsageFlush(); // 1-min flush of per-key request counts (api_key_usage_hourly)
+  startWhisperHealth();   // probe the faster-whisper backends rdio transcribes through
   startVideoProcessor(); // ffmpeg pass over newly uploaded Wire videos
   startWirePurge(); // purges deleted Wire posts past their 5-day recovery window
   startMemoryWatch(); // heap gauge — see services/memoryWatch.ts (post-OOM telemetry)
@@ -249,19 +261,44 @@ const server = serve(
 // Attach the node-agent + staff WebSocket endpoints to the underlying
 // http.Server. serve() (no http2 option) returns a Node http.Server at
 // runtime; its declared type is the ServerType union, so narrow it here.
-attachNodeWebSockets(server as Server);
+const httpServer = server as Server;
+attachNodeWebSockets(httpServer);
+
+/**
+ * How long in-flight HTTP requests get to finish before we stop waiting.
+ *
+ * pm2's kill-timeout is 30s and everything that matters — the ADS-B and
+ * uptime counters, the LiveStore snapshot, the archive queue — is drained
+ * AFTER this wait. So it has to be a wait we are certain ends.
+ */
+const SHUTDOWN_HTTP_GRACE_MS = 5_000;
 
 // Drain in-flight requests, close DB pool, exit cleanly. PM2 sends
 // SIGINT first (graceful) then SIGKILL after a timeout.
 async function shutdown(signal: string) {
   log.info({ signal }, 'shutdown requested');
   try {
-    // Stop accepting new connections; finish in-flight ones.
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    // Stop background loops in dependency order: pollers first (so
-    // they don't enqueue more archive rows), then activity sweeper,
-    // then drain the LiveStore + ArchiveWriter, then close the pool.
+    // Pollers first. They must not enqueue more archive rows while we drain,
+    // and this used to sit after the await below — which, in production,
+    // never returned, so they kept polling until SIGKILL.
     stopPolling();
+    // An upgraded WebSocket is an accepted connection, so server.close() waits
+    // for it: with an agent always connected, the await never completed and
+    // every drain below was skipped on every deploy. Close the sockets first,
+    // then bound the wait so the drains fit inside pm2's kill-timeout no
+    // matter what the remaining connections do.
+    closeNodeWebSockets();
+    await Promise.race([
+      new Promise<void>((resolve) => server.close(() => resolve())),
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, SHUTDOWN_HTTP_GRACE_MS).unref?.();
+      }),
+    ]);
+    // Whatever was still holding a socket at that point does not get to hold
+    // the port while the data below is written out.
+    httpServer.closeAllConnections?.();
+    // Stop the remaining background loops in dependency order: activity
+    // sweeper, then drain the LiveStore + ArchiveWriter, then close the pool.
     stopActivityMode();
     stopFilterCacheRefresh();
     stopStatsArchiver();
@@ -273,7 +310,12 @@ async function shutdown(signal: string) {
     // Awaited: writes out the partial minute of ADS-B counters rather than
     // discarding it on every restart.
     await stopAdsbDailyFlush();
+    // And the minute of aircraft positions in progress, so a deploy does not
+    // leave a hole in the history map.
+    await stopAdsbGlobeHistory();
+    await stopAdsbTrackArchive();
     await stopNodeUptimeFlush();
+    await stopApiKeyUsageFlush();
     stopWhisperHealth();
     stopVideoProcessor();
     stopMemoryWatch();

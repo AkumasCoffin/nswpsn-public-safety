@@ -146,6 +146,50 @@ function normaliseChannelName(name: string): string {
 }
 
 /**
+ * What the agent's automatic channel manager is doing with a channel, when it
+ * is doing something a viewer must be told about.
+ *
+ * Without it, a channel the manager stopped reads as a plain STOPPED, the same
+ * as one an operator stopped, and a retest reads as an ordinary start. Only
+ * those two states are carried: 'lowWatch' is the manager watching a weak
+ * channel that is still running, and its decode figure already says so.
+ */
+export interface LiveChannelManager {
+  state: 'autoStopped' | 'probing';
+  reason: string | null;
+  sinceMs: number | null;
+  nextProbeAtMs: number | null;
+  lastProbePct: number | null;
+}
+
+/**
+ * status.channelManager.channels, keyed by trimmed channel name (the agent
+ * keys on the trimmed name because SDR-Trunk channel ids change on every
+ * reload).
+ */
+function managerRows(channelManager: unknown): Map<string, LiveChannelManager> {
+  const out = new Map<string, LiveChannelManager>();
+  const chans = (channelManager as { channels?: unknown } | null)?.channels;
+  if (!chans || typeof chans !== 'object') return out;
+  const num = (v: unknown): number | null =>
+    typeof v === 'number' && Number.isFinite(v) ? v : null;
+  for (const [name, raw] of Object.entries(chans as Record<string, unknown>)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const r = raw as Record<string, unknown>;
+    const state = r['state'];
+    if (state !== 'autoStopped' && state !== 'probing') continue;
+    out.set(name.trim(), {
+      state,
+      reason: typeof r['reason'] === 'string' && r['reason'] ? r['reason'] : null,
+      sinceMs: num(r['sinceMs']),
+      nextProbeAtMs: num(r['nextProbeAtMs']),
+      lastProbePct: num(r['lastProbePct']),
+    });
+  }
+  return out;
+}
+
+/**
  * Shape one node's last-reported status into the Live view's rows. Returns
  * null when the node isn't a radio node or has reported nothing yet — callers
  * treat that as "nothing to show for this node", not an error.
@@ -217,8 +261,14 @@ export async function shapeNodeLive(
   const ownQuality = (v: unknown): unknown =>
     v === null || v === undefined || v === 0 ? null : v;
 
+  const managed = managerRows(st['channelManager']);
   for (const ch of asRows(st['channels'])) {
     const id = Number(ch['to']);
+    let manager = managed.get(String(ch['name'] ?? '').trim()) ?? null;
+    // A channel the manager stopped that is running again, outside a retest,
+    // was started by someone else (an operator, a config reload). The manager
+    // releases it on its next pass, so it is not auto-disabled any more.
+    if (manager?.state === 'autoStopped' && ch['processing'] === true) manager = null;
     channels.push({
       node: nodeId,
       nodeName,
@@ -237,6 +287,7 @@ export async function shapeNodeLive(
       talkgroup: Number.isInteger(id) ? id : null,
       talkgroupLabel: Number.isInteger(id) ? tg.labels.get(id) ?? null : null,
       agency: Number.isInteger(id) ? tg.agencies.get(id) ?? null : null,
+      manager,
     });
   }
 

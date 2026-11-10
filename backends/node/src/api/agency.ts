@@ -4,6 +4,8 @@
  * Reads (public — replaces the old static agency-extended.json):
  *   GET  /api/agency/extended        — all agencies
  *   GET  /api/agency/extended/:slug  — one agency
+ * Both are also served at /api/v1/ (server.ts mirrors them), wrapped in
+ * `data` there (api/v1/respond.ts).
  *
  * Edits (auth + role gated):
  *   POST /api/agency/changes                 — propose add/update/delete a row.
@@ -14,6 +16,8 @@
  *   POST /api/agency/changes/:id/reject       — mark rejected (no apply)
  */
 import { Hono } from 'hono';
+import { z } from 'zod';
+import { describeRoute } from 'hono-openapi';
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import {
@@ -28,25 +32,76 @@ import {
   getAgencyExtended,
   findEditableSection,
   applyRowChange,
+  type AgencyExtended,
   type RowChange,
 } from '../services/agencyData.js';
+import { fail, ok } from './v1/respond.js';
+import { assertShape, envelope, NOT_FOUND_ERROR, okJson, type SameShape } from './v1/schemas.js';
 
 export const agencyRouter = new Hono();
 
 // ── reads (public) ──────────────────────────────────────────────────────────
 
-agencyRouter.get('/api/agency/extended', async (c) => {
-  c.header('Cache-Control', 'public, max-age=60');
-  return c.json({ agencies: await getAllAgencyExtended() });
-});
+// What /api/v1/ documents (api/v1/openapi.ts). Sections are free-form: each
+// agency's tables were written by hand, and a section carries whichever of
+// these its page needs.
+const AgencyTable = z.object({ headers: z.array(z.string()), rows: z.array(z.array(z.string())) }).meta({ id: 'AgencyTable' });
+const Agency = z.object({
+  title: z.string(),
+  tag: z.string(),
+  badges: z.array(z.unknown()),
+  overview: z.array(z.unknown()),
+  sections: z.array(
+    z
+      .object({
+        type: z.string().optional(),
+        title: z.string().optional(),
+        csv: z.string().optional(),
+        table: AgencyTable.optional(),
+        groups: z
+          .array(z.object({ csv: z.string().optional(), table: AgencyTable.optional() }).catchall(z.unknown()))
+          .optional(),
+      })
+      .catchall(z.unknown()),
+  ),
+}).meta({ id: 'Agency' });
+assertShape<SameShape<z.infer<typeof Agency>, AgencyExtended>>();
+const AgencyWithSlug = Agency.extend({ slug: z.string() }).meta({ id: 'AgencyWithSlug' });
 
-agencyRouter.get('/api/agency/extended/:slug', async (c) => {
-  const slug = c.req.param('slug');
-  const agency = await getAgencyExtended(slug);
-  if (!agency) return c.json({ error: 'unknown agency' }, 404);
-  c.header('Cache-Control', 'public, max-age=60');
-  return c.json({ slug, ...agency });
-});
+agencyRouter.get(
+  '/api/agency/extended',
+  describeRoute({
+    operationId: 'getAgencies',
+    tags: ['Reference'],
+    summary: 'Agency reference tables',
+    description: "Reference tables for each agency on the site's agency pages, keyed by the agency's slug.",
+    responses: okJson(envelope(z.object({ agencies: z.record(z.string(), Agency) })), 'Every agency'),
+  }),
+  async (c) => {
+    c.header('Cache-Control', 'public, max-age=60');
+    return ok(c, { agencies: await getAllAgencyExtended() });
+  },
+);
+
+agencyRouter.get(
+  '/api/agency/extended/:slug',
+  describeRoute({
+    operationId: 'getAgency',
+    tags: ['Reference'],
+    summary: "One agency's reference tables",
+    responses: {
+      ...okJson(envelope(AgencyWithSlug), 'The agency'),
+      ...NOT_FOUND_ERROR,
+    },
+  }),
+  async (c) => {
+    const slug = c.req.param('slug');
+    const agency = await getAgencyExtended(slug);
+    if (!agency) return fail(c, 404, 'not_found', 'No agency by that slug.', { error: 'unknown agency' });
+    c.header('Cache-Control', 'public, max-age=60');
+    return ok(c, { slug, ...agency } satisfies z.infer<typeof AgencyWithSlug>);
+  },
+);
 
 // ── row edits ───────────────────────────────────────────────────────────────
 

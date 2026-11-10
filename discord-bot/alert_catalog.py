@@ -55,7 +55,23 @@ def _load() -> Dict[str, Any]:
         if t['provider'] not in providers:
             raise ValueError(
                 'alert type %s names unknown provider %s' % (t['key'], t['provider']))
+        if t.get('state') is not None and t['state'] not in STATE_CODES:
+            raise ValueError(
+                'alert type %s names unknown state %s' % (t['key'], t['state']))
     return cat
+
+
+# The states a preset's States filter can name (filters.states), as the
+# dashboard stores them. Same list and order as the backend's AU_STATES.
+STATE_CODES = ('NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'NT', 'ACT')
+
+# Full names, for records that write their state out (shark reports carry the
+# feed's own text).
+_STATE_NAMES = {
+    'new south wales': 'NSW', 'victoria': 'VIC', 'queensland': 'QLD',
+    'south australia': 'SA', 'western australia': 'WA', 'tasmania': 'TAS',
+    'northern territory': 'NT', 'australian capital territory': 'ACT',
+}
 
 
 CATALOG: Dict[str, Any] = _load()
@@ -178,12 +194,66 @@ def icon(key: str) -> str:
     return t.get('icon', '') if t else ''
 
 
+def home_state(key: str) -> Optional[str]:
+    """The one state every record of this type is in, or None for a type whose
+    records span states (BOM, FIRMS, shark reports, pager, The Wire)."""
+    t = type_def(key)
+    return t.get('state') if t else None
+
+
+def state_code(value: Any) -> Optional[str]:
+    """A state as a code (NSW, VIC, …) from a code or a full name, else None."""
+    s = str(value or '').strip()
+    if not s:
+        return None
+    if s.upper() in STATE_CODES:
+        return s.upper()
+    return _STATE_NAMES.get(s.lower())
+
+
+def alert_state(key: str, item: Any) -> Optional[str]:
+    """Which state an alert is in, or None when that cannot be known.
+
+    The record's own `state` first — properties.state on a GeoJSON feature
+    (every road record carries one, Live Traffic NSW's included), a top-level
+    state on a flat record — then the type's home state from the catalog.
+    """
+    if isinstance(item, dict):
+        props = item.get('properties')
+        if isinstance(props, dict):
+            code = state_code(props.get('state'))
+            if code:
+                return code
+        code = state_code(item.get('state'))
+        if code:
+            return code
+    return home_state(key)
+
+
+def passes_states(states: Any, key: str, item: Any) -> bool:
+    """The States filter: True when the alert is in one of `states`.
+
+    An empty or missing list is no filter. An alert whose state cannot be
+    known passes — the catalog's rule for every filter is never to drop an
+    alert over missing metadata.
+    """
+    if not states or not isinstance(states, (list, tuple)):
+        return True
+    wanted = {state_code(s) for s in states} - {None}
+    if not wanted:
+        return True
+    st = alert_state(key, item)
+    return st is None or st in wanted
+
+
 def general_picker_types() -> Dict[str, str]:
     """Types offered in the generic setup picker and by "Enable All".
 
     Radio summary opts out via generalPicker:false — it has its own setup flow.
     `soon` types are excluded for the same reason the dashboard excludes them:
-    The Wire has not launched, so it must not be enableable yet.
+    a type that is not live yet must not be enableable. No type carries the
+    flag today (The Wire's two dropped it when The Wire went public); the
+    mechanism stays for the next feed that ships ahead of its backend.
     """
     return {
         t['key']: t['botLabel']
@@ -200,11 +270,12 @@ def providers_with_types(include_soon: bool = False,
                          general_only: bool = True) -> List[Dict[str, Any]]:
     """Providers that have at least one selectable type, in catalog order.
 
-    The defaults suit the SUBSCRIPTION picker: no `soon` types (The Wire has
-    not launched) and no generalPicker:false types (radio summary has its own
-    setup flow). The roles picker passes both off — assigning a ping role to a
-    type is not the same as subscribing to it, and roles were assignable for
-    radio summary and the Wire types before this was grouped by provider.
+    The defaults suit the SUBSCRIPTION picker: no `soon` types (none today —
+    see general_picker_types) and no generalPicker:false types (radio summary
+    has its own setup flow). The roles picker passes both off — assigning a
+    ping role to a type is not the same as subscribing to it, and roles were
+    assignable for radio summary and the Wire types before this was grouped by
+    provider.
     """
     out = []
     for p in PROVIDERS:
@@ -263,12 +334,23 @@ def matches(item: Any, type_key: str) -> bool:
     return True
 
 
+def _at(data: Any, path: str) -> Any:
+    """The value at a dotted path ('data.warnings'), or None where it isn't."""
+    for key in path.split('.'):
+        if not isinstance(data, dict):
+            return None
+        data = data.get(key)
+    return data
+
+
 def items_from(data: Any, type_key: str) -> List[Any]:
     """Pull this type's records out of its endpoint's response body.
 
-    itemsPath names the wrapping key ('features', 'warnings', 'outages'), is ''
-    for a bare list, or a list of candidate keys where upstream is inconsistent
-    about capitalisation. The discriminator then narrows a shared feed.
+    itemsPath is a dotted path to the list ('features', 'data.warnings' — a
+    feed on /api/v1/ that is not GeoJSON comes wrapped in {data: ...}), is ''
+    for a bare list, or a list of candidate paths where upstream is
+    inconsistent about capitalisation. The discriminator then narrows a
+    shared feed.
     """
     t = type_def(type_key)
     if not t:
@@ -280,11 +362,12 @@ def items_from(data: Any, type_key: str) -> List[Any]:
     elif isinstance(path, list):
         items = []
         for candidate in path:
-            if isinstance(data, dict) and isinstance(data.get(candidate), list):
-                items = data[candidate]
+            found = _at(data, candidate)
+            if isinstance(found, list):
+                items = found
                 break
     else:
-        items = data.get(path) if isinstance(data, dict) else None
+        items = _at(data, path)
         if not isinstance(items, list):
             items = []
 

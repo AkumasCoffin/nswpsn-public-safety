@@ -256,6 +256,56 @@ func (c *Client) SurveyImport(extra []configapply.ChannelPlan, silenceOwn bool) 
 	return ierr
 }
 
+// BootImport re-imports the last-applied config into a freshly-launched
+// sdrtrunk-vce, under the SAME lock a pushed apply takes. It reports whether
+// the import actually ran.
+//
+// The lock is the whole point. The backend pushes config straight after hello
+// whenever the node's applied version differs from its own — exactly the boots
+// where this import matters — so there were two writers to /config/import and
+// the last one to land won. When that was the boot import, sdrtrunk ran the OLD
+// channel set while the agent had already persisted the new payload, recorded
+// its version and acked configApplied: the backend saw a node in sync and never
+// pushed again, so a channel the operator had just disabled kept decoding and a
+// new one stayed missing until the next edit or restart.
+//
+// An apply that has already completed is by definition newer than anything on
+// disk, so the import is SKIPPED rather than ordered behind it. The payload is
+// read here, with the lock held, for the same reason: a push that landed during
+// the wait for the control server has already persisted its own.
+func (c *Client) BootImport() (bool, error) {
+	c.applyMu.Lock()
+	defer c.applyMu.Unlock()
+
+	if !c.lastApplyAt.IsZero() {
+		return false, nil
+	}
+	raw, err := os.ReadFile(c.cfg.AppliedConfigPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil // nothing applied yet — vce runs its own database
+		}
+		return false, err
+	}
+	var payload configapply.ConfigPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return false, fmt.Errorf("last-applied config unreadable: %w", err)
+	}
+	if ierr := configapply.ImportOnBoot(payload, configapply.Deps{
+		DataDir:         c.cfg.DataDir,
+		PresetsDir:      c.cfg.PresetsDir,
+		SDRTrunkAppRoot: c.cfg.SDRTrunkAppRoot,
+		SDR:             c.sdr,
+	}); ierr != nil {
+		// Deliberately NOT stamped on failure: nothing was restarted, so the
+		// channel manager has nothing to quiesce for, and a backend re-push of
+		// this same version must not be dropped by the burst-dedup window.
+		return true, ierr
+	}
+	c.lastApplyAt = time.Now()
+	return true, nil
+}
+
 // setChanPolicy derives the channel manager's policy from a parsed configPush.
 func (c *Client) setChanPolicy(p configapply.ConfigPayload) {
 	pol := chanmgr.Policy{}
@@ -913,12 +963,13 @@ func (c *Client) handleCmd(conn *websocket.Conn, env *protocol.Envelope) {
 		c.reply(conn, env.ID, protocol.TypeCmdResult, protocol.CmdResult{OK: true, Message: "restarting " + a.Name})
 
 	case "rebootAgent":
-		log.Printf("wsclient: rebootAgent requested — exiting for service manager to relaunch")
+		log.Printf("wsclient: rebootAgent requested")
 		c.reply(conn, env.ID, protocol.TypeCmdResult, protocol.CmdResult{OK: true, Message: "rebooting agent"})
-		// Give the reply a moment to flush, then exit cleanly.
+		// Give the reply a moment to flush, then exit — via update.RestartAgent,
+		// which is what actually brings the service back on each platform.
 		go func() {
 			time.Sleep(500 * time.Millisecond)
-			os.Exit(0)
+			update.RestartAgent("rebootAgent requested by staff", 0)
 		}()
 
 	case "tunerSet":
@@ -1376,16 +1427,16 @@ func (c *Client) runUpdateCheck(reason string) (string, bool) {
 	// Restart the agent so main() re-resolves the new version-pinned launch path
 	// and KillStale reaps the stale JVM (a plain sup.Restart would relaunch the
 	// OLD captured path). Skip if the agent self-update above already claimed the
-	// restart (it will re-exec and re-resolve everything anyway). Under a service
-	// manager (systemd/kardianos — how real nodes run) os.Exit(0) triggers a
-	// relaunch; the same mechanism rebootAgent uses.
+	// restart (it will re-exec and re-resolve everything anyway).
+	// update.RestartAgent is the platform-correct way out — the same one
+	// rebootAgent uses.
 	if componentChanged {
 		setStage("installing", nil)
 		if c.swapScheduled.CompareAndSwap(false, true) {
 			log.Printf("wsclient: update(%s): restarting agent to launch updated component(s)", reason)
 			go func() {
 				time.Sleep(1 * time.Second) // let the cmd-ack / summary flush first
-				os.Exit(0)
+				update.RestartAgent("updated component(s) need a fresh launch path", 0)
 			}()
 		} else {
 			log.Printf("wsclient: update(%s): restart already scheduled (agent self-update); component will run after it", reason)

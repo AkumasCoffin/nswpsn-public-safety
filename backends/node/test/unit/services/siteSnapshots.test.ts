@@ -166,11 +166,17 @@ async function setupApp() {
 /** Route the /site handler's queries by SQL fragment. `metaRow` = the
  *  node_site_snapshots row (or undefined for the empty state). */
 function armSiteRoute(metaRow: Record<string, unknown> | undefined) {
-  queryMock.mockImplementation((sql: string) => {
+  // Async, as pg's query is: the handler holds the meta query and awaits it
+  // after the rest.
+  queryMock.mockImplementation(async (sql: string) => {
+    // The fleet-wide drill-down reads the rollup seam once, first.
+    if (sql.includes('FROM node_rollup_state')) {
+      return { rows: [{ edge: new Date('2026-10-14T06:00:00.000Z') }] };
+    }
     if (sql.includes('FROM node_site_snapshots')) {
       return { rows: metaRow ? [metaRow] : [] };
     }
-    // scopedRadioDetail totals.
+    // The drill-down totals.
     if (sql.includes('AS talkgroups')) {
       return { rows: [{ calls: 3, logical: 2, enc: 1, talkgroups: 2, radios: 2, sites: 1 }] };
     }

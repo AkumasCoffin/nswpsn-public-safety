@@ -11,7 +11,7 @@ import hashlib
 import logging
 import threading
 from typing import Optional, List, Dict, Any
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import alert_catalog
 
 # Defensive: load .env here too so this module can be imported standalone
@@ -69,6 +69,26 @@ _pool_lock = threading.Lock()
 # strings / arrays-of-strings / arrays-of-objects-of-strings — no floats —
 # so there is no number-formatting drift between the languages.
 
+def _seen_before(stamp: Any, cutoff: datetime) -> bool:
+    """Whether a stored seen_alerts timestamp is older than `cutoff`.
+
+    Values are ISO strings, written in UTC by mark_*_seen; older rows came
+    from a column default with no offset. A value that will not parse counts
+    as old, so it is refreshed rather than left to expire under an item that
+    is still in its feed.
+    """
+    if isinstance(stamp, datetime):
+        t = stamp
+    else:
+        try:
+            t = datetime.fromisoformat(str(stamp))
+        except (TypeError, ValueError):
+            return True
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return t < cutoff
+
+
 def _stable_json(value: Any) -> str:
     """Deterministic serializer matching JS stableJson in botActionSign.ts.
 
@@ -117,6 +137,15 @@ def sign_bot_action(secret: str, action: str, requested_by: str, params: Any) ->
     ).hexdigest()
 
 
+# A signature is a hex SHA-256 digest and nothing else. hmac.compare_digest
+# raises TypeError on a str holding any non-ASCII character, and that TypeError
+# would come out of the drain loop — which discord.ext.tasks does not retry —
+# so one row with a stray non-ASCII sig would stop every admin action draining
+# until a restart, then do it again on the next pass. Shape is checked first,
+# and a wrong shape is a rejection rather than an exception.
+_SIG_RE = re.compile(r'^[0-9a-fA-F]{64}$')
+
+
 def verify_bot_action_sig(
     secret: str,
     action: str,
@@ -126,10 +155,11 @@ def verify_bot_action_sig(
 ) -> bool:
     """Constant-time verify a bot-action row's signature.
 
-    Returns False when sig is missing/None or does not match — the caller
-    must refuse to execute the action in that case.
+    Returns False when sig is missing/None, is not a 64-char hex digest, or
+    does not match — the caller must refuse to execute the action in that
+    case.
     """
-    if not sig:
+    if not sig or not isinstance(sig, str) or not _SIG_RE.match(sig):
         return False
     expected = sign_bot_action(secret, action, requested_by, params)
     return hmac.compare_digest(expected, sig)
@@ -210,6 +240,10 @@ class Database:
     def __init__(self, db_path: str = None):
         self.db_path = db_path or DB_PATH
         self._pool = None
+        # Last (alert_type, preset ids) reported as unscoped, so the notice in
+        # get_presets_for_alert_type is logged on change rather than every
+        # poll cycle.
+        self._scoped_only_notice = None
 
     def _get_pool(self):
         """Lazily create the thread-safe Postgres connection pool. Lazy so the
@@ -410,6 +444,47 @@ class Database:
                     )
                 ''')
 
+                # Bug reports and suggestions. Per kind, the INTAKE channel
+                # (messages posted there are filed as reports; the bot keeps
+                # a how-to there, notice_message_id) and the public BOARD
+                # channel (every report is posted there with its status).
+                # Both are chosen on the staff page and pushed here by the
+                # feedback_channels action — the bot never reads the
+                # backend's settings.
+                c.execute('''
+                    CREATE TABLE IF NOT EXISTS feedback_channels (
+                        kind              TEXT PRIMARY KEY,
+                        guild_id          BIGINT,
+                        intake_channel_id BIGINT,
+                        notice_message_id BIGINT,
+                        board_channel_id  BIGINT,
+                        updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )
+                ''')
+                # Which board message is which report, so a status change
+                # replies to and edits the right post. Keyed on the backend's
+                # feedback id.
+                c.execute('''
+                    CREATE TABLE IF NOT EXISTS feedback_board_posts (
+                        feedback_id INTEGER PRIMARY KEY,
+                        kind        TEXT NOT NULL,
+                        channel_id  BIGINT NOT NULL,
+                        message_id  BIGINT NOT NULL,
+                        created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )
+                ''')
+                # The bot's own replies under a board post (status changes),
+                # so removing a report takes them down with the post.
+                c.execute('''
+                    CREATE TABLE IF NOT EXISTS feedback_board_replies (
+                        message_id  BIGINT PRIMARY KEY,
+                        feedback_id INTEGER NOT NULL,
+                        channel_id  BIGINT NOT NULL,
+                        created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )
+                ''')
+                c.execute('CREATE INDEX IF NOT EXISTS idx_feedback_board_replies_fb ON feedback_board_replies(feedback_id)')
+
                 # Live-DB migration for the per-preset filters column.
                 c.execute("ALTER TABLE alert_presets ADD COLUMN IF NOT EXISTS filters JSONB NOT NULL DEFAULT '{}'::jsonb")
                 # Live-DB migration: HMAC signature column for bot-action rows.
@@ -454,6 +529,19 @@ class Database:
                     )
                 ''')
         
+            # last_seen: when the item was last confirmed still in its feed.
+            # Retention runs on it, not on first_seen — see filter_unseen_alerts.
+            try:
+                if USE_POSTGRES:
+                    c.execute('ALTER TABLE seen_alerts ADD COLUMN IF NOT EXISTS last_seen TEXT')
+                else:
+                    cols = [row[1] for row in c.execute('PRAGMA table_info(seen_alerts)').fetchall()]
+                    if 'last_seen' not in cols:
+                        c.execute('ALTER TABLE seen_alerts ADD COLUMN last_seen TEXT')
+            except Exception as e:
+                logger.warning(f"seen_alerts.last_seen not added: {e}")
+                if USE_POSTGRES:
+                    conn.rollback()
             c.execute('CREATE INDEX IF NOT EXISTS idx_seen_alerts_type ON seen_alerts(alert_type)')
             c.execute('CREATE INDEX IF NOT EXISTS idx_seen_pager_hash ON seen_pager(message_hash)')
             c.execute('CREATE INDEX IF NOT EXISTS idx_incident_messages_guid ON incident_messages(incident_guid)')
@@ -600,6 +688,57 @@ class Database:
         logger.debug(f"list_all_presets -> {len(rows)} rows")
         return [dict(row) for row in rows]
 
+    # Alert types that a subscription must also SCOPE to be honoured.
+    #
+    # FIRMS is a satellite hotspot feed, not an incident feed: on 2026-10-12
+    # one poll queued 2,577 hotspots for a single channel, 9,990 fired inside
+    # the hour, the send queue filled and 1,996 messages were dropped, with
+    # every other channel's alerts delayed behind the backlog. The two presets
+    # responsible had swept `firms` in through a "select everything" type list
+    # and carried no filters at all; the presets that were fine each had a
+    # polygon geofilter holding the volume down to a region.
+    #
+    # So an unscoped hotspot subscription is not honoured. Enforced here, at
+    # the one point where a subscription is resolved, for two reasons: the
+    # poller asks the same question before it fetches, so FIRMS stops being
+    # fetched and clustered at all once nobody is left subscribed; and the
+    # rows that already name `firms` stop receiving it with no operator having
+    # to re-save them. The other half of the rule — that a catch-all must not
+    # choose the type in the first place — lives in bot.py's
+    # _OPT_IN_ONLY_TYPES.
+    # Shark reports are here on the same principle, before rather than after
+    # an incident: a national feed of coastal events where a channel almost
+    # always cares about one stretch of coast. Unscoped it is ~25 a day of
+    # mostly-elsewhere; scoped to a region it is the handful that matter.
+    _SCOPED_ONLY_ALERT_TYPES = {'firms', 'shark_report'}
+
+    @staticmethod
+    def preset_has_geoscope(preset: Dict[str, Any]) -> bool:
+        """Does this preset confine itself to a region?
+
+        Reads the same `filters` shapes the dispatcher's geofilter gate does,
+        including the legacy un-wrapped `bbox` older presets still carry.
+        """
+        f = preset.get('filters') if isinstance(preset, dict) else None
+        if not isinstance(f, dict):
+            return False
+        return isinstance(f.get('geofilter'), dict) or isinstance(f.get('bbox'), dict)
+
+    @classmethod
+    def subscription_is_honoured(cls, preset: Dict[str, Any],
+                                 alert_type: str) -> bool:
+        """Will this preset actually receive this alert type?
+
+        True for everything except a _SCOPED_ONLY_ALERT_TYPES subscription
+        with no region on the preset. /setup asks this as well as the
+        dispatcher, so a subscription that is being refused isn't displayed as
+        a healthy row.
+        """
+        canon = alert_catalog.canonical(alert_type) or alert_type
+        if canon in cls._SCOPED_ONLY_ALERT_TYPES:
+            return cls.preset_has_geoscope(preset)
+        return True
+
     def get_presets_for_alert_type(self, alert_type: str) -> List[Dict[str, Any]]:
         """All presets subscribed to alert_type. Mute state NOT applied.
 
@@ -610,6 +749,9 @@ class Database:
 
         Overlap (&&) rather than contains (@>) so one query covers all
         spellings; the GIN index on alert_types serves both.
+
+        A type in _SCOPED_ONLY_ALERT_TYPES additionally needs the preset to
+        name a region — see the comment there.
         """
         self._require_postgres()
         keys = alert_catalog.accepted_keys(alert_type)
@@ -624,7 +766,32 @@ class Database:
         finally:
             conn.close()
         logger.debug(f"get_presets_for_alert_type {keys!r} -> {len(rows)} rows")
-        return [dict(row) for row in rows]
+        presets = [dict(row) for row in rows]
+
+        canon = alert_catalog.canonical(alert_type) or alert_type
+        if canon in self._SCOPED_ONLY_ALERT_TYPES:
+            scoped: List[Dict[str, Any]] = []
+            dropped: List[Any] = []
+            for p in presets:
+                if self.subscription_is_honoured(p, canon):
+                    scoped.append(p)
+                else:
+                    dropped.append(p['id'])
+            if dropped:
+                # Said once per change of the offending set, not once a
+                # minute: the poll asks this question every cycle.
+                note = (canon, tuple(sorted(dropped)))
+                if note != self._scoped_only_notice:
+                    self._scoped_only_notice = note
+                    logger.info(
+                        "%s: ignoring %d subscription(s) with no region — "
+                        "preset id(s) %s. A hotspot subscription must name a "
+                        "geofilter; add one on the dashboard or drop the type.",
+                        canon, len(dropped),
+                        ', '.join(str(i) for i in sorted(dropped)),
+                    )
+            presets = scoped
+        return presets
 
     def get_presets_for_pager(self) -> List[Dict[str, Any]]:
         """All presets with pager_enabled = TRUE."""
@@ -1085,24 +1252,56 @@ class Database:
         finally:
             conn.close()
 
+    # Pairs per query in filter_unseen_alerts. Postgres nests a row IN list one
+    # OR deeper per pair, and a FIRMS feed of ~10,000 hotspots overflowed its
+    # 2MB stack ("stack depth limit exceeded"): every alert cycle failed until
+    # the feed shrank. 4,000 pairs still pass there; SQLite allows 999 parameters.
+    UNSEEN_QUERY_PAIRS = 400
+
     def filter_unseen_alerts(self, alerts: List[tuple]) -> List[tuple]:
         """Given a list of (alert_type, alert_id) tuples, return only those not yet seen.
-        Uses a single DB query instead of one per alert."""
+        One query per UNSEEN_QUERY_PAIRS pairs instead of one per alert.
+
+        Also confirms the ones already seen as still present: their last_seen
+        moves to now, at most once a day each. Retention (cleanup_old_seen)
+        runs on last_seen, so an id is forgotten only after it has been out of
+        its feed for the retention window. Pruned on first_seen, a roadwork
+        listed for months was forgotten 7 days after it first appeared and
+        alerted again as new — and one that drops out of its feed outside its
+        working hours and comes back each night would have re-alerted weekly."""
         if not alerts:
             return []
+        seen = set()
+        stale = []
+        now = datetime.now(timezone.utc)
+        refresh_before = now - timedelta(days=1)
         conn = self._connect()
         try:
             c = conn.cursor()
-            if USE_POSTGRES:
-                # Build a VALUES list for a single query
-                values_str = ','.join(c.mogrify('(%s,%s)', (at, ai)).decode() for at, ai in alerts)
-                c.execute(f'SELECT alert_type, alert_id FROM seen_alerts WHERE (alert_type, alert_id) IN ({values_str})')
-            else:
-                placeholders = ','.join(['(?,?)'] * len(alerts))
-                flat = [v for pair in alerts for v in pair]
-                c.execute(f'SELECT alert_type, alert_id FROM seen_alerts WHERE (alert_type, alert_id) IN ({placeholders})', flat)
-            seen = {(row[0] if isinstance(row, tuple) else row['alert_type'],
-                     row[1] if isinstance(row, tuple) else row['alert_id']) for row in c.fetchall()}
+            for start in range(0, len(alerts), self.UNSEEN_QUERY_PAIRS):
+                part = alerts[start:start + self.UNSEEN_QUERY_PAIRS]
+                if USE_POSTGRES:
+                    values_str = ','.join(c.mogrify('(%s,%s)', (at, ai)).decode() for at, ai in part)
+                    c.execute(f'SELECT alert_type, alert_id, COALESCE(last_seen, first_seen) FROM seen_alerts WHERE (alert_type, alert_id) IN ({values_str})')
+                else:
+                    placeholders = ','.join(['(?,?)'] * len(part))
+                    flat = [v for pair in part for v in pair]
+                    c.execute(f'SELECT alert_type, alert_id, COALESCE(last_seen, first_seen) FROM seen_alerts WHERE (alert_type, alert_id) IN ({placeholders})', flat)
+                for row in c.fetchall():
+                    # RealDictRow on Postgres (values in SELECT order), Row on SQLite.
+                    at, ai, confirmed = list(row.values()) if hasattr(row, 'values') else list(row)
+                    seen.add((at, ai))
+                    if _seen_before(confirmed, refresh_before):
+                        stale.append((at, ai))
+            if stale:
+                stamp = now.isoformat()
+                if USE_POSTGRES:
+                    c.executemany('UPDATE seen_alerts SET last_seen = %s WHERE alert_type = %s AND alert_id = %s',
+                                  [(stamp, at, ai) for at, ai in stale])
+                else:
+                    c.executemany('UPDATE seen_alerts SET last_seen = ? WHERE alert_type = ? AND alert_id = ?',
+                                  [(stamp, at, ai) for at, ai in stale])
+                conn.commit()
         finally:
             conn.close()
         return [(at, ai) for at, ai in alerts if (at, ai) not in seen]
@@ -1177,10 +1376,13 @@ class Database:
                 # by mark_*_seen is honoured regardless of the DB session
                 # timezone — comparing a naive timestamp against NOW() would
                 # silently re-introduce the offset skew this fix removes.
-                c.execute("DELETE FROM seen_alerts WHERE (first_seen::timestamptz) < NOW() - INTERVAL '1 day' * %s", (days,))
+                # last_seen, not first_seen: forget an alert once it has been
+                # out of its feed for `days`, not `days` after it appeared —
+                # see filter_unseen_alerts.
+                c.execute("DELETE FROM seen_alerts WHERE (COALESCE(last_seen, first_seen)::timestamptz) < NOW() - INTERVAL '1 day' * %s", (days,))
                 c.execute("DELETE FROM seen_pager WHERE (first_seen::timestamptz) < NOW() - INTERVAL '1 day' * %s", (days,))
             else:
-                c.execute("DELETE FROM seen_alerts WHERE date(first_seen) < date(?, '-' || ? || ' days')", (cutoff_str, days))
+                c.execute("DELETE FROM seen_alerts WHERE date(COALESCE(last_seen, first_seen)) < date(?, '-' || ? || ' days')", (cutoff_str, days))
                 c.execute("DELETE FROM seen_pager WHERE date(first_seen) < date(?, '-' || ? || ' days')", (cutoff_str, days))
 
             conn.commit()
@@ -1334,6 +1536,121 @@ class Database:
             conn.commit()
         finally:
             conn.close()
+
+    # ==================== BUG REPORTS / SUGGESTIONS ====================
+
+    def get_feedback_channels(self):
+        """Every kind's channel row (bot.py loads these at startup)."""
+        self._require_postgres()
+        conn = self._connect()
+        try:
+            c = conn.cursor()
+            c.execute(
+                'SELECT kind, guild_id, intake_channel_id, notice_message_id, board_channel_id FROM feedback_channels'
+            )
+            rows = c.fetchall()
+        finally:
+            conn.close()
+        return [dict(r) for r in rows]
+
+    def set_feedback_channels(self, kind: str, guild_id: int, intake_channel_id: int,
+                              board_channel_id: int, notice_message_id: int):
+        """Replace one kind's row. Zero for a channel means none."""
+        self._require_postgres()
+        conn = self._connect()
+        try:
+            c = conn.cursor()
+            c.execute(
+                '''INSERT INTO feedback_channels (kind, guild_id, intake_channel_id, board_channel_id, notice_message_id)
+                   VALUES (%s, %s, %s, %s, %s)
+                   ON CONFLICT (kind) DO UPDATE
+                     SET guild_id = EXCLUDED.guild_id,
+                         intake_channel_id = EXCLUDED.intake_channel_id,
+                         board_channel_id = EXCLUDED.board_channel_id,
+                         notice_message_id = EXCLUDED.notice_message_id,
+                         updated_at = now()''',
+                (kind, int(guild_id or 0) or None, int(intake_channel_id or 0) or None,
+                 int(board_channel_id or 0) or None, int(notice_message_id or 0) or None),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def record_feedback_board_post(self, feedback_id: int, kind: str, channel_id: int, message_id: int):
+        """Remember the board message for a report. Upserts, as record_staff_message does."""
+        self._require_postgres()
+        conn = self._connect()
+        try:
+            c = conn.cursor()
+            c.execute(
+                '''INSERT INTO feedback_board_posts (feedback_id, kind, channel_id, message_id)
+                   VALUES (%s, %s, %s, %s)
+                   ON CONFLICT (feedback_id) DO UPDATE
+                     SET kind = EXCLUDED.kind,
+                         channel_id = EXCLUDED.channel_id,
+                         message_id = EXCLUDED.message_id,
+                         created_at = now()''',
+                (int(feedback_id), kind, int(channel_id), int(message_id)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_feedback_board_post(self, feedback_id: int):
+        """The board message for this report, or None."""
+        self._require_postgres()
+        conn = self._connect()
+        try:
+            c = conn.cursor()
+            c.execute(
+                'SELECT kind, channel_id, message_id FROM feedback_board_posts WHERE feedback_id = %s',
+                (int(feedback_id),),
+            )
+            row = c.fetchone()
+        finally:
+            conn.close()
+        return dict(row) if row else None
+
+    def delete_feedback_board_post(self, feedback_id: int):
+        """Forget a report's board post and the replies under it."""
+        self._require_postgres()
+        conn = self._connect()
+        try:
+            c = conn.cursor()
+            c.execute('DELETE FROM feedback_board_replies WHERE feedback_id = %s', (int(feedback_id),))
+            c.execute('DELETE FROM feedback_board_posts WHERE feedback_id = %s', (int(feedback_id),))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def record_feedback_board_reply(self, feedback_id: int, channel_id: int, message_id: int):
+        self._require_postgres()
+        conn = self._connect()
+        try:
+            c = conn.cursor()
+            c.execute(
+                '''INSERT INTO feedback_board_replies (message_id, feedback_id, channel_id)
+                   VALUES (%s, %s, %s) ON CONFLICT (message_id) DO NOTHING''',
+                (int(message_id), int(feedback_id), int(channel_id)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_feedback_board_replies(self, feedback_id: int):
+        """The replies the bot posted under this report's board post."""
+        self._require_postgres()
+        conn = self._connect()
+        try:
+            c = conn.cursor()
+            c.execute(
+                'SELECT channel_id, message_id FROM feedback_board_replies WHERE feedback_id = %s ORDER BY message_id',
+                (int(feedback_id),),
+            )
+            rows = c.fetchall()
+        finally:
+            conn.close()
+        return [dict(r) for r in rows]
 
     def cleanup_old_incident_messages(self, days: int = 14):
         conn = self._connect()

@@ -17,6 +17,11 @@
  *
  * Cursor pagination is the default path. Offset is honoured for
  * legacy callers but capped at MAX_OFFSET=10_000.
+ *
+ * On /api/v1/ these are /api/v1/history, /history/filters and
+ * /history/incident/… (lib/apiVersion.ts renames them); /sources and /stats
+ * are not versioned. ?feed= names feeds of the key table instead of archived
+ * sources: feed=fires is every fire service's source.
  */
 import { Hono } from 'hono';
 import { AU_STATES } from '../lib/stateMask.js';
@@ -47,8 +52,52 @@ import {
   sydneyUnixFromNaive,
   formatSydneyNaive,
 } from '../lib/sydneyTime.js';
+import type { Context } from 'hono';
+import { z } from 'zod';
+import { describeRoute, resolver } from 'hono-openapi';
+import { HISTORY_SOURCES, historySourcesFor, scoped } from '../services/auth/apiKeyScopes.js';
+import type { FilterFacets } from '../store/filterCache.js';
+import { fail, isV1, ok } from './v1/respond.js';
+import {
+  assertShape,
+  envelope,
+  ErrorBody,
+  GATED_ERRORS,
+  okJson,
+  queryValidator,
+  type SameShape,
+} from './v1/schemas.js';
 
 export const dataHistoryRouter = new Hono();
+
+// What a scoped API key needs to read stored history (services/auth/
+// apiKeyScopes.ts). It spans feeds: a key holding the history cell of any
+// feed (`fires:history`, `pager:history`, …) gets in, and is answered only
+// from the archived sources of the feeds whose history it holds
+// (historySourcesFor). /sources and /stats — counts across every source —
+// declare nothing, so no key reaches them; they are not on /api/v1/.
+const SCOPE_HISTORY = scoped({ feed: '*', window: 'history' });
+
+/**
+ * The archived sources a request may read: those its key's scopes cover, or
+ * null for a caller that is not a named key (this site's pages, the static
+ * key), which reads them all, as it always has.
+ */
+function readableSources(c: Context): string[] | null {
+  if (c.get('authClass') !== 'apikey') return null;
+  return historySourcesFor(c.get('apiKeyScopes') ?? []);
+}
+
+/** A key asked for history its scopes do not cover. */
+function refuseSources(c: Context, message: string): Response {
+  return fail(c, 403, 'api_key_scope_forbidden', message, { error: 'api_key_scope_forbidden', message });
+}
+
+/** Unix seconds → ISO 8601 UTC, as /api/v1/ writes every time. */
+function utcIso(unix: number | null | undefined): string | null {
+  if (unix === null || unix === undefined || !Number.isFinite(unix)) return null;
+  return new Date(unix * 1000).toISOString();
+}
 
 // ---------------------------------------------------------------------------
 // Param parsing helpers
@@ -116,12 +165,44 @@ interface ParsedQuery {
   params: DataHistoryParams;
   /** Raw filter view echoed back in `query.filters_applied`. */
   rawFilters: Record<string, unknown>;
+  /** The feeds named by ?feed=, when it was given. */
+  feeds: string[] | null;
 }
 
-function parseQuery(url: URL): ParsedQuery | { error: string; status: number } {
+/** The feeds whose records the archive stores, in the key table's terms (HISTORY_SOURCES). */
+const HISTORY_FEEDS: readonly string[] = [...new Set(Object.values(HISTORY_SOURCES))];
+
+/** The archived sources of these feeds. */
+function sourcesOfFeeds(feeds: readonly string[]): string[] {
+  return Object.entries(HISTORY_SOURCES)
+    .filter(([, feed]) => feeds.includes(feed))
+    .map(([source]) => source);
+}
+
+function parseQuery(url: URL): ParsedQuery | { error: string; status: number; message?: string } {
   const q = url.searchParams;
 
-  const sources = commaList(q.get('source'));
+  let sources = commaList(q.get('source'));
+  // ?feed=fires,roads — every archived source of those feeds, as the key
+  // table names them; with ?source= as well, the sources named that are in
+  // those feeds.
+  const feedsRaw = commaList(q.get('feed'));
+  const feeds = feedsRaw ? [...new Set(feedsRaw.map((f) => f.toLowerCase()))] : null;
+  if (feeds) {
+    const unknown = feeds.filter((f) => !HISTORY_FEEDS.includes(f));
+    if (unknown.length) {
+      return { error: 'unknown_feed', status: 400, message: `unknown feed: ${unknown.join(', ')} (one of ${HISTORY_FEEDS.join(', ')})` };
+    }
+    const ofFeeds = sourcesOfFeeds(feeds);
+    if (sources) {
+      const outside = sources.filter((s) => !ofFeeds.includes(s));
+      if (outside.length) {
+        return { error: 'source_not_in_feed', status: 400, message: `not a source of ${feeds.join(', ')}: ${outside.join(', ')}` };
+      }
+    } else {
+      sources = ofFeeds;
+    }
+  }
   const sourceId = q.get('source_id') || null;
   const category = commaList(q.get('category'));
   const subcategory = commaList(q.get('subcategory'));
@@ -211,6 +292,7 @@ function parseQuery(url: URL): ParsedQuery | { error: string; status: number } {
   // Build the filters_applied echo — Python only includes keys that
   // the user actually passed.
   const rawFilters: Record<string, unknown> = {};
+  if (feeds) rawFilters['feed'] = feeds;
   if (sources) rawFilters['source'] = sources;
   if (category) rawFilters['category'] = category;
   if (subcategory) rawFilters['subcategory'] = subcategory;
@@ -224,7 +306,7 @@ function parseQuery(url: URL): ParsedQuery | { error: string; status: number } {
   if (until !== null) rawFilters['until'] = sydneyIsoFromUnix(until);
   if (params.unique) rawFilters['unique'] = true;
 
-  return { params, rawFilters };
+  return { params, rawFilters, feeds };
 }
 
 // ---------------------------------------------------------------------------
@@ -354,36 +436,190 @@ async function runWithTimeout(
 // /api/data/history
 // ---------------------------------------------------------------------------
 
-dataHistoryRouter.get('/api/data/history', async (c) => {
+// ---------------------------------------------------------------------------
+// What /api/v1/ documents (api/v1/openapi.ts)
+// ---------------------------------------------------------------------------
+
+const UNIX = 'unix seconds';
+const SOURCE_NAMES = Object.keys(HISTORY_SOURCES).join(', ');
+
+const historyRecordShape = {
+  id: z.number().int().describe("The stored snapshot's id"),
+  fetched_at: z.number().int().describe(`When this snapshot was stored, ${UNIX}`),
+  fetched_at_iso: z.string().nullable().describe('fetched_at, ISO 8601 UTC'),
+  source_timestamp: z.string().nullable().describe("The source's own time for the record, as the source writes it; null when it gives none"),
+  source_timestamp_unix: z.number().int().nullable().describe(`The source's own time for the record, ${UNIX}; null when it gives none`),
+  latitude: z.number().nullable(),
+  longitude: z.number().nullable(),
+  location_text: z.string().nullable().describe('Where, in words, when the source gives it'),
+  title: z.string().nullable().describe("The record's title, else its street or location, as the source gives it"),
+  category: z.string().nullable(),
+  subcategory: z.string().nullable(),
+  status: z.string().nullable().describe("The record's status, as the source words it"),
+  severity: z.string().nullable().describe("The record's severity or alert level, as the source words it"),
+  is_active: z.boolean().describe('Whether the source still listed it as active when this snapshot was stored'),
+  last_seen: z.number().int().nullable().describe(`The last poll that still found the incident, ${UNIX}`),
+  last_seen_iso: z.string().nullable().describe('last_seen, ISO 8601 UTC'),
+};
+
+const HistoryRecord = z
+  .object({
+    ...historyRecordShape,
+    source: z.string().describe(`The archived source: one of ${SOURCE_NAMES}`),
+    source_id: z.string().nullable().describe("The source's own id for the incident"),
+    state: z.string().nullable().describe('State or territory code (NSW, VIC, …), from the position; null when it has none'),
+    data: z
+      .record(z.string(), z.unknown())
+      .describe('The record exactly as the source gave it, with full=1; otherwise empty'),
+  })
+  .meta({ id: 'HistoryRecord' });
+assertShape<SameShape<z.infer<typeof HistoryRecord>, FormattedRecord>>();
+
+const HistoryPage = z
+  .object({
+    records: z.array(HistoryRecord),
+    total: z
+      .number()
+      .int()
+      .describe('How many records match across every page; 0 when they could not be counted, and always 0 on a page fetched by cursor'),
+    limit: z.number().int(),
+    offset: z.number().int(),
+    count: z.number().int().describe('Records on this page'),
+    next_cursor: z.string().nullable().describe('Pass as `cursor` for the next page; null on the last page'),
+    query: z.object({
+      filters_applied: z
+        .record(z.string(), z.unknown())
+        .describe('The filters given, as understood: lists split on commas, and since/until as ISO 8601 UTC'),
+    }),
+  })
+  .meta({ id: 'HistoryPage' });
+
+const opt = (description: string) => z.string().optional().catch(undefined).describe(description);
+
+// The handler reads the query string itself, exactly as it always has; this
+// only describes it. It refuses nothing: the two parameters that can be
+// refused (cursor, offset) are refused by the handler, in its own words.
+const HistoryQuery = z.object({
+  feed: opt(
+    `Only the records of these feeds, comma-separated: ${HISTORY_FEEDS.join(', ')} — each the feed of the key table, standing for its archived sources. An unknown feed is refused (400), as is one the key does not hold the history of (403). With source, the sources named must belong to these feeds`,
+  ),
+  source: opt(
+    `Only these archived sources, comma-separated: ${SOURCE_NAMES}. A key reads only the sources its scopes cover; naming another is refused (403), and leaving this out means all of them (or all of feed's)`,
+  ),
+  source_id: opt("Only the incident with this id (the source's own)"),
+  category: opt('Only these categories, comma-separated'),
+  subcategory: opt('Only these subcategories, comma-separated'),
+  status: opt('Only these statuses, comma-separated'),
+  severity: opt('Only these severities, comma-separated'),
+  state: opt('Only these states or territories, comma-separated codes (NSW, VIC, …); unknown codes are ignored'),
+  since: opt(`Stored at or after this time, ${UNIX}`),
+  until: opt(`Stored at or before this time, ${UNIX}`),
+  date_from: opt(
+    'Stored on or after this date or time when since is not given: YYYY-MM-DD (midnight) or YYYY-MM-DDTHH:mm[:ss], read as Sydney time; with an offset or Z, as written',
+  ),
+  date_to: opt('Stored on or before this date or time when until is not given; a bare date means the end of that day, Sydney time'),
+  hours: opt('Stored in the last this many hours, when neither since nor date_from is given'),
+  days: opt('Stored in the last this many days, when no earlier time parameter is given'),
+  today: opt('1: stored today, Sydney time, when no earlier time parameter is given'),
+  since_source: opt(`Only records whose own source time is at or after this, ${UNIX}`),
+  until_source: opt(`Only records whose own source time is at or before this, ${UNIX}`),
+  search: opt('Only records matching this text'),
+  title: opt('Only records whose title matches this text'),
+  location: opt('Only records whose location matches this text'),
+  lat: opt('With lon: only records within radius of this point'),
+  lon: opt('With lat: only records within radius of this point (lng works too)'),
+  radius: opt('Kilometres around lat/lon; 10 when not given'),
+  unique: opt('0: every stored snapshot. Otherwise one record per incident, its latest'),
+  active_only: opt('1: only records still active when stored'),
+  order: opt('asc: oldest first. Otherwise newest first'),
+  limit: opt('Records per page, 1 to 1000; 100 when not given'),
+  offset: opt(`Skip this many records, at most ${MAX_OFFSET}; for later pages use cursor`),
+  cursor: opt('next_cursor from the previous page'),
+  full: opt('1: include each record as the source gave it, in data'),
+});
+
+/** A record as /api/v1/ writes it: the ISO times in UTC. */
+function utcRecord(r: FormattedRecord): FormattedRecord {
+  return { ...r, fetched_at_iso: utcIso(r.fetched_at), last_seen_iso: utcIso(r.last_seen) };
+}
+
+dataHistoryRouter.get(
+  '/api/data/history',
+  SCOPE_HISTORY,
+  describeRoute({
+    operationId: 'getHistory',
+    tags: ['History'],
+    summary: 'Stored records',
+    description:
+      "Every source's records as this server stored them over time: by default one record per incident (its latest), newest first. Filter by feed or source, time, place and text; page with cursor (or offset, up to 10,000). Records are kept for the server's retention window. A key reads only the archived sources of the feeds whose history it holds — fires:history the fire services' sources, warnings:history the warnings', and so on.",
+    responses: {
+      ...okJson(envelope(HistoryPage), 'A page of records'),
+      ...GATED_ERRORS,
+      400: {
+        description: 'cursor is malformed, offset is past 10,000 (validation_failed; details.max_offset), or feed names a feed with no stored history or is given with a source outside it (validation_failed)',
+        content: { 'application/json': { schema: resolver(ErrorBody) } },
+      },
+      503: {
+        description:
+          'The archive could not be read, or part of it did not answer in time (service_unavailable; details.failed_tables) — retry, or narrow the window; or (auth_unavailable) the key could not be checked just now',
+        content: { 'application/json': { schema: resolver(ErrorBody) } },
+      },
+    },
+  }),
+  queryValidator(HistoryQuery),
+  async (c) => {
   const url = new URL(c.req.url);
   const parsed = parseQuery(url);
   if ('error' in parsed) {
     if (parsed.error === 'invalid_cursor') {
-      return c.json(
-        { error: 'invalid_cursor', message: 'cursor is malformed; drop it and start over' },
-        400,
-      );
+      const message = 'cursor is malformed; drop it and start over';
+      return fail(c, 400, 'validation_failed', message, { error: 'invalid_cursor', message });
     }
     if (parsed.error === 'offset_too_large') {
       const offset = intParam(url.searchParams.get('offset')) ?? 0;
-      return c.json(
-        {
-          error: 'offset_too_large',
-          message:
-            `offset=${offset} exceeds ${MAX_OFFSET}. Use ?cursor=<next_cursor from previous response> ` +
-            'for forward pagination, or narrow the result set with date_from/hours/source.',
-          max_offset: MAX_OFFSET,
-        },
+      const message =
+        `offset=${offset} exceeds ${MAX_OFFSET}. Use ?cursor=<next_cursor from previous response> ` +
+        'for forward pagination, or narrow the result set with date_from/hours/source.';
+      return fail(
+        c,
         400,
+        'validation_failed',
+        message,
+        { error: 'offset_too_large', message, max_offset: MAX_OFFSET },
+        { max_offset: MAX_OFFSET },
       );
     }
-    return c.json({ error: parsed.error }, 400);
+    const message = parsed.message ?? parsed.error;
+    return fail(c, 400, 'validation_failed', message, { error: parsed.error, message });
   }
 
-  const { params, rawFilters } = parsed;
+  const { params, rawFilters, feeds } = parsed;
+
+  // A named key reads only the archived sources its scopes cover, and its
+  // answer is its own: never cached in between.
+  const readable = readableSources(c);
+  if (readable) {
+    c.header('Cache-Control', 'private, no-store');
+    const refusedFeeds = (feeds ?? []).filter((f) => sourcesOfFeeds([f]).some((s) => !readable.includes(s)));
+    if (refusedFeeds.length) {
+      return refuseSources(c, `This key's scopes do not cover the history of: ${refusedFeeds.join(', ')}.`);
+    }
+    if (params.sources) {
+      const refused = params.sources.filter((s) => !readable.includes(s));
+      if (refused.length) {
+        return refuseSources(c, `This key's scopes do not cover the stored history of: ${refused.join(', ')}.`);
+      }
+    } else {
+      if (!readable.length) return refuseSources(c, "This key's scopes cover no stored history.");
+      params.sources = readable;
+    }
+  }
+
   const pool = await getPool();
   if (!pool) {
-    return c.json({
+    if (isV1(c)) return fail(c, 503, 'service_unavailable', 'Stored history is not available just now.');
+    // The old path has always answered an empty page (200) rather than an error.
+    return ok(c, {
       records: [],
       total: 0,
       limit: params.limit,
@@ -403,6 +639,10 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
     // pagination uses `total` to compute Math.ceil(total/limit) for
     // the page-jumper; with total=0 it can't navigate to later pages.
     const dataNowMs = Date.now();
+    // Families whose data query did not answer. Collected rather than
+    // swallowed, because a short page is not a smaller true answer — see the
+    // 503 below.
+    const failedFamilies: ArchiveTable[] = [];
     const dataPromise = Promise.all(
       plan.queries.map(async (q) => {
         const dKey = dataCacheKey(q.table, q.sql, q.params);
@@ -430,6 +670,7 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
           return rows;
         } catch (err) {
           log.error({ err, table: q.table }, 'data-history query failed');
+          failedFamilies.push(q.table);
           return [] as ArchiveQueryRow[];
         }
       }),
@@ -494,6 +735,39 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
       }),
     );
     const [results, counts] = await Promise.all([dataPromise, countPromise]);
+
+    // A family that did not answer makes the whole page unanswerable, so say
+    // so rather than serving what the others returned.
+    //
+    // The count query is genuinely best-effort — total=0 just means "not
+    // counted" and the frontend already treats it that way. The DATA query is
+    // not: merging the surviving families produces a page that looks complete,
+    // reports a `total` that still includes the missing family, and — worse —
+    // builds next_cursor from the last SURVIVING row. The next page seeks
+    // strictly past that boundary, so the records the failed family owed to
+    // this page are never served on any later page either. With one source it
+    // degrades to a bare empty 200, which reads as "nothing matched".
+    //
+    // Nothing in the cursor can repair that: the boundary is one (ts, id,
+    // family) triple, not a position per family, so there is no page to resume
+    // from. 503 is the retryable answer, and both callers already treat a
+    // non-200 as an error instead of as data.
+    if (failedFamilies.length > 0) {
+      const tables = [...new Set(failedFamilies)];
+      log.warn({ tables }, '/api/data/history: refusing a partial page');
+      const message =
+        'One or more archive tables did not answer in time, so this page would ' +
+        'silently omit records. Retry, or narrow the window with hours/date_from.';
+      return fail(
+        c,
+        503,
+        'service_unavailable',
+        message,
+        { error: 'partial_result', message, failed_tables: tables },
+        { failed_tables: tables },
+      );
+    }
+
     const total = counts.reduce((a, b) => a + b, 0);
 
     let merged: ArchiveQueryRow[];
@@ -542,20 +816,30 @@ dataHistoryRouter.get('/api/data/history', async (c) => {
           )
         : null;
 
-    return c.json({
-      records,
+    // /api/v1/ writes every time in UTC; the old path keeps naive Sydney time.
+    const v1 = isV1(c);
+    const filtersApplied = v1
+      ? {
+          ...rawFilters,
+          ...(params.since !== null ? { since: utcIso(params.since) } : {}),
+          ...(params.until !== null ? { until: utcIso(params.until) } : {}),
+        }
+      : rawFilters;
+    return ok(c, {
+      records: v1 ? records.map(utcRecord) : records,
       total,
       limit: params.limit,
       offset: params.offset,
       count: records.length,
       next_cursor: nextCursor,
-      query: { filters_applied: rawFilters },
-    });
+      query: { filters_applied: filtersApplied },
+    } satisfies z.infer<typeof HistoryPage>);
   } catch (err) {
     log.error({ err }, '/api/data/history error');
-    return c.json({ error: 'internal error' }, 500);
+    return fail(c, 500, 'internal_error', 'Stored history could not be read.', { error: 'internal error' });
   }
-});
+  },
+);
 
 interface FormattedRecord {
   id: number;
@@ -715,13 +999,75 @@ function parseWindowHours(q: URLSearchParams): number | null {
   return null;
 }
 
-dataHistoryRouter.get('/api/data/history/filters', async (c) => {
-  const sourceFilter = c.req.query('source');
-  const url = new URL(c.req.url);
-  const windowHours = parseWindowHours(url.searchParams);
-  const facets = await getFilterFacets(sourceFilter ?? null, windowHours);
-  return c.json(facets);
+const Facet = z.object({ value: z.string(), count: z.number().int() });
+
+const HistoryFilters = z
+  .object({
+    providers: z
+      .array(
+        z.object({
+          key: z.string().describe('The provider, e.g. rfs or livetraffic'),
+          name: z.string(),
+          icon: z.string().describe('A Font Awesome class for it'),
+          color: z.string().describe('Its colour on this site'),
+          count: z.number().int().describe('Records in the window'),
+          types: z.array(
+            z.object({
+              alert_type: z.string().describe('The archived source: what /history takes as source'),
+              name: z.string(),
+              count: z.number().int(),
+              categories: z.array(Facet),
+              subcategories: z.array(Facet),
+              statuses: z.array(Facet),
+              severities: z.array(Facet),
+              states: z.array(Facet).describe('Empty for a source with no placeable records'),
+            }),
+          ),
+        }),
+      )
+      .describe('Every provider with records in the window, and each of its sources with the values found'),
+    date_range: z.object({
+      oldest: z.string().nullable().describe('The oldest record, ISO 8601 UTC'),
+      newest: z.string().nullable().describe('The newest record, ISO 8601 UTC'),
+      oldest_unix: z.number().int().nullable(),
+      newest_unix: z.number().int().nullable(),
+    }),
+  })
+  .meta({ id: 'HistoryFilters' });
+assertShape<SameShape<z.infer<typeof HistoryFilters>, FilterFacets>>();
+
+const HistoryFiltersQuery = z.object({
+  source: opt('Only this archived source'),
+  since: opt(`The window starts at this time, ${UNIX}`),
+  date_from: opt('The window starts on this date or time when since is not given (as /history reads it)'),
+  hours: opt('The window is the last this many hours, when neither since nor date_from is given'),
+  days: opt('The window is the last this many days, when no earlier parameter is given'),
 });
+
+dataHistoryRouter.get(
+  '/api/data/history/filters',
+  describeRoute({
+    operationId: 'getHistoryFilters',
+    tags: ['History'],
+    summary: 'What stored history can be filtered by',
+    description:
+      "For each provider and archived source with records in the window, the categories, subcategories, statuses, severities and states found, with counts; and the oldest and newest record. The window is the server's whole retention when no parameter narrows it. No key is needed.",
+    responses: okJson(envelope(HistoryFilters), 'The filter values'),
+  }),
+  queryValidator(HistoryFiltersQuery),
+  async (c) => {
+    const sourceFilter = c.req.query('source');
+    const url = new URL(c.req.url);
+    const windowHours = parseWindowHours(url.searchParams);
+    const facets = await getFilterFacets(sourceFilter ?? null, windowHours);
+    if (!isV1(c)) return ok(c, facets);
+    const range = facets.date_range;
+    return ok(c, {
+      ...facets,
+      date_range: { ...range, oldest: utcIso(range.oldest_unix), newest: utcIso(range.newest_unix) },
+    } satisfies z.infer<typeof HistoryFilters>);
+  },
+);
 
 // ---------------------------------------------------------------------------
 // /api/data/history/sources
@@ -951,16 +1297,63 @@ dataHistoryRouter.get('/api/data/history/stats', async (c) => {
 // /api/data/history/incident/<source>/<source_id>
 // ---------------------------------------------------------------------------
 
-dataHistoryRouter.get('/api/data/history/incident/:source/:source_id', async (c) => {
+const HistoryIncident = z
+  .object({
+    source: z.string().describe('The archived source, as asked for'),
+    source_id: z.string().describe("The incident's id, as asked for"),
+    snapshots: z.number().int().describe('How many snapshots follow'),
+    history: z
+      .array(
+        z.object({
+          ...historyRecordShape,
+          data: z.record(z.string(), z.unknown()).describe('The record exactly as the source gave it'),
+        }),
+      )
+      .describe('Every stored snapshot of the incident, oldest first, at most 5,000'),
+  })
+  .meta({ id: 'HistoryIncident' });
+
+dataHistoryRouter.get(
+  '/api/data/history/incident/:source/:source_id',
+  SCOPE_HISTORY,
+  describeRoute({
+    operationId: 'getHistoryIncident',
+    tags: ['History'],
+    summary: "One incident's stored snapshots",
+    description:
+      'Every snapshot this server stored of one incident, oldest first, each with the record exactly as the source gave it: how the incident changed over time. {source} is an archived source (as /history returns it) and {source_id} the incident\'s id from that source. An incident with no snapshots answers an empty list. A key reads only the sources its scopes cover.',
+    responses: {
+      ...okJson(envelope(HistoryIncident), "The incident's snapshots"),
+      ...GATED_ERRORS,
+      503: {
+        description:
+          'The archive could not be read just now (service_unavailable); or (auth_unavailable) the key could not be checked just now',
+        content: { 'application/json': { schema: resolver(ErrorBody) } },
+      },
+    },
+  }),
+  async (c) => {
   const source = c.req.param('source');
   const sourceId = c.req.param('source_id');
   if (!source || !sourceId) {
-    return c.json({ error: 'source and source_id are required' }, 400);
+    return fail(c, 400, 'validation_failed', 'source and source_id are required', {
+      error: 'source and source_id are required',
+    });
+  }
+
+  const readable = readableSources(c);
+  if (readable) {
+    c.header('Cache-Control', 'private, no-store');
+    if (!readable.includes(source)) {
+      return refuseSources(c, `This key's scopes do not cover the stored history of: ${source}.`);
+    }
   }
 
   const pool = await getPool();
   if (!pool) {
-    return c.json({
+    if (isV1(c)) return fail(c, 503, 'service_unavailable', 'Stored history is not available just now.');
+    // The old path has always answered an empty list (200) rather than an error.
+    return ok(c, {
       source,
       source_id: sourceId,
       snapshots: 0,
@@ -1005,10 +1398,12 @@ dataHistoryRouter.get('/api/data/history/incident/:source/:source_id', async (c)
     const result = await runWithTimeout(pool, built.sql, built.params);
     const rows = result.rows.map(normaliseRow);
 
+    // /api/v1/ writes every time in UTC; the old path keeps naive Sydney time.
+    const iso = isV1(c) ? utcIso : sydneyIsoFromUnix;
     const history = rows.map((r) => ({
       id: r.id,
       fetched_at: r.fetched_at_epoch,
-      fetched_at_iso: sydneyIsoFromUnix(r.fetched_at_epoch),
+      fetched_at_iso: iso(r.fetched_at_epoch),
       source_timestamp: pickStr(r.data, 'source_timestamp'),
       source_timestamp_unix: pickNum(r.data, 'source_timestamp_unix'),
       latitude: r.lat,
@@ -1022,17 +1417,18 @@ dataHistoryRouter.get('/api/data/history/incident/:source/:source_id', async (c)
       data: r.data,
       is_active: pickBool(r.data, 'is_active', false),
       last_seen: pickNum(r.data, 'last_seen'),
-      last_seen_iso: sydneyIsoFromUnix(pickNum(r.data, 'last_seen')),
+      last_seen_iso: iso(pickNum(r.data, 'last_seen')),
     }));
 
-    return c.json({
+    return ok(c, {
       source,
       source_id: sourceId,
       snapshots: history.length,
       history,
-    });
+    } satisfies z.infer<typeof HistoryIncident>);
   } catch (err) {
     log.error({ err, source, sourceId }, '/api/data/history/incident error');
-    return c.json({ error: 'internal error' }, 500);
+    return fail(c, 500, 'internal_error', 'Stored history could not be read.', { error: 'internal error' });
   }
-});
+  },
+);

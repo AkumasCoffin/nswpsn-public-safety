@@ -14,6 +14,7 @@
  */
 
 import { ALERT_TYPE_DEFS, severityTokens } from './alertCatalog.js';
+import { AU_STATES } from '../lib/stateMask.js';
 
 export class FilterValidationError extends Error {
   constructor(message: string) {
@@ -48,6 +49,7 @@ const SUBTYPE_AWARE_TYPES: ReadonlySet<string> = new Set(
 const KNOWN_KEYS: ReadonlySet<string> = new Set([
   'keywords_include', 'keywords_exclude',
   'severity_min', 'subtype_filters',
+  'states',
   'geofilter', 'bbox',
 ]);
 
@@ -164,6 +166,8 @@ export function validateGeofilter(g: unknown): Record<string, unknown> {
  *   - keywords_include / keywords_exclude: string[] (max 20, each <=100 chars)
  *   - severity_min: legacy string OR per-alert-type dict
  *   - subtype_filters: { [alert_type]: string[] } restricted to subtype-aware types
+ *   - states: state codes (NSW, VIC, …), any case; stored upper-case, de-duplicated,
+ *     in AU_STATES order
  *   - geofilter: discriminated union on `type` (bbox/ring/polygon)
  *   - bbox: legacy alias auto-converted to geofilter type=bbox
  */
@@ -308,6 +312,29 @@ export function validateFilters(v: unknown): Record<string, unknown> {
       }
     }
     if (Object.keys(normalised).length > 0) out['subtype_filters'] = normalised;
+  }
+
+  // The States filter: the bot passes an alert whose state is in the list,
+  // and any alert whose state it cannot know.
+  if ('states' in v && v['states'] !== null && v['states'] !== undefined) {
+    const raw = v['states'];
+    if (!Array.isArray(raw)) {
+      throw new FilterValidationError('states must be a list.');
+    }
+    const picked = new Set<string>();
+    for (const s of raw) {
+      if (typeof s !== 'string') {
+        throw new FilterValidationError('states: each entry must be a string.');
+      }
+      const code = s.trim().toUpperCase();
+      if (!code) continue;
+      if (!(AU_STATES as readonly string[]).includes(code)) {
+        throw new FilterValidationError(`states must be among ${AU_STATES.join(', ')}.`);
+      }
+      picked.add(code);
+    }
+    const states = AU_STATES.filter((s) => picked.has(s));
+    if (states.length > 0) out['states'] = states;
   }
 
   if ('geofilter' in v && v['geofilter'] !== null && v['geofilter'] !== undefined) {

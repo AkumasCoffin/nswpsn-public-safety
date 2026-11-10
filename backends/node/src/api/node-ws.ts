@@ -11,6 +11,7 @@
  */
 import type { Server } from 'node:http';
 import type { Socket } from 'node:net';
+import { decodeJwt } from 'jose';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { log } from '../lib/log.js';
 import { resolveNodeToken } from '../services/auth/nodeToken.js';
@@ -21,7 +22,7 @@ import { markNodeSeen } from '../services/nodes/nodeUptime.js';
 import {
   refreshNodeOnHello,
   bindInstallId,
-  touchNodeSeen,
+  touchNodeSeenThrottled,
   updateNode,
   getNode,
   roleForKind,
@@ -71,6 +72,73 @@ interface Alive extends WebSocket {
   isAlive?: boolean;
 }
 
+/**
+ * Normalise an agent-supplied metadata string, dropping NUL.
+ *
+ * Postgres rejects U+0000 in a text value with 22021, so a hello whose
+ * agentVersion was a single NUL byte failed the registry UPDATE — and because
+ * these handlers are started fire-and-forget, that rejection reached
+ * index.ts's unhandledRejection handler and exited the whole API. The agent
+ * re-sends hello on every reconnect, so any enrolled contributor could have
+ * held the process down. The .catch on the handler stops it being fatal; this
+ * stops it failing at all. Length clamping stays in the registry.
+ */
+function sanitizeAgentText(v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  const t = String(v).replace(/\u0000/g, '');
+  return t.length ? t : null;
+}
+
+/**
+ * Which staff sockets hold an audio tap open on which node.
+ *
+ * Only an explicit audioStop ever cleared the agent's audioLabel, and the
+ * close handler below unsubscribed the socket without telling the agent
+ * anything — so a staff member who closed the tab instead of the drawer left
+ * the node teeing rtl_fm PCM up the WebSocket indefinitely (~14.7 KB/s, about
+ * 1.3 GB/day on a volunteer's uplink) for frames the hub then drops because
+ * nobody is subscribed, and every config Apply re-armed the tee. Ref-counted
+ * per node so one listener leaving cannot cut another's audio.
+ */
+const audioListeners = new Map<string, Set<Alive>>();
+
+function addAudioListener(nodeId: string, ws: Alive): void {
+  let set = audioListeners.get(nodeId);
+  if (!set) {
+    set = new Set();
+    audioListeners.set(nodeId, set);
+  }
+  set.add(ws);
+}
+
+/** Drop this socket's tap on one node; stop the agent when it was the last. */
+function dropAudioListener(nodeId: string, ws: Alive): void {
+  const set = audioListeners.get(nodeId);
+  if (!set || !set.delete(ws)) return;
+  if (set.size > 0) return;
+  audioListeners.delete(nodeId);
+  hub.sendToAgent(nodeId, 'audioStop', { nodeId });
+  log.info({ nodeId }, 'pager audio stopped (no listeners left)');
+}
+
+/** Drop every tap a socket held — its close, or an unsubscribe. */
+function dropAllAudioListeners(ws: Alive): void {
+  for (const nodeId of [...audioListeners.keys()]) dropAudioListener(nodeId, ws);
+}
+
+/**
+ * Authenticated staff sockets, so the sweep below can re-check what the first
+ * auth frame decided. Agent sockets have always been revalidated; staff were
+ * not, so a feeder:manager whose role was revoked — or whose Supabase session
+ * expired — kept cmd and spectrum/audio write access for as long as the socket
+ * lived, and the heartbeat ping keeps one alive indefinitely.
+ */
+interface StaffSession {
+  ws: Alive;
+  state: StaffState;
+}
+const staffSessions = new Set<StaffSession>();
+
 function rejectUpgrade(socket: Socket, code: number, msg: string): void {
   try {
     if (!socket.destroyed) {
@@ -82,9 +150,56 @@ function rejectUpgrade(socket: Socket, code: number, msg: string): void {
   socket.destroy();
 }
 
+// The two servers, kept module-scope so shutdown can reach their clients.
+// Null until attach, which is also the state in tests that never attach.
+let agentWssRef: WebSocketServer | null = null;
+let staffWssRef: WebSocketServer | null = null;
+
+/** How long a client gets to answer the close handshake before we drop it. */
+const SHUTDOWN_CLOSE_GRACE_MS = 500;
+
+/**
+ * Close every agent and staff WebSocket, for shutdown.
+ *
+ * An upgraded WebSocket is an accepted connection, so server.close() waits for
+ * it — and in production an agent is always connected, so the await in
+ * index.ts's shutdown() never returned. pm2 SIGKILLed at the kill-timeout and
+ * every drain after that await was skipped. 1001 "going away" is what tells an
+ * agent or a browser this was a restart rather than a fault, so it reconnects
+ * instead of backing off; the sweep then drops anything that did not answer,
+ * because we are on a timeout and a silent peer must not hold the port.
+ */
+export function closeNodeWebSockets(): void {
+  const servers = [agentWssRef, staffWssRef].filter((w): w is WebSocketServer => w !== null);
+  if (servers.length === 0) return;
+  for (const wss of servers) {
+    for (const client of wss.clients) {
+      try {
+        client.close(1001, 'server shutting down');
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+  const sweep = setTimeout(() => {
+    for (const wss of servers) {
+      for (const client of wss.clients) {
+        try {
+          client.terminate();
+        } catch {
+          /* already gone */
+        }
+      }
+    }
+  }, SHUTDOWN_CLOSE_GRACE_MS);
+  sweep.unref?.();
+}
+
 export function attachNodeWebSockets(server: Server): void {
   const agentWss = new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD });
   const staffWss = new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD });
+  agentWssRef = agentWss;
+  staffWssRef = staffWss;
 
   server.on('upgrade', (req, socket, head) => {
     let pathname = '';
@@ -163,6 +278,39 @@ export function attachNodeWebSockets(server: Server): void {
           }
         } catch (err) {
           log.warn({ err, nodeId: a.nodeId }, 'agent auth revalidation failed (transient)');
+        }
+      }
+      // Staff sockets get the same treatment. Their role was checked once, at
+      // the auth frame, and never again — so a revocation or a signed-out
+      // session left full write access in place for the life of the socket.
+      // The JWT's own expiry is the other half: a page that stops refreshing
+      // its token should not keep commanding nodes on the strength of one it
+      // presented hours ago.
+      const nowSecs = Math.floor(Date.now() / 1000);
+      for (const s of [...staffSessions]) {
+        if (!s.state.authed || !s.state.userId) continue;
+        if (s.state.exp !== null && s.state.exp <= nowSecs) {
+          log.info({ by: s.state.userId }, 'staff ws closed: session expired');
+          try { s.ws.close(4001, 'session expired'); } catch { /* ignore */ }
+          continue;
+        }
+        try {
+          if (!(await hasRole(s.state.userId, ['owner', 'feeder:manager', 'feeder:monitor']))) {
+            log.info({ by: s.state.userId }, 'staff ws closed: role revoked');
+            try { s.ws.close(4003, 'forbidden'); } catch { /* ignore */ }
+            continue;
+          }
+          // Still a viewer, but perhaps no longer a manager — drop the write
+          // paths without cutting a read-only view that is still allowed.
+          const canManage = await hasRole(s.state.userId, ['owner', 'feeder:manager']);
+          if (s.state.canManage && !canManage) {
+            log.info({ by: s.state.userId }, 'staff ws demoted to view-only');
+          }
+          s.state.canManage = canManage;
+        } catch (err) {
+          // Same policy as the agent loop above: a transient role-lookup
+          // failure must not close a legitimate session.
+          log.warn({ err, by: s.state.userId }, 'staff auth revalidation failed (transient)');
         }
       }
     })();
@@ -255,7 +403,14 @@ function setupAgentConnection(ws: Alive, ctx: AgentCtx): void {
     }
     const msg = parseEnvelope(raw.toString('utf8'));
     if (!msg) return;
-    void handleAgentMessage(ws, ctx, msg.t, msg.id, msg.data);
+    // A rejection here used to have nowhere to go: index.ts exits the process
+    // on any unhandledRejection, so one Postgres blip on the per-frame
+    // last-seen write — or a single malformed hello — took the whole API down
+    // and dropped every agent and staff socket with it. A failed frame is
+    // worth a log line, not a restart.
+    void handleAgentMessage(ws, ctx, msg.t, msg.id, msg.data).catch((err) =>
+      log.warn({ err, nodeId: ctx.nodeId, t: msg.t }, 'agent message handler failed'),
+    );
   });
 
   ws.on('close', () => {
@@ -278,14 +433,16 @@ async function handleAgentMessage(
   switch (t) {
     case 'hello': {
       const h = (data ?? {}) as HelloData;
+      // Every field here is agent-supplied and lands in a text column, so it
+      // goes through sanitizeAgentText — see there for the NUL case.
       const meta: HelloMeta = {
-        agentVersion: h.agentVersion ?? null,
-        sdrtrunkVersion: h.sdrtrunkVersion ?? null,
-        rdioVersion: h.rdioVersion ?? null,
-        os: h.os ?? null,
-        arch: h.arch ?? null,
-        hostname: h.hostname ?? null,
-        localIp: typeof h.localIp === 'string' ? h.localIp.trim() || null : null,
+        agentVersion: sanitizeAgentText(h.agentVersion),
+        sdrtrunkVersion: sanitizeAgentText(h.sdrtrunkVersion),
+        rdioVersion: sanitizeAgentText(h.rdioVersion),
+        os: sanitizeAgentText(h.os),
+        arch: sanitizeAgentText(h.arch),
+        hostname: sanitizeAgentText(h.hostname),
+        localIp: typeof h.localIp === 'string' ? sanitizeAgentText(h.localIp.trim()) : null,
       };
       const node = await refreshNodeOnHello(ctx.nodeId, meta);
       // The agent declares its kind; warn (don't reject) on a mismatch with the
@@ -340,7 +497,11 @@ async function handleAgentMessage(
       // A survey lives in the agent's memory: if it stops saying it has one,
       // it has lost it (a restart), and the record must not outlive that.
       noteSurveyStatus(ctx.nodeId, (st as { siteSurvey?: { running?: boolean } }).siteSurvey?.running === true);
-      void touchNodeSeen(ctx.nodeId);
+      // Throttled variant: it swallows its own failures, and the column's
+      // resolution is "recently" — a write per frame (every 15s per node, 1s
+      // while anyone watches Live) was both pointless load and the likeliest
+      // place for a DB blip to land.
+      void touchNodeSeenThrottled(ctx.nodeId);
       markNodeSeen(ctx.nodeId);
       return;
     }
@@ -366,7 +527,7 @@ async function handleAgentMessage(
       return;
     }
     case 'configApplied': {
-      const cv = (data as { configVersion?: string } | undefined)?.configVersion ?? null;
+      const cv = sanitizeAgentText((data as { configVersion?: string } | undefined)?.configVersion);
       await updateNode(ctx.nodeId, { config_version: cv });
       return;
     }
@@ -395,12 +556,26 @@ interface StaffState {
   // split. Without this a node_monitor could send 'cmd' over the WS and bypass
   // the REST 403.
   canManage: boolean;
+  /** The presented JWT's `exp` (unix secs), so the sweep can retire a socket
+   *  whose session has run out. Null when the token carried no exp. */
+  exp: number | null;
+}
+
+/** The `exp` claim of an ALREADY-VERIFIED token, or null if it carries none. */
+function readTokenExp(token: string): number | null {
+  try {
+    const exp = decodeJwt(token).exp;
+    return typeof exp === 'number' && Number.isFinite(exp) ? exp : null;
+  } catch {
+    return null;
+  }
 }
 
 function setupStaffConnection(ws: Alive): void {
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
-  const state: StaffState = { authed: false, userId: null, canManage: false };
+  const state: StaffState = { authed: false, userId: null, canManage: false, exp: null };
+  const session: StaffSession = { ws, state };
 
   // Must authenticate within the grace window or get dropped.
   const authTimer = setTimeout(() => {
@@ -414,11 +589,19 @@ function setupStaffConnection(ws: Alive): void {
     if (isBinary) return; // staff never sends binary
     const msg = parseEnvelope(raw.toString('utf8'));
     if (!msg) return;
-    void handleStaffMessage(ws, state, msg.t, msg.data, authTimer);
+    // Same reasoning as the agent handler: a DB error on the auth or survey
+    // query must not reach index.ts's unhandledRejection handler and exit.
+    void handleStaffMessage(ws, session, msg.t, msg.data, authTimer).catch((err) =>
+      log.warn({ err, t: msg.t, by: state.userId }, 'staff message handler failed'),
+    );
   });
 
   ws.on('close', () => {
     clearTimeout(authTimer);
+    staffSessions.delete(session);
+    // Before dropping the subscriptions: a tap this socket started is still
+    // running on the node, and nothing else would ever tell it to stop.
+    dropAllAudioListeners(ws);
     hub.unsubscribeStaff(ws);
     hub.unsubscribeLiveStaff(ws);
   });
@@ -427,11 +610,12 @@ function setupStaffConnection(ws: Alive): void {
 
 async function handleStaffMessage(
   ws: Alive,
-  state: StaffState,
+  session: StaffSession,
   t: string,
   data: unknown,
   authTimer: ReturnType<typeof setTimeout>,
 ): Promise<void> {
+  const state = session.state;
   if (t === 'auth') {
     const token = (data as { token?: string } | undefined)?.token ?? '';
     const verified = await verifySupabaseToken(token);
@@ -445,6 +629,12 @@ async function handleStaffMessage(
     state.authed = true;
     state.userId = verified.userId;
     state.canManage = await hasRole(verified.userId, ['owner', 'feeder:manager']);
+    // verifySupabaseToken has already checked the signature (and jose rejects
+    // an expired token), so the exp read back here is the verified one — kept
+    // so the sweep can retire this socket when the session runs out rather
+    // than letting a heartbeat hold it open past its token's life.
+    state.exp = readTokenExp(token);
+    staffSessions.add(session);
     clearTimeout(authTimer);
     ws.send(envelope('authOk', { userId: verified.userId }));
     return;
@@ -465,6 +655,9 @@ async function handleStaffMessage(
       return;
     }
     case 'unsubscribeNode': {
+      // unsubscribeStaff drops this socket from EVERY node, so the taps go
+      // with it — otherwise closing the drawer left the node still streaming.
+      dropAllAudioListeners(ws);
       hub.unsubscribeStaff(ws);
       return;
     }
@@ -528,6 +721,16 @@ async function handleStaffMessage(
       // cases up — same gate as those.
       if (!state.canManage) {
         log.warn({ nodeId: d.nodeId, action: t, by: state.userId }, 'staff stream rejected: view-only role');
+        return;
+      }
+      // Audio is ref-counted (see audioListeners): the agent keeps the tap
+      // running until it is told to stop, so the stop has to be the LAST
+      // listener leaving, not the first — otherwise one staff member closing
+      // the drawer cut the audio out from under another.
+      if (t === 'audioStart') {
+        addAudioListener(d.nodeId, ws);
+      } else if (t === 'audioStop') {
+        dropAudioListener(d.nodeId, ws);
         return;
       }
       hub.sendToAgent(d.nodeId, t, data);

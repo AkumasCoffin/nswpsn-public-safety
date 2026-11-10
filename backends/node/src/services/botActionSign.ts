@@ -23,7 +23,7 @@
  * arrays-of-objects-of-strings, so no floats can cause number-formatting
  * drift between the two languages.
  */
-import { createHmac } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { config } from '../config.js';
 
 /**
@@ -95,4 +95,27 @@ export function signBotAction(
   return createHmac('sha256', Buffer.from(secret, 'utf8'))
     .update(Buffer.from(canonical, 'utf8'))
     .digest('hex');
+}
+
+/** A signature is a hex SHA-256 digest and nothing else. */
+const SIG_RE = /^[0-9a-fA-F]{64}$/;
+
+/**
+ * The other direction: the bot signs what it POSTS to the backend
+ * (api/feedback.ts) with the same secret and canonical form, and this
+ * verifies it. Mirrors verify_bot_action_sig in discord-bot/database.py:
+ * a missing or mis-shaped signature is a plain refusal, never a throw, and
+ * the compare is constant-time.
+ */
+export function verifyBotActionSig(
+  secret: string,
+  action: string,
+  requestedBy: string,
+  params: unknown,
+  sig: unknown,
+): boolean {
+  if (typeof sig !== 'string' || !SIG_RE.test(sig)) return false;
+  const expected = Buffer.from(signBotAction(secret, action, requestedBy, params), 'utf8');
+  const given = Buffer.from(sig.toLowerCase(), 'utf8');
+  return expected.length === given.length && timingSafeEqual(expected, given);
 }

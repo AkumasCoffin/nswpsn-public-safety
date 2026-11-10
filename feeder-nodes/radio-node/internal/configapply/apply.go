@@ -40,6 +40,21 @@ const (
 	localRdioUploadURL = "http://127.0.0.1:17391/api/call-upload"
 )
 
+// How long the vce config import keeps trying. See importWithRetry.
+const (
+	// importAttempts: tries against a control server that IS answering.
+	importAttempts = 3
+	// importStartupWait: how long to keep trying while nothing is listening on
+	// the control port yet. Matches the boot import's wait for /status, because
+	// it is waiting for the same JVM to finish starting.
+	importStartupWait = 90 * time.Second
+	// importRetryWait: the gap between attempts. Flat and short, like
+	// rdioLoginReady's: a dial to a closed port fails immediately, so the gap
+	// is the whole cost of a poll, and the body itself carries a 60s timeout
+	// once something does answer.
+	importRetryWait = time.Second
+)
+
 // ChannelPlan is one SDR-Trunk channel from a configPush: the frequency to
 // decode, its decoder type, and SDR-Trunk display/ordering metadata.
 type ChannelPlan struct {
@@ -263,11 +278,21 @@ func stageErr(stage, message string, err error) *StageError {
 	return &StageError{Stage: stage, Message: message, Err: err}
 }
 
+// notListening reports whether err means "nothing has bound that port yet"
+// ("connection refused" on Linux, "actively refused" on Windows) rather than a
+// refusal from a server that did answer. The string is all net/http gives us.
+func notListening(err error) bool {
+	if err == nil {
+		return false
+	}
+	m := err.Error()
+	return strings.Contains(m, "refused") || strings.Contains(m, "connection reset")
+}
+
 // rdioLoginReady logs in to the local rdio admin API, tolerating the brief
-// window right after a cold start where rdio hasn't bound its port yet
-// ("connection refused" on Linux, "actively refused" on Windows). It retries
-// only those dial-time failures; a real error (e.g. a wrong password) returns
-// immediately so it isn't masked by the readiness wait.
+// window right after a cold start where rdio hasn't bound its port yet. It
+// retries only those dial-time failures; a real error (e.g. a wrong password)
+// returns immediately so it isn't masked by the readiness wait.
 func rdioLoginReady(c *rdioctl.Client, password string) error {
 	const attempts = 30 // ~30s: process spawn + sqlite init on a cold node
 	var err error
@@ -275,8 +300,7 @@ func rdioLoginReady(c *rdioctl.Client, password string) error {
 		if err = c.Login(password); err == nil {
 			return nil
 		}
-		m := err.Error()
-		if !strings.Contains(m, "refused") && !strings.Contains(m, "connection reset") {
+		if !notListening(err) {
 			return err
 		}
 		time.Sleep(time.Second)
@@ -473,17 +497,28 @@ func (d Deps) applySdrtrunkConfig(payload ConfigPayload, localKeys map[int]strin
 }
 
 // importWithRetry POSTs the ConfigurationState body to /config/import, retrying
-// a couple of times with backoff: right after a (re)launch the control server
-// may not be listening yet, and the import is idempotent so re-sending is safe.
+// with backoff: right after a (re)launch the control server may not be
+// listening yet, and the import is idempotent so re-sending is safe.
+//
+// A server that is not listening YET is waited out for importStartupWait, which
+// is the same budget the boot import gives /status and for the same reason. The
+// three quick attempts this used to make were all spent inside about six
+// seconds of a reboot, well before a cold JVM — first-run CPU calibration and
+// the JMBE install both run before the control server binds — is up. A config
+// push that arrived in that window failed at the "playlist" stage, and a failed
+// stage is neither persisted nor retried, so the node went on running the
+// PREVIOUS config until the next edit.
+//
+// A server that answers and refuses the body is a different thing entirely and
+// still gets only the three attempts: waiting 90s to report a rejection it has
+// already made would just delay the configError.
 func (d Deps) importWithRetry(body []byte) error {
 	if d.SDR == nil {
 		return fmt.Errorf("no sdrtrunk control client")
 	}
+	deadline := time.Now().Add(importStartupWait)
 	var err error
-	for attempt := 0; attempt < 3; attempt++ {
-		if attempt > 0 {
-			time.Sleep(time.Duration(attempt*2) * time.Second)
-		}
+	for attempt := 1; ; attempt++ {
 		var res sdrctl.ImportResult
 		res, err = d.SDR.ImportConfig(body)
 		if err == nil {
@@ -491,9 +526,17 @@ func (d Deps) importWithRetry(body []byte) error {
 				res.Channels, res.Aliases, res.Streams)
 			return nil
 		}
-		log.Printf("configapply: config import attempt %d failed: %v", attempt+1, err)
+		log.Printf("configapply: config import attempt %d failed: %v", attempt, err)
+
+		if notListening(err) {
+			if !time.Now().Before(deadline) {
+				return err
+			}
+		} else if attempt >= importAttempts {
+			return err
+		}
+		time.Sleep(importRetryWait)
 	}
-	return err
 }
 
 // applyRdio pushes the rdio-scanner config (systems/talkgroups + injected local api

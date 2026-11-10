@@ -103,6 +103,16 @@ type Client struct {
 	applyMu  sync.Mutex // serializes config applies so two pushes can't race
 	updateMu sync.Mutex // serializes update checks (manifest + self-update)
 
+	// The audio monitor's DESIRED state, and a wake for the one worker that
+	// moves the node towards it. audioStart/audioStop used to each get their
+	// own goroutine, so the order they ran in was the scheduler's choice, not
+	// the order the frames arrived: switching the monitor from one reader to
+	// another sends stop then start, and running them the other way round left
+	// the UI showing a reader as live while the node streamed nothing.
+	audioMu   sync.Mutex
+	audioWant string // label to tap ("" = none)
+	audioWake chan struct{}
+
 	swapScheduled atomic.Bool // one-shot guard: at most one self-update swap+restart in flight
 
 	verMu          sync.Mutex // guards appliedVersion
@@ -116,6 +126,9 @@ type Client struct {
 // config + services restart cmds; status supplies the reader component states.
 func New(cfg *agentcfg.Config, q depthProvider, applier ConfigApplier, status StatusProvider) *Client {
 	c := &Client{cfg: cfg, q: q, applier: applier, status: status}
+	// Allocated once for the client's lifetime, not per session: the audio
+	// worker outlives any one WS connection.
+	c.audioWake = make(chan struct{}, 1)
 	c.loadAppliedVersion()
 	return c
 }
@@ -126,6 +139,8 @@ func (c *Client) Run(ctx context.Context) {
 	// Periodic self-update checks run independently of the WS session so they
 	// survive reconnects. Best-effort and placeholder-safe.
 	go c.updateLoop(ctx)
+	// One worker owns the audio tap, for the whole client lifetime.
+	go c.audioLoop(ctx)
 
 	backoff := backoffInitial
 	for {
@@ -353,24 +368,70 @@ func (c *Client) handle(conn *websocket.Conn, env *protocol.Envelope) {
 			Label string `json:"label"`
 		}
 		_ = json.Unmarshal(env.Data, &a)
-		go func() {
-			if err := c.applier.AudioStart(a.Label); err != nil {
-				log.Printf("wsclient: audioStart failed: %v", err)
-			}
-		}()
+		c.wantAudio(a.Label)
 
 	case protocol.TypeAudioStop:
-		go func() {
-			if err := c.applier.AudioStop(); err != nil {
-				log.Printf("wsclient: audioStop failed: %v", err)
-			}
-		}()
+		c.wantAudio("")
 
 	case protocol.TypeDisabled:
 		log.Printf("wsclient: server reports node disabled; will let socket close and back off")
 
 	default:
 		log.Printf("wsclient: ignoring unknown message type %q", env.T)
+	}
+}
+
+// wantAudio records the audio monitor's desired state and nudges the worker.
+// Called only from the read loop, so the last frame to arrive is the last to be
+// recorded — which is the whole ordering guarantee this needs.
+func (c *Client) wantAudio(label string) {
+	c.audioMu.Lock()
+	c.audioWant = label
+	c.audioMu.Unlock()
+	select {
+	case c.audioWake <- struct{}{}:
+	default: // a wake is already pending; it will read the newer state
+	}
+}
+
+// audioLoop moves the node's audio tap towards whatever the last frame asked
+// for, one change at a time.
+//
+// Latest-wins rather than a queue, and that is the point. Each change rebuilds
+// the affected readers and costs ~3s of decode, so replaying a stop and then a
+// start to switch monitor from one reader to the other would pay that twice and
+// pass through a pointless no-tap state in between. Reading the desired state
+// at the moment of acting collapses a burst into the one rebuild that gets the
+// node where it was asked to be.
+func (c *Client) audioLoop(ctx context.Context) {
+	applied := ""
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.audioWake:
+		}
+
+		c.audioMu.Lock()
+		want := c.audioWant
+		c.audioMu.Unlock()
+		if want == applied {
+			continue
+		}
+
+		var err error
+		if want == "" {
+			err = c.applier.AudioStop()
+		} else {
+			err = c.applier.AudioStart(want)
+		}
+		if err != nil {
+			// Leave `applied` alone so the next frame retries rather than
+			// assuming a tap that never took.
+			log.Printf("wsclient: audio monitor change to %q failed: %v", want, err)
+			continue
+		}
+		applied = want
 	}
 }
 

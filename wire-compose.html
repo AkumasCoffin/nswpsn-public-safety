@@ -17,6 +17,7 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script src="auth-common.js"></script>
+  <script src="api-session.js"></script>
   <script src="agencies.js"></script>
   <script src="fleet-vocab.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js" integrity="sha384-948ahk4ZmxYVYOc+rxN1H2gM1EJ2Duhp7uHtZ4WSLkV4Vtx5MUqnV+l7u9B+jFv+" crossorigin="anonymous"></script>
@@ -506,7 +507,6 @@
   </script>
   <script type="module">
     const API_BASE = (typeof API_BASE_URL !== 'undefined') ? API_BASE_URL : 'https://api.forcequit.xyz';
-    let API_KEY = null;
     const qs = new URLSearchParams(location.search);
     const editId = qs.get('edit');
     // One post type since the media/article merge (the old ?type= param is
@@ -542,8 +542,9 @@
     const LIMITS = { article: { img: 6 } };
 
 
-    async function loadKey() { try { const r = await fetch(`${API_BASE}/api/config`); API_KEY = (await r.json()).apiKey; } catch (e) {} }
-    async function keyHeaders() { return API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {}; }
+    // Anonymous reads carry the page's browser session token (api-session.js).
+    async function loadKey() { try { await AusApi.token(); } catch (e) {} }
+    async function keyHeaders() { try { return await AusApi.headers(); } catch (e) { return {}; } }
     async function userHeaders(json) {
       const { data } = await sb.auth.getSession(); const t = data.session?.access_token;
       const h = t ? { Authorization: `Bearer ${t}` } : await keyHeaders();
@@ -1063,7 +1064,7 @@
 
     // ---- incidents ----
     function haversine(a, b, c, d) { const R = 6371, r = Math.PI / 180; const dLat = (c - a) * r, dLng = (d - b) * r; const s = Math.sin(dLat / 2) ** 2 + Math.cos(a * r) * Math.cos(c * r) * Math.sin(dLng / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(s)); }
-    // Pull the same incident feed the logs page uses (/api/data/history): RFS,
+    // Pull the same incident feed the logs page uses (/api/v1/history): RFS,
     // traffic, pager, user incidents, etc. — not just user-created ones. full=1
     // so titles/locations are populated; keep only rows we can link (source_id).
     // Sources that aren't scene "incidents" you'd link a photo to (power
@@ -1075,8 +1076,8 @@
     const SCHEDULED_TITLE = /^\s*(scheduled|planned)\b/i;
     async function loadIncidents() {
       try {
-        const r = await fetch(`${API_BASE}/api/data/history?limit=300&unique=1&full=1&order=desc`, { headers: await keyHeaders() });
-        const j = await r.json();
+        const r = await fetch(`${API_BASE}/api/v1/history?limit=300&unique=1&full=1&order=desc`, { headers: await keyHeaders() });
+        const j = (await r.json()).data;
         const recs = (j && Array.isArray(j.records)) ? j.records : [];
         allIncidents = recs
           .filter((x) => x && x.source_id && !INCIDENT_BLOCK.test(x.source || '') && !SCHEDULED_TITLE.test(x.title || x.location_text || ''))

@@ -6,7 +6,8 @@ Go 1.26, module `github.com/AkumasCoffin/nswpsn-node/pager-node`. A separate Go
 module with its own `go.mod` — build it from its own directory.
 
 What it decodes: **POCSAG pager messages** — 512, 1200 and 2400 baud — off NBFM,
-using the system's `rtl_fm` and `multimon-ng`.
+using the system's `rtl_fm` (or `rtl_sdr`, when one dongle carries several
+frequencies) and `multimon-ng`.
 
 This is the node kind that produces **pins on the public map**: a page carries an
 address, the backend parses coordinates out of the message body, and
@@ -19,11 +20,12 @@ Read [`../../OPERATING-RULES.md`](../../OPERATING-RULES.md) before changing anyt
 ## What it is
 
 Smaller than the radio agent, and deliberately so: it **manages no external
-installs**. The readers drive system-installed `rtl_fm`, `multimon-ng` and `curl`,
-so the agent only ever self-updates its own binary.
+installs**. The readers drive system-installed `rtl_fm`, `rtl_sdr` (both from the
+`rtl-sdr` package the installer already pulls), `multimon-ng` and `curl`, so the
+agent only ever self-updates its own binary.
 
 ```
-   antenna ─► RTL-SDR (addressed by USB serial)
+   antenna ─► RTL-SDR (identified by USB serial, opened by index)
                    │
                    ▼
         reader.sh:  rtl_fm ──► multimon-ng ──► curl
@@ -80,15 +82,40 @@ carries `X-Node-Token` + `X-Node-Install`, with
 
 ## The readers
 
-`internal/reader` renders one `reader.sh` per frequency from an embedded template
-(`reader.sh.tmpl`, `go:embed`). Each is a self-contained bash pipeline:
+`internal/reader` renders one `reader.sh` per dongle in use, from an embedded
+template (`go:embed`). Each is a self-contained bash pipeline. A dongle carrying
+one frequency gets `reader.sh.tmpl`:
 
 ```
-rtl_fm -d <serial> -f <MHz> -p <ppm> -g <gain>  →  multimon-ng -a POCSAG512 -a POCSAG1200 -a POCSAG2400  →  curl → the agent's loopback relay
+rtl_fm -d <index> -f <MHz> -p <ppm> -g <gain>  →  multimon-ng -a POCSAG512 -a POCSAG1200 -a POCSAG2400  →  curl → the agent's loopback relay
+```
+
+A dongle carrying several gets `reader-multi.sh.tmpl` (see
+[Several frequencies on one dongle](#several-frequencies-on-one-dongle)):
+
+```
+rtl_sdr -d <index> -f <centre Hz> -s <rate> -p <ppm> -g <gain>
+  → nodeagent-pager channelize <rate> <centre> <Hz> >(multimon-ng … → curl) <Hz> >(multimon-ng … → curl) …
 ```
 
 `internal/supervise` launches each rendered script as a component and restarts it
 on crash.
+
+`-p` is per dongle, measured for each dongle in use at startup and again on every rescan by
+`pagersdr.MeasurePPM`. It runs `rtl_test -p` — which compares the RTL's actual
+sample rate against the host clock, so no antenna or signal is needed — and waits
+for the reading to **settle**: three consecutive cumulative readings agreeing to
+within 2 ppm. `PPMMeasureDur` is a **one-minute ceiling with an early exit**, not
+a fixed run; a healthy dongle settles in about thirty seconds and the run is
+interrupted (with SIGINT, so the USB device is released cleanly) the moment it
+does. Settling is the whole job: taking whatever the last line said after a fixed
+run is two or three readings still dominated by USB transfer jitter, and a bogus
+94 ppm at 148.5875 MHz is ~14 kHz of detune, which walks the POCSAG carrier out of
+`rtl_fm`'s passband at `-s 22050`. The reader then decodes nothing while the
+heartbeat still reports it running. A reading that never settles falls back to
+`ppm=0`, and so does one outside **±100 ppm** (`maxPlausiblePPM`): a clock that far
+out is faulty, and writing an absurd correction is worse than writing none. Zero
+is close enough for wide NBFM.
 
 Everything interpolated into the script is rendered from validated values —
 numbers from parsed floats, never from received text — because the settings
@@ -102,23 +129,128 @@ arrive from a server config push.
 | Label | Frequency | Service |
 |---|---|---|
 | `NSWRFS` | 148.5875 MHz | NSW Rural Fire Service |
-| `FRNSW` | 148.9875 MHz | Fire & Rescue NSW |
+| `FRNSW` | 148.9625 MHz | Fire & Rescue NSW |
 
-**At most two readers run** (`maxReaders = 2`), because the locked plan is two
-frequencies. One dongle means the first frequency only; two or more means the
-first two, and extra dongles are idle spares.
+The backend pushes each state's plan (`PAGER_PLANS` in
+`backends/node/src/services/nodes/configMerge.ts`), which overrides this default.
 
-### Why dongles are addressed by serial
+`channelize.Assign` decides which dongle carries which frequency, and the answer
+is normally **one reader on dongle 0**:
+
+- **The first dongle carries every frequency it can fit**, packed first-fit in
+  priority order, so the first one is always placed. Both NSW frequencies share
+  it; a state with one frequency runs it on the plain `rtl_fm` reader.
+- **A further dongle is only taken for a frequency that fits on none in use**
+  (too far from the others, or past `MaxChannelsPerDongle` = 8). Dongles beyond
+  that stay idle, however many are plugged in.
+- A frequency no dongle can take is **not received**, and the agent logs it by
+  name. The plan's order decides what keeps its place; there is no per-node
+  choice, since one dongle takes the whole plan.
+- If the agent cannot resolve its own path it has no `channelize`, and falls back
+  to one frequency per dongle.
+
+Detection follows the same plan (`detectDevices`). Only the dongles that will
+carry a reader are measured for ppm, because each measurement holds its dongle
+for up to a minute with every reader waiting, so measuring an idle spare only
+lengthens the deaf spell on every boot. Serials are only made unique when two or
+more dongles are in use (see below). A dongle that later picks up a reader
+without having been measured runs at `ppm=0`, and the agent says so, until the
+next "Recheck SDRs".
+
+### Several frequencies on one dongle
+
+`rtl_fm` demodulates one frequency. Given several `-f` flags it becomes a
+**scanner**: it sits on one frequency until the squelch closes, then hops. That
+hears one channel at a time, so a page on one frequency is lost while the other
+is busy — and NSW RFS and Fire & Rescue NSW often page for the same job at the
+same moment. It also refuses to start without a squelch level (which depends on
+gain and site noise), and it never says which frequency a page came from, so
+every page would carry the same label.
+
+So a shared dongle runs `rtl_sdr` instead, which hands over the raw I/Q around a
+centre frequency, and the agent's own `channelize` subcommand
+(`internal/channelize`) splits it. For each frequency it mixes the channel down
+to zero, low-pass filters and decimates in two stages to 22050 Hz, FM-discriminates
+and removes DC. That is the audio `rtl_fm -s 22050 -E dc` produced — same rate,
+same scaling, same discriminator polarity — so each stream feeds its own
+`multimon-ng` exactly as before, through a bash process substitution, and its
+decoded lines go to the relay under its own label and frequency.
+
+How a shared dongle is tuned (`channelize.fit`):
+
+- **Sample rate**: the lowest of 1,058,400 / 1,411,200 / 2,116,800 / 2,381,400 S/s
+  that spans the frequencies. Each is a whole multiple of 22050, so there is no
+  resampling. The NSW pair, 375 kHz apart, takes the lowest; the top rate spans
+  about 1.88 MHz between the outermost channels.
+- **Every channel inside ±40% of the rate**, where the RTL2832's own filter is
+  still flat.
+- **Every channel at least 50 kHz from the centre**, clear of the DC spike, which
+  is why `rtl_fm` never tunes onto the frequency it demodulates either.
+- **No channel on another's image** (mirrored about the centre). R820T dongles
+  have no image to speak of; E4000-style zero-IF tuners do.
+
+The cost is CPU, which scales with the sample rate. On one desktop core the NSW
+pair splits at about 46× real time (`BenchmarkTwoChannels`), and each channel
+gets a core of its own. A Raspberry Pi core is several times slower than that;
+it has not been measured on one yet.
+
+`channelize` lives in the agent binary (`nodeagent-pager channelize …`), so a
+node needs nothing installed beyond what the plain reader uses, and it updates
+with the agent. If any channel's `multimon-ng` dies, `channelize` exits and the
+supervisor restarts the whole reader.
+
+The heartbeat still reports one `reader:<label>` per frequency (the shared
+component is `reader:<label>+<label>`). The staff drawer's **Frequencies** panel
+lists the node's plan (service, frequency, Listen for each) with the decoder's
+state shown once, because the frequencies on a dongle live and die together.
+Listen taps that one frequency's audio, which restarts the dongle's reader for a
+couple of seconds. "Restart decoder" asks once per frequency, and the agent
+restarts a shared reader only once for the burst (`restartCoalesce`, 5 s).
+
+How it was verified: unit tests synthesise two FSK transmitters keyed at the same
+time and check every bit comes out on the right channel and none on the other
+(512, 1200 and 2400 baud; a 5 kHz mistune; a 3× stronger neighbour 25 kHz away),
+and that read sizes never change an output sample. `multimon_test.go` encodes
+real POCSAG pages, runs them through `channelize` into `multimon-ng`, and checks
+each decodes on its own frequency; it skips where `multimon-ng` is not on `PATH`.
+The rendered script was also run end to end under bash against multimon-ng 1.3.0,
+with a stand-in `rtl_sdr` replaying recorded I/Q. It has **not** yet run on real
+hardware.
+
+### Why dongles are identified by serial but opened by index
 
 `internal/pagersdr` enumerates dongles by shelling out to `rtl_test` and
 `rtl_eeprom` (installed on the host by the node installer), and its key job is
-guaranteeing each has a **unique, stable USB serial** so a reader can be pinned
-to a specific antenna and frequency with `rtl_fm -d <serial>`.
+guaranteeing each dongle in use has a **unique, stable USB serial**. The serial is
+the dongle's identity, and what the EEPROM work exists to protect.
 
-Cheap RTL-SDR clones ship with identical serials (`00000001`), which makes
-per-device addressing ambiguous. The agent rewrites an EEPROM serial **only when
-one actually collides** — an EEPROM write is a permanent hardware change, so a
-dongle that already has a distinct serial is left untouched.
+Cheap RTL-SDR clones ship with identical serials (`00000001`), which makes that
+identity ambiguous. The agent rewrites an EEPROM serial **only when one actually
+collides and two or more dongles are in use** — an EEPROM write is a permanent
+hardware change, so a dongle that already has a distinct serial is left
+untouched, and so is every dongle on a node running one reader, spare or not.
+
+In practice readers take dongles in **index order** (the reader for the first
+group goes on index 0), not by serial, so the serial pins nothing by itself; it
+is how a log line or a script on disk names the physical dongle.
+
+What `rtl_fm -d` (or `rtl_sdr -d`) receives, though, is the **librtlsdr device index** the agent
+resolved for that serial, not the serial itself. librtlsdr's
+`verbose_device_search()` runs `strtol` over the `-d` argument *first* and, when
+the whole string parses to a number below the device count, treats it as an
+index — only otherwise does it compare serials. The factory serial `00000001`
+parses (base 0, so the leading zeros make it octal) to 1, so on a two-dongle node
+`rtl_fm -d 00000001` opened device 1: both readers resolved to the same dongle,
+the second died on `usb_claim_interface` after five restarts, and one of the two
+locked frequencies went permanently silent. A serial carrying a dash or an
+underscore had the opposite failure — sanitised into a string no device reports,
+so that reader could never start at all.
+
+So the agent resolves serial → index itself, freshly at every detect and rescan,
+and hands `rtl_fm` the index, which has exactly one meaning
+(`internal/reader/reader.go`). The serial is still recorded in a comment at the
+top of each generated `reader.sh`, so a script on disk says which physical dongle
+it was written for.
 
 ## Decoding and relaying
 
@@ -139,8 +271,9 @@ parses it and, on a decodable page, enqueues a normalised JSON message. It
 **must always answer 200** so the fire-and-forget reader `curl`s never block or
 retry. A single inbound line is capped at 64 KiB as a sanity bound.
 
-The reader can also tee `rtl_fm`'s 22050 Hz s16le mono PCM to a `/audio`
-endpoint on the same listener, for a staff audio monitor. Off unless configured.
+The reader can also tee one frequency's 22050 Hz s16le mono PCM (`rtl_fm`'s, or
+that channel's stream out of `channelize`) to a `/audio` endpoint on the same
+listener, for a staff audio monitor. Off unless configured.
 
 `internal/queue` is the same disk-backed, bounded FIFO the radio agent uses — one
 file per message, named `<20-digit-zero-padded-unixnano>-<rand4>.call`. It is
@@ -167,12 +300,52 @@ DB value nor an env pair is set, `pager-upload` returns 503.
 `PAGERMON_URL` is a **different thing** — the read path the backend polls to draw
 pages on the map. Do not confuse the two.
 
-### Blocked capcodes
+### What the relay filters
 
-Some capcodes are non-message transmitters that fire encoded or binary data
-frames rather than readable pages — FRNSW capcode `521839` emits roughly one
-base64 frame a minute. `PAGER_BLOCKED_CAPCODES` (default `521839`) drops them
-before the Pagermon forward **and** before the staff drawer buffer.
+Not every decode is a page. The relay keeps four kinds out of Pagermon, checked
+in this order (`backends/node/src/services/pagerFilter.ts`):
+
+| Reason | What it is |
+|---|---|
+| `blocked capcode` | A non-message transmitter. FRNSW capcode `521839` sends a base64 data frame about once a minute; `1850000` is an FRNSW keepalive. `PAGER_BLOCKED_CAPCODES` (default `521839`) adds to the built-in `1850000`. |
+| `empty message` | A tone-only page, no body. Pagermon rejects these outright. |
+| `noise` | One or two characters: POCSAG bit errors landing on random capcodes. |
+| `time code` | A bare `HHMM`, the FRNSW clock tick. |
+
+A filtered page is still acked, so the node deletes it from its queue, still
+stored in `node_pager_events`, and still shown in the staff drawer's message
+list, dimmed and labelled.
+
+They are most of the traffic: on the NSW networks about nine stored pages in
+ten are filtered, almost all of them `521839`. So the staff Data tab's pager
+views count traffic only and list the filtered pages in a **Filtered** view of
+their own. They apply the same rules in SQL (`pagerFilterReasonSql`) rather
+than reading a stored flag, so changing `PAGER_BLOCKED_CAPCODES` moves a
+capcode's past pages too. The tests hold the SQL and the relay's JS to the
+same cases.
+
+### The owner's view
+
+The node's owner sees the same split on the feeder page. Their node modal has
+three tabs, read from `node_pager_events` through the staff helpers
+(`feederPagerOverview` / `feederPagerMessages` in `api/node-data.ts`, behind
+ownership in `api/feeder.ts`):
+
+| Tab | Route | What it shows |
+|---|---|---|
+| Overview | `GET /api/feeder/nodes/:id/pager-overview` | Messages, filtered and capcodes for 24 hours and 7 days; the last message; busiest capcodes and filtered-by-reason for 7 days |
+| Messages | `GET /api/feeder/nodes/:id/pager-messages?window=&offset=` | The node's traffic, one row per capcode, 50 a page |
+| Filtered | `…/pager-messages?filtered=1` | What the relay kept out of Pagermon, each with its reason |
+
+The Overview's counts equal the two lists' totals for the same window,
+because the lists count the same logical pages. Rows carry the plan label for
+their frequency (`pagerPlanLabelFor`). They leave out which other nodes heard
+a page, which is staff-only detail.
+
+The owner used to read the backend's in-memory ring buffer
+(`GET /api/feeder/nodes/:id/messages`). That route is gone: 50 decodes, nine
+in ten of them filtered, and empty after every restart. The buffer itself
+stays for the staff drawer.
 
 ## The control WebSocket
 
@@ -198,26 +371,28 @@ self-updates the `agent` component — its own binary.
 is treated as "nothing to do" — not an error.
 
 **A change to this agent's Go code does not reach any node until
-`pager-agent.version` is bumped in that manifest.** `deploy.sh` skips the rebuild
-when the built binary already reports the manifest version.
-
-Bumping the version is necessary but **not currently sufficient**: the
-`pager-agent` entry's sha256 is empty on both platforms, and an empty sha256 is
-treated as nothing to do, so self-update is dormant and a changed agent reaches
-a node only via a fresh install. Details:
-[`forked-runtimes.md`](forked-runtimes.md#self-update-is-dormant-for-the-agents).
+`pager-agent.version` is bumped in that manifest**, and that bump is **also all
+that is needed**. `deploy.sh` skips the rebuild when the built binary already
+reports the manifest version, so the bump is what triggers the cross-build into
+`<webroot>/downloads` — and the backend fills the entry's sha256 at serve time by
+hashing the binary sitting there, so the empty digests committed in the manifest
+are never the ones a pager node is served. A node running an older version picks
+the new binary up on its next check and self-replaces, so treat the bump as a
+deploy to the live pager fleet. Details:
+[`forked-runtimes.md`](forked-runtimes.md#how-a-version-bump-reaches-a-running-node).
 
 ## Internal packages
 
 | Package | Does |
 |---|---|
 | `agentcfg` | loads, defaults and persists the YAML config |
+| `channelize` | decides which dongle carries which frequencies, and splits one dongle's I/Q into a 22050 Hz audio stream per frequency |
 | `enrol` | single-use code → node token |
 | `pagerdecode` | parses multimon-ng POCSAG lines |
 | `pagersdr` | enumerates dongles, guarantees unique USB serials |
 | `protocol` | the JSON WebSocket envelope |
 | `queue` | disk-backed bounded FIFO |
-| `reader` | renders `reader.sh` per frequency |
+| `reader` | renders `reader.sh` per dongle (rtl_fm for one frequency, channelize for several) |
 | `relay` | loopback listener for decoded lines (and optional PCM tee) |
 | `supervise` | child-process supervision, stale-process reaping |
 | `update` | manifest fetch and self-update |
@@ -229,7 +404,11 @@ a node only via a fresh install. Details:
 - Pager traffic is unencrypted by nature, so unlike radio there is no
   encryption ceiling here. The ceiling is **coverage**: a node hears what its
   antenna hears, and there is none where nobody has put one up.
-- At most two frequencies per node.
+- A dongle shares only frequencies within about 1.88 MHz of each other, and at
+  most eight. Anything beyond what the node's dongles can take is not received
+  (it is logged by name, not dropped silently).
+- Frequencies sharing a dongle share its antenna and gain: one gain setting
+  covers all of them.
 - **A page is left off the map only if the backend's coordinate parser found
   nothing at all.** An FRNSW `FRINC` turnout, for instance, has no
   comma-separated number pair anywhere in the body, so it archives and appears

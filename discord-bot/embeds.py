@@ -25,13 +25,192 @@ STAFF_NOTIFY_KINDS = {
     'new_node': ('New node', '\U0001F4E1', 0x22C55E),
     'ticket': ('Contact ticket', '\U0001F3AB', 0xEAB308),
     'siteSurvey': ('Site survey', '\U0001F4E1', 0x7DD3FC),
+    'api_key_request': ('API key request', '\U0001F511', 0x38BDF8),
+    # Bug reports and suggestions (backend api/feedback.ts) — the PRIVATE
+    # staff alert. Their public board and intake channels are below.
+    'bug_report': ('Bug report', '\U0001F41E', 0xEF4444),
+    'suggestion': ('Suggestion', '\U0001F4A1', 0x38BDF8),
 }
 _STAFF_STATUS_COLOR = {
     'approved': 0x22C55E,
     'upheld': 0x22C55E,
     'rejected': 0x64748B,
     'closed': 0x64748B,
+    # The feedback statuses, as the backend labels them.
+    'fixed': 0x22C55E,
+    'added': 0x22C55E,
+    "won't fix": 0x64748B,
+    'not added': 0x64748B,
+    'duplicate': 0x94A3B8,
 }
+
+# --- Bug reports and suggestions: the public side ---------------------------
+# Per kind: label, the same in a sentence, icon, accent.
+FEEDBACK_KINDS = {
+    'bug': ('Bug report', 'bug report', '\U0001F41E', 0xEF4444),
+    'suggestion': ('Suggestion', 'suggestion', '\U0001F4A1', 0x38BDF8),
+}
+# Per status: the dot shown beside its label, and the accent a post takes
+# (None keeps the kind's own).
+_FEEDBACK_STATUS_STYLE = {
+    'open': ('\U0001F7E1', None),
+    'in_progress': ('\U0001F535', 0x3B82F6),
+    'done': ('\U0001F7E2', 0x22C55E),
+    'declined': ('⚫', 0x64748B),
+    'duplicate': ('⚪', 0x94A3B8),
+}
+
+
+def _feedback_status_text(status: str, status_label: str) -> str:
+    dot, _ = _FEEDBACK_STATUS_STYLE.get(status, ('\U0001F7E1', None))
+    return f"{dot} {status_label or status or 'Open'}"
+
+
+def build_feedback_notice_embed(kind: str, site_url: str) -> discord.Embed:
+    """The how-to the bot keeps in an intake channel — the only message there,
+    since every member's message is removed once filed.
+
+    Everything a member needs to know before posting: one message per
+    report, what to include, and that the bot files it, removes the message
+    and confirms with its number. Plain text apart from the one link, so it
+    reads the same on every client.
+    """
+    label, in_sentence, icon, color = FEEDBACK_KINDS.get(kind, FEEDBACK_KINDS['bug'])
+    # The shape the bot requires (bot.py split_feedback_message): a title
+    # line starting with '#', the details on the lines under it. A message
+    # without that is answered with the format and not filed.
+    if kind == 'suggestion':
+        lines = [
+            "Post your idea as **one message**: a title line starting with `#`, "
+            "then the details on the lines under it.",
+            "```",
+            "# Show the brigade that covers an incident",
+            "When I open an RFS incident on the map, show which brigade's area",
+            "it is in and link to their page. Volunteers watching their own",
+            "patch would see at a glance whether it is theirs.",
+            "```",
+            "• what it would do, and why it would help",
+            "• where on the site it belongs, if that matters",
+            "",
+            "The bot removes your message and replies with the suggestion's number. "
+            "It then appears on the suggestions board with its status, and the "
+            "board post is replied to whenever the status changes "
+            "(Planned, Added, Not added).",
+        ]
+        title = f"{icon} Suggestions"
+    else:
+        lines = [
+            "Post the bug as **one message**: a title line starting with `#`, "
+            "then the details on the lines under it.",
+            "```",
+            "# Pager list stops updating after about an hour",
+            "Left the Live page open on the pager tab. After roughly an hour",
+            "new pages stop appearing; a refresh brings them back and they",
+            "were all there. Chrome 130 on Windows 11.",
+            "```",
+            "• what you did, what happened, and what you expected",
+            "• the page or feature, and your device and browser",
+            "• a screenshot, if you have one — attach it to the same message",
+            "",
+            "The bot removes your message and replies with the report's number. "
+            "It then appears on the bug board with its status, and the board "
+            "post is replied to whenever the status changes "
+            "(Looking into it, Fixed, Won't fix).",
+        ]
+        title = f"{icon} Bug reports"
+    embed = discord.Embed(title=title, description="\n".join(lines)[:4096], color=color)
+    embed.set_footer(text=f"AusAware · one {in_sentence} per message")
+    return embed
+
+
+def build_feedback_notice_view(kind: str, site_url: str):
+    """The button under the how-to: the same thing, on the site.
+
+    A link-style button needs no interaction handler and no timeout — it is
+    a URL the client opens — so this is a plain View with timeout=None, not
+    a Components V2 container (which cannot sit alongside an Embed). None
+    when there is no site URL to point at.
+    """
+    site = (site_url or '').rstrip('/')
+    if not site:
+        return None
+    label = 'Suggest it on the site' if kind == 'suggestion' else 'Report it on the site'
+    view = discord.ui.View(timeout=None)
+    view.add_item(discord.ui.Button(
+        style=discord.ButtonStyle.link, label=label,
+        url=f"{site}/contact?type={kind}", emoji='\U0001F310'))
+    return view
+
+
+_FEEDBACK_REPLY_COLOR = {
+    'ok': 0x22C55E,
+    'hint': 0xF59E0B,
+    'fail': 0xEF4444,
+    'info': 0x94A3B8,
+}
+
+
+def build_feedback_reply_embed(kind: str, tone: str, title: str, text: str) -> discord.Embed:
+    """What the bot says back to a member who posted in an intake channel:
+    filed (ok), not filed and why (hint / fail), or not set up (info)."""
+    _, _, icon, _ = FEEDBACK_KINDS.get(kind, FEEDBACK_KINDS['bug'])
+    embed = discord.Embed(
+        title=title[:256],
+        description=(text or '')[:4096] or None,
+        color=_FEEDBACK_REPLY_COLOR.get(tone, _FEEDBACK_REPLY_COLOR['info']),
+    )
+    embed.set_footer(text=f"{icon} AusAware · {'bug reports' if kind == 'bug' else 'suggestions'}")
+    return embed
+
+
+def build_feedback_board_embed(kind: str, feedback_id: str, subject: str, body: str,
+                               reporter: str, source: str, status: str, status_label: str,
+                               site_url: str) -> discord.Embed:
+    """A report as it sits on the public board: what, by whom, and its status."""
+    label, _, icon, color = FEEDBACK_KINDS.get(kind, FEEDBACK_KINDS['bug'])
+    _, status_color = _FEEDBACK_STATUS_STYLE.get(status, ('', None))
+    site = (site_url or '').rstrip('/')
+    embed = discord.Embed(
+        title=f"{icon} {label} #{feedback_id} · {subject}"[:256],
+        description=(body or '')[:4000] or '​',
+        color=status_color or color,
+        url=f"{site}/contact?type={kind}" if site else None,
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(name='Status', value=_feedback_status_text(status, status_label), inline=True)
+    via = 'via Discord' if source == 'discord' else 'on the site'
+    embed.set_footer(text=f"Reported by {reporter or 'a member'} · {via}")
+    return embed
+
+
+def set_feedback_board_status(embed: discord.Embed, status: str, status_label: str) -> discord.Embed:
+    """The board post after a status change: Status field and accent updated, the rest kept."""
+    _, status_color = _FEEDBACK_STATUS_STYLE.get(status, ('', None))
+    if status_color:
+        embed.color = status_color
+    for i, f in enumerate(embed.fields):
+        if f.name == 'Status':
+            embed.set_field_at(i, name='Status', value=_feedback_status_text(status, status_label), inline=True)
+            break
+    else:
+        embed.add_field(name='Status', value=_feedback_status_text(status, status_label), inline=True)
+    return embed
+
+
+def build_feedback_status_embed(kind: str, status: str, status_label: str, note: str, actor: str) -> discord.Embed:
+    """The reply posted under a board post when its status changes: the new
+    status as the heading, staff's note as the body, who set it in the footer,
+    in the status's own colour — the same shape as the post it answers."""
+    _, _, icon, kind_color = FEEDBACK_KINDS.get(kind, FEEDBACK_KINDS['bug'])
+    _, status_color = _FEEDBACK_STATUS_STYLE.get(status, ('', None))
+    embed = discord.Embed(
+        title=_feedback_status_text(status, status_label)[:256],
+        description=(note or '')[:4096] or None,
+        color=status_color or kind_color,
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.set_footer(text=f"{icon} Set by {actor}" if actor else f"{icon} AusAware")
+    return embed
 
 
 def _parse_notify_fields(raw: Any) -> List[Dict[str, Any]]:
@@ -69,16 +248,22 @@ def build_staff_notify_embed(kind: str, params: Dict[str, Any]) -> discord.Embed
         kind, ('Staff notification', '\U0001F514', 0x94A3B8))
     title = (params.get('title') or '').strip() or label
     subtitle = (params.get('subtitle') or '').strip()
-    status = (params.get('status') or '').strip().lower()
+    status = (params.get('status') or '').strip()
     actor = (params.get('actor') or '').strip()
     url = (params.get('url') or '').strip()
 
-    resolved = bool(status)
-    color = _STAFF_STATUS_COLOR.get(status, base_color) if resolved else base_color
+    # Resolved is the EVENT, not the presence of a status: a new ticket
+    # arrives with status 'open', and deciding by the status alone rendered
+    # every new ticket as "Open \u00b7 Handled by a staff member \u00b7 resolved".
+    # 'update' is a status that is not the end of it (a bug report marked
+    # "Looking into it"): shown in the heading, live styling kept.
+    event = (params.get('event') or 'new').strip().lower()
+    resolved = event == 'resolved'
+    color = _STAFF_STATUS_COLOR.get(status.lower(), base_color) if resolved else base_color
 
     heading = f"{icon} {label}"
-    if resolved:
-        heading = f"{heading} \u00b7 {status.title()}"
+    if status:
+        heading = f"{heading} \u00b7 {status[:1].upper()}{status[1:]}"
 
     embed = discord.Embed(
         title=heading[:256],
@@ -117,6 +302,26 @@ def strip_html(text: str) -> str:
     # Clean up whitespace
     clean = re.sub(r'\s+', ' ', clean).strip()
     return clean
+
+
+# @everyone, @here and <@…> / <@&…> as Discord parses them. Written out here
+# rather than taken from discord.utils so embeds.py stays importable against
+# the minimal discord stub the standalone tests inject.
+_MENTION_RE = re.compile(r'@(everyone|here|[!&]?[0-9]{17,20})')
+
+
+def safe_text(text: Any) -> str:
+    """Clean text that came from a person, for rendering into a TextDisplay.
+
+    Strips HTML as strip_html does, then breaks any mention in it with a
+    zero-width space. The real gate is allowed_mentions on the send (see
+    NSWPSNBot.__init__ and _send_one_message in bot.py) — this is so an
+    editor's "@everyone" in an incident title does not even LOOK like a ping
+    in someone else's server.
+    """
+    if not text:
+        return ''
+    return _MENTION_RE.sub('@​\\1', strip_html(text))
 
 
 def is_valid_value(value: Any) -> bool:
@@ -552,7 +757,8 @@ def says_the_same(a: str, b: str) -> bool:
     return na in nb or nb in na
 
 
-# Endpoints whose payload is a GeoJSON Feature the interstate container reads.
+# Endpoints whose payload is a GeoJSON Feature the interstate container reads,
+# as /api/ paths: a feed polled on /api/v1/ is matched with the v1 folded off.
 # At module level, not on the class: a comprehension inside a class body gets
 # its own scope and cannot see sibling class attributes, so deriving the set
 # in there raises NameError at import — which takes the whole bot down.
@@ -567,7 +773,7 @@ _INTERSTATE_ENDPOINTS = (
 _INCIDENT_TYPES = frozenset(
     ['rfs'] + [
         t['key'] for t in alert_catalog.TYPE_DEFS
-        if str(t.get('endpoint') or '').startswith(_INTERSTATE_ENDPOINTS)
+        if str(t.get('endpoint') or '').replace('/api/v1/', '/api/', 1).startswith(_INTERSTATE_ENDPOINTS)
     ]
 )
 
@@ -1476,6 +1682,8 @@ class EmbedBuilder:
             return self.build_wire_fleet_container(data)
         elif alert_type == 'user_incident':
             return self.build_user_incident_container(data, previous_message=previous_message)
+        elif alert_type == 'shark_report':
+            return self.build_shark_container(data)
         else:
             return self.build_generic_container(data, alert_type)
 
@@ -1674,6 +1882,113 @@ class EmbedBuilder:
         self._append_container_footer(container, footer_bits, source="NASA FIRMS")
         return container
 
+    def build_firms_digest_container(self, hotspots: List[Dict[str, Any]]):
+        """One card for every FIRMS hotspot a poll turned up for a channel.
+
+        A satellite pass over a fire ground lights up hundreds of grid cells,
+        and each one used to be its own message: 2,577 of them in a single
+        poll on 2026-10-12, which filled the send queue and left every other
+        channel's alerts behind the backlog. A hotspot is not an incident —
+        there is no status to update and nothing for a later message to reply
+        to — so collapsing them loses nothing a reader can act on.
+
+        What survives the collapse is what a reader actually needs: how many,
+        where (the bounding box and its centre), and the strongest few with
+        their own coordinates.
+        """
+        points = []       # (frp, lat, lon, detections, confidence)
+        detections = 0
+        satellites = []
+        latest = None
+        for h in hotspots or []:
+            props = (h or {}).get('properties') or {}
+            # Same fallback as build_firms_container: the clusterer's snapped
+            # grid cell stands in when the pixel's own coords are absent.
+            lat = props.get('latitude')
+            lon = props.get('longitude')
+            if lat is None:
+                lat = props.get('cluster_glat')
+            if lon is None:
+                lon = props.get('cluster_glon')
+            try:
+                lat = float(lat)
+                lon = float(lon)
+            except (TypeError, ValueError):
+                continue
+            try:
+                frp = float(props.get('cluster_max_frp', props.get('frp')) or 0)
+            except (TypeError, ValueError):
+                frp = 0.0
+            count = props.get('cluster_count', 1)
+            count = count if isinstance(count, int) and count > 0 else 1
+            detections += count
+            points.append((frp, lat, lon, count,
+                           str(props.get('confidence', '')).strip().lower()))
+            sat = props.get('satellite_tag') or props.get('satellite') or ''
+            if sat and sat not in satellites:
+                satellites.append(str(sat))
+            dt_acq = parse_timestamp_to_datetime(props.get('acq_datetime', ''))
+            if dt_acq and (latest is None or dt_acq > latest):
+                latest = dt_acq
+
+        color = self.COLORS.get('firms', 0xF97316)
+        container = discord.ui.Container(accent_colour=color)
+        container.add_item(discord.ui.TextDisplay(
+            content=f"### 🛰️ {len(hotspots):,} Fire Hotspots Detected"
+        ))
+        if not points:
+            # Nothing had usable coordinates — say so rather than render a
+            # card that looks broken.
+            container.add_item(discord.ui.TextDisplay(
+                content='_No usable coordinates in this batch of detections._'
+            ))
+            self._append_container_footer(container, [], source="NASA FIRMS")
+            return container
+
+        lats = [p[1] for p in points]
+        lons = [p[2] for p in points]
+        container.add_item(discord.ui.TextDisplay(content=self._clip_text(
+            f"📍 `{min(lats):.3f}…{max(lats):.3f}, "
+            f"{min(lons):.3f}…{max(lons):.3f}`"
+        )))
+
+        meta_bits = [f"{detections:,} detections"]
+        high = sum(1 for p in points if p[4] == 'high')
+        if high:
+            meta_bits.append(f"🔴 {high:,} high confidence")
+        if satellites:
+            meta_bits.append('🛰️ ' + ', '.join(satellites[:3]))
+        container.add_item(discord.ui.TextDisplay(
+            content=self._clip_text(' · '.join(meta_bits))
+        ))
+
+        # The strongest few, by fire radiative power — the ones worth looking
+        # at first if anyone goes looking.
+        strongest = sorted(points, key=lambda p: p[0], reverse=True)[:3]
+        if strongest and strongest[0][0] > 0:
+            lines = ["**Strongest**"]
+            for frp, lat, lon, count, _conf in strongest:
+                bits = [f"`{lat:.4f}, {lon:.4f}`"]
+                if frp > 0:
+                    bits.append(f"🔥 {frp:.0f} MW FRP")
+                if count > 1:
+                    bits.append(f"{count} px")
+                lines.append(' · '.join(bits))
+            container.add_item(discord.ui.TextDisplay(
+                content=self._clip_text('\n'.join(lines))
+            ))
+
+        footer_bits = []
+        if latest:
+            footer_bits.append(f"🕐 <t:{int(latest.timestamp())}:R>")
+        # Centre of the box, zoomed out far enough to hold the whole spread.
+        footer_bits.append("[🗺️ Map](%s)" % build_map_url(
+            (min(lats) + max(lats)) / 2, (min(lons) + max(lons)) / 2,
+            label="Fire Hotspots", layer="firms", zoom=9,
+        ))
+        self._append_container_footer(container, footer_bits, source="NASA FIRMS")
+        return container
+
     # ---- BOM ---------------------------------------------------
     def build_bom_container(self, data: Dict[str, Any]):
         """Components V2 container for BOM warnings."""
@@ -1737,7 +2052,8 @@ class EmbedBuilder:
 
     # ---- Traffic -----------------------------------------------
     def build_traffic_container(self, data: Dict[str, Any], alert_type: str):
-        """Components V2 container for Live Traffic NSW incidents."""
+        """Components V2 container for road records: Live Traffic NSW, and
+        the other states' own feeds (their `state` and `credit` say whose)."""
         props = data.get('properties', {})
         incident_type = props.get('incidentType', '')
         title = props.get('title') or props.get('headline') or props.get('displayName', 'Traffic Alert')
@@ -1775,9 +2091,11 @@ class EmbedBuilder:
                 content=self._clip_text('\n'.join(body_bits))
             ))
 
+        state = str(props.get('state') or '')
         if is_valid_value(roads):
+            where = roads[:1500] if state in ('', 'NSW') else f"{roads[:1500]} · {state}"
             container.add_item(discord.ui.TextDisplay(
-                content=self._clip_text(f"📍 {roads[:1500]}")
+                content=self._clip_text(f"📍 {where}")
             ))
 
         meta_bits = []
@@ -1819,7 +2137,10 @@ class EmbedBuilder:
                 map_url = build_map_url(lat, lon, label=title, layer="incidents")
                 footer_bits.append(f"[🗺️ Map]({map_url})")
 
-        self._append_container_footer(container, footer_bits, source="Live Traffic NSW")
+        # The publisher's own attribution (the interstate feeds' licences ask
+        # for it); Live Traffic NSW's records predate the field.
+        credit = strip_html(str(props.get('credit') or '')) or "Live Traffic NSW"
+        self._append_container_footer(container, footer_bits, source=credit)
         return container
 
     # ---- Interstate fire services -------------------------------
@@ -2178,18 +2499,25 @@ class EmbedBuilder:
     # ---- User incidents ----------------------------------------
     def build_user_incident_container(self, data: Dict[str, Any],
                                       previous_message: Dict[str, Any] = None):
-        """Components V2 container for user-submitted incidents."""
-        title = strip_html(data.get('title', 'User Incident'))
-        location = strip_html(data.get('location', ''))
-        description = strip_html(data.get('description', ''))
+        """Components V2 container for user-submitted incidents.
+
+        Every string here was typed by an editor, so it goes through
+        safe_text: an "@everyone" in a title would otherwise render as a real
+        mention in every subscribed server.
+        """
+        title = safe_text(data.get('title')) or 'User Incident'
+        location = safe_text(data.get('location', ''))
+        description = safe_text(data.get('description', ''))
+        # status and size are short enumerated values, left as they arrive so
+        # is_valid_value still sees their original types.
         status = data.get('status', 'Active')
         size = data.get('size', '')
 
         inc_type = data.get('type', '')
         if isinstance(inc_type, list):
-            type_display = ', '.join(inc_type)
+            type_display = ', '.join(safe_text(t) for t in inc_type if t)
         else:
-            type_display = str(inc_type) if inc_type else ''
+            type_display = safe_text(inc_type) if inc_type else ''
 
         agencies = data.get('responding_agencies', [])
         if isinstance(agencies, str):
@@ -2264,7 +2592,7 @@ class EmbedBuilder:
                     if key.lower() in str(agency).lower():
                         icon_for_agency = emoji + ' '
                         break
-                agency_list.append(f"{icon_for_agency}{agency}")
+                agency_list.append(f"{icon_for_agency}{safe_text(agency)}")
             container.add_item(discord.ui.TextDisplay(
                 content=self._clip_text(f"Responding: {' • '.join(agency_list)}")
             ))
@@ -2274,7 +2602,7 @@ class EmbedBuilder:
         if isinstance(units, str):
             units = [units]
         if isinstance(units, list):
-            unit_labels = [strip_html(str(u)) for u in units if u and str(u).strip()]
+            unit_labels = [safe_text(str(u)) for u in units if u and str(u).strip()]
             if unit_labels:
                 container.add_item(discord.ui.TextDisplay(
                     content=self._clip_text(f"🚒 **Units:** {', '.join(unit_labels)}")
@@ -2314,7 +2642,7 @@ class EmbedBuilder:
             log_lines = ["**📋 Incident Log**"]
             for log in sorted_logs[:5]:
                 log_ts = log.get('created_at', '')
-                log_msg = strip_html(log.get('message', ''))[:200]
+                log_msg = safe_text(log.get('message', ''))[:200]
                 if log_msg:
                     dt = parse_timestamp_to_datetime(log_ts)
                     time_str = f"<t:{int(dt.timestamp())}:t>" if dt else "Unknown time"
@@ -2342,17 +2670,22 @@ class EmbedBuilder:
 
     # ---- Pager -------------------------------------------------
     def build_pager_container(self, msg: Dict[str, Any]):
-        """Components V2 container for pager messages."""
+        """Components V2 container for pager messages.
+
+        The relayed fields go through safe_text for the same reason the user
+        incident's do: they are whatever came over the air and down the
+        Pagermon relay, and they are rendered outside the code block.
+        """
         capcode = msg.get('capcode', 'UNKNOWN')
         incident_id = msg.get('incident_id', '')
-        msg_type = msg.get('type', '')
-        category = msg.get('category', '')
-        alias = msg.get('alias', '')
-        agency = msg.get('agency', '')
-        address = msg.get('address', '')
-        suburb = msg.get('suburb', '')
-        council = msg.get('council', '')
-        postcode = msg.get('postcode', '')
+        msg_type = safe_text(msg.get('type', ''))
+        category = safe_text(msg.get('category', ''))
+        alias = safe_text(msg.get('alias', ''))
+        agency = safe_text(msg.get('agency', ''))
+        address = safe_text(msg.get('address', ''))
+        suburb = safe_text(msg.get('suburb', ''))
+        council = safe_text(msg.get('council', ''))
+        postcode = msg.get('postcode', '')  # numeric; left as it arrives
         coordinates = msg.get('coordinates')
         timestamp = msg.get('timestamp', '')
         raw = msg.get('raw', '')
@@ -2424,6 +2757,80 @@ class EmbedBuilder:
                 footer_bits.append(f"[🗺️ Map]({map_url})")
         self._append_container_footer(container, footer_bits, source="Pagermon (self-hosted)")
         return container
+
+    # ---- Shark reports (Dorsal Watch) --------------------------
+    #
+    # One feed, seven kinds of event, and the gap between them is the whole
+    # point: a bite and a tagged shark drifting past a listening station are
+    # the same animal and nothing like the same news. The accent colour and
+    # the headline carry that distinction, because the card is read at a
+    # glance in a channel that also carries fires and outages.
+    _SHARK_CATEGORIES = {
+        'incident':  ('🚨 Shark incident',    0xEF4444),
+        'closure':   ('⛔ Beach closed',      0xF59E0B),
+        'advisory':  ('⚠️ Shark warning',     0xFBBF24),
+        'sighting':  ('🦈 Shark sighting',    0x2DD4BF),
+        'drone':     ('🚁 Drone sighting',    0x38BDF8),
+        'tagging':   ('🏷️ Tag and release',   0x8B5CF6),
+        'carcass':   ('💀 Carcass reported',  0x94A3B8),
+        'detection': ('📡 Tagged shark detected', 0x64748B),
+    }
+
+    def build_shark_container(self, data: Dict[str, Any]):
+        """Components V2 container for a Dorsal Watch shark report."""
+        data = data or {}
+        props = data.get('properties') or {}
+
+        category = str(props.get('category') or 'sighting').lower()
+        headline, color = self._SHARK_CATEGORIES.get(
+            category, self._SHARK_CATEGORIES['sighting'])
+
+        location = strip_html(str(props.get('location') or '')).strip()
+        species = strip_html(str(props.get('species') or '')).strip()
+        title = location or species or 'Shark report'
+
+        fields = []
+        if species and species.lower() != 'unknown':
+            fields.append(('Species', species))
+        length = props.get('shark_length_m')
+        if isinstance(length, (int, float)):
+            fields.append(('Length', f"{length} m"))
+        distance = props.get('distance_from_shore_m')
+        if isinstance(distance, (int, float)):
+            fields.append(('From shore', f"{distance} m"))
+        where = ' · '.join(x for x in (props.get('zone'), props.get('state')) if x)
+        if where:
+            fields.append(('Area', where))
+        # No 'Reported by Official' field. Dorsal's `official` flag says the
+        # report was posted by their account rather than by the public; it is
+        # not a verification, and the word Official in an alert reads as one.
+        # 'Method' below carries the useful part — receiver, drone, helicopter.
+        encounter = strip_html(str(props.get('encounter') or '')).strip()
+        if encounter:
+            fields.append(('Method', encounter))
+
+        footer_bits = []
+        unix = props.get('reported_at_unix')
+        if isinstance(unix, (int, float)) and unix > 0:
+            footer_bits.append(f"<t:{int(unix)}:R>")
+        geom = data.get('geometry') or {}
+        coords = geom.get('coordinates') if isinstance(geom, dict) else None
+        if isinstance(coords, (list, tuple)) and len(coords) >= 2:
+            lon, lat = coords[0], coords[1]
+            if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+                footer_bits.append(
+                    f"[🗺️ Map]({build_map_url(lat, lon, label=title, layer='sharksmart')})")
+
+        return self._card(
+            icon=self.ICONS.get('shark_report', '🦈'),
+            title=title,
+            color=color,
+            headline=headline,
+            fields=fields,
+            body=str(props.get('comment') or ''),
+            source='Dorsal Watch',
+            footer_bits=footer_bits,
+        )
 
     # ---- Generic fallback --------------------------------------
     def build_generic_container(self, data: Dict[str, Any], alert_type: str):

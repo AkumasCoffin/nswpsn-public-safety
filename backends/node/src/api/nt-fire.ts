@@ -8,12 +8,73 @@
  * Closed incidents are NOT returned here. They are still archived — the
  * logs page shows how each one progressed — but a closed job does not
  * belong on a live map. `?all=1` returns them too, for debugging.
+ *
+ * This site's route, for the map and the Discord bot; it is not on /api/v1/.
+ * API keys read NTFRS alongside every other fire service at /api/v1/fires
+ * (api/fires.ts). The feed asks not to be re-published (sources/ntFire.ts);
+ * the owner chose to carry it there, so that description credits NTFRS and
+ * asks API users to do the same.
  */
 import { Hono } from 'hono';
-import { ntFireSnapshot, ntFireActiveSnapshot } from '../sources/ntFire.js';
+import { z } from 'zod';
+import { describeRoute } from 'hono-openapi';
+import { ntFireSnapshot, ntFireActiveSnapshot, type NtFireSnapshot } from '../sources/ntFire.js';
+import { geo } from './v1/respond.js';
+import {
+  assertShape,
+  feature,
+  featureCollection,
+  flag,
+  GATED_ERRORS,
+  incidentProperties,
+  Layer,
+  LonLat,
+  okJson,
+  queryValidator,
+  Rings,
+  type SameShape,
+} from './v1/schemas.js';
 
 export const ntFireRouter = new Hono();
 
-ntFireRouter.get('/api/nt-fire/incidents', (c) =>
-  c.json(c.req.query('all') === '1' ? ntFireSnapshot() : ntFireActiveSnapshot()),
+// No scope: API keys read the fire services together, through /api/v1/fires (api/fires.ts).
+
+// The answer's shape, for describeRoute() below. The route is not on /api/v1/,
+// so the API description (api/v1/openapi.ts) leaves it out.
+const NtFireIncidents = featureCollection(
+  feature(
+    z.union([
+      z.object({ type: z.literal('Point'), coordinates: LonLat }),
+      z.object({ type: z.literal('Polygon'), coordinates: Rings }),
+    ]),
+    incidentProperties({
+      layer: Layer(['fire', 'hazard']),
+      polygons: Rings.describe('The fire ground, as polygon outer rings of [longitude, latitude]'),
+      ntCategory: z.string().describe("The feed's own category"),
+      currentSituation: z.string().describe('Bushfires NT records only; empty otherwise'),
+      risks: z.string(),
+      whatToDo: z.string(),
+      adviceToPublic: z.string(),
+      is_active: z.boolean().describe('False once the incident is closed (only with all=1)'),
+      agency: z.literal('NTFRS'),
+      source: z.literal('nt_fire'),
+    }),
+  ),
+).meta({ id: 'NtFireIncidents' });
+assertShape<SameShape<z.infer<typeof NtFireIncidents>, NtFireSnapshot>>();
+
+const Query = z.object({ all: flag('1 includes closed incidents as well') });
+
+ntFireRouter.get(
+  '/api/nt-fire/incidents',
+  describeRoute({
+    operationId: 'getNtFireIncidents',
+    tags: ['Incidents'],
+    summary: 'NT Fire and Rescue incidents',
+    description:
+      'NT Fire and Rescue Service incidents from the NT Police, Fire and Emergency Services incident map feed, including Bushfires NT warnings. Closed incidents are left out unless all=1. The data is NTFRS’s: credit NT Fire and Rescue Service wherever you show it.',
+    responses: { ...okJson(NtFireIncidents, 'A GeoJSON FeatureCollection of incidents'), ...GATED_ERRORS },
+  }),
+  queryValidator(Query),
+  (c) => geo(c, c.req.query('all') === '1' ? ntFireSnapshot() : ntFireActiveSnapshot()),
 );

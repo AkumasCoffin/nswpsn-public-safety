@@ -41,7 +41,11 @@ decide PostgreSQL versus SQLite. Load `.env` after that import and the bot
 silently falls back to SQLite even with a valid URL in `.env`.
 
 Required environment: `DISCORD_BOT_TOKEN`, `BOT_OWNER_ID`, `API_BASE_URL`,
-`NSWPSN_API_KEY`, `BOT_DATABASE_URL`. See `env.sample`.
+`NSWPSN_API_KEY`, `BOT_DATABASE_URL`, `BOT_ACTION_SIGNING_SECRET` (the same
+value as the backend's; without it the bot executes no queued action and files
+nothing). `PUBLIC_BASE_URL` is the SITE's origin for every link the bot builds
+itself — set it to the same origin as the backend's `DASHBOARD_FRONTEND_URL`.
+See `env.sample`.
 
 `NSWPSN_API_KEY` must match the backend's. `BOT_DATABASE_URL` here and
 `BOT_DATA_DATABASE_URL` in the backend's `.env` must point at the **same**
@@ -71,31 +75,121 @@ hand-maintained list anywhere.
 
 ## Polling and dispatch
 
-Four `@tasks.loop` loops in `bot.py`:
+Five `@tasks.loop` loops in `bot.py`:
 
 | Loop | Cadence | Does |
 |---|---|---|
-| `poll_alerts` | 60s | `AlertPoller.check_alerts()`, then batched dispatch. Emits an INFO heartbeat every fifth tick so quiet stretches are visible without DEBUG |
-| `poll_pager` | 30s | `check_pager()`, then batched dispatch |
+| `poll_alerts` | 60s | `AlertPoller.check_alerts()`, then dispatch. Emits an INFO heartbeat every fifth tick so quiet stretches are visible without DEBUG |
+| `poll_pager` | 30s | `check_pager()`, then dispatch |
 | `process_message_queue` | 1s | Drains a batch and sends it, fanning out **per channel concurrently** |
 | `drain_bot_actions` | 10s | Executes queued admin actions from the backend |
+| `run_retention` | 24h | Applies the retention windows to the bot's own tables |
+
+`run_retention` exists because every `cleanup_*` method in `database.py` had one
+and nothing ever called it. The only historical caller was a `/dev` clear-seen
+command, removed when the dashboard took over — so `seen_alerts` (every FIRMS
+cluster of every pass, plus every traffic and outage id), `seen_pager`,
+`incident_messages`, `preset_fire_log`, `pending_bot_actions` and
+`staff_notify_messages` had all grown without bound since the bot was first
+deployed, while the code comments and the backend's dashboard queries assumed the
+documented 7/14/30/90-day purge was happening. The window for each table is that
+method's own default. Every step is guarded individually: a failure on one table
+must not skip the rest and must not stop the loop, because nothing restarts it.
 
 `AlertPoller` (`alert_poller.py`) holds the endpoint map. Several canonical alert
 types share one backend fetch and are split apart at extraction:
 
-- `bom_land` and `bom_marine` both come from `/api/bom/warnings`, split by
+- `bom_land` and `bom_marine` both come from `/api/v1/bom/warnings`, split by
   category;
-- `cfa` and `deeca` both come from `/api/vic-emergency/events` — one feed carries
-  every Victorian publisher, split on `properties.agency`. SES, EMV and ESTA
-  items arrive on the same feed and are **not** alertable types;
-- `endeavour_planned` uses `/api/endeavour/planned`; current outages come back as
-  `endeavour_current`;
+- `cfa`, `deeca`, `vicses`, `emv` and `esta` all come from
+  `/api/vic-emergency/events` — one feed carries every Victorian publisher, split
+  on `properties.agency`. All five are alertable types in their own right, as are
+  `nt_bushfires`, `qfd_warning` and `dfes_warning`, and their keyword, severity
+  and geo filters work: the catalog now drives the poller's shape branches and
+  the embed builder's routing, where the hand-written lists those replaced had
+  never gained the newer agencies and still carried the pre-rename `qld_warning`
+  and `wa_warning` spellings;
+- `endeavour_planned` uses `/api/endeavour/planned`; current outages come back
+  as `endeavour_current`. The outage types poll each distributor's own `/api/`
+  route, unwrapped: API keys read the distributors merged at `/api/v1/outages`,
+  and the per-distributor routes are not on `/api/v1/`;
 - the interstate feeds are all RFS-shaped GeoJSON and refresh upstream every
-  2 minutes (NT: 5), so the 60s cycle mostly sees no change.
+  2 minutes (NT: 5), so the 60s cycle mostly sees no change;
+- the road types `traffic_incident`, `traffic_roadwork`, `traffic_flood` and
+  `traffic_majorevent` carry QLD, VIC, SA and ACT records as well as NSW's,
+  each from its own state's feed, so they alert for every state; a preset's
+  States filter keeps the ones a channel wants. The embed says the state when
+  it is not NSW and credits the record's own publisher (`credit`) rather than
+  Live Traffic NSW. `traffic_works`, Live Traffic's re-share of the other
+  states, is retired: it is an alias of `traffic_roadwork`, so a preset that
+  held it still gets roadwork.
 
-Dispatch is **batched**: several alerts destined for the same channel in one poll
-cycle are coalesced into a single Components V2 `LayoutView`, chunked by
-character budget, rather than one message per alert × config.
+A feed is polled on `/api/v1/` where it is there, and on `/api/` where it is not.
+The per-agency fire incident feeds (RFS, the Victorian feed, QFD, DFES, SA and NT)
+and the QFD and DFES warnings are not on `/api/v1/` — API keys read them merged,
+at `/api/v1/fires` — and nor is The Wire, which is this site's own content. `/api/v1/` wraps a body that is not
+GeoJSON in `{data: …}`, so `itemsPath` in the catalog is a dotted path
+(`data.warnings`, or `data` for a bare list), and an empty `{data: []}` counts as
+no data, as an empty bare list always has, so a source's bootstrap waits for a
+fetch with something in it. Pager stays on `/api/pager/hits`: when the database
+is slow or down that path still answers from the hits the backend holds in
+memory, where `/api/v1/pager/hits` answers 503 and pager alerts would stop. The
+radio-summary checker and `/summary` read `/api/v1/summaries`.
+
+Dispatch is **one message per alert**, each a Components V2 `LayoutView`. Alerts
+keep their poll-result order within a channel and the send queue paces them.
+
+It used to pack a poll's alerts for a channel into a single `LayoutView`, which
+saved messages while the Waze firehose was running but cost two things that matter
+more at today's volume. **Incident tracking**: only the first incident-bearing
+alert in a batch could have its message recorded, because the row stores one
+`jump_url` per message, so every other incident in that batch was never written
+down and could never be linked to — or replied to — when it updated.
+**Legibility**: five unrelated incidents shared one timestamp and one block, and
+an update could only reply to the whole batch.
+
+**`firms` is the one exception**, for the opposite reason: a satellite hotspot is
+not an incident — it has no status to update and nothing to reply to — and one
+pass over a fire ground lights up hundreds of them. A poll's hotspots for a
+channel are collapsed into a single digest, built after the per-alert loop.
+
+`firms` is also **opt-in, and only honoured with a region**. A preset must carry a
+`geofilter` (or a legacy `bbox`), because an unscoped subscription meant every
+hotspot in Australia: on 2026-10-12 one poll queued 2,577 hotspots for a single
+channel, 9,990 fired inside the hour, the send queue filled, 1,996 messages were
+dropped and every other channel's alerts were delayed behind the backlog. The two
+presets responsible had swept `firms` in through a "select everything" type list
+and carried no filters at all. The rule is enforced in two places:
+`_SCOPED_ONLY_ALERT_TYPES` in `discord-bot/database.py` refuses an unscoped
+subscription at the single point where a subscription is resolved — which also
+stops FIRMS being fetched and clustered at all once nobody is left subscribed, and
+retires existing unscoped rows with no operator re-saving them — and
+`_OPT_IN_ONLY_TYPES` in `bot.py` keeps a catch-all picker ("Enable All", the
+generic `/setup` dropdown) from choosing the type in the first place.
+
+**`shark_report` is in both sets too**, added on the same principle before
+rather than after an incident. It is a national feed of coastal events —
+roughly 25 a day, 56% of them a tagged shark passing a listening station — and
+a channel almost always wants one stretch of coast. Unscoped it is
+mostly-elsewhere noise.
+
+That second half only works if the dispatcher can read the alert's
+coordinates, and this is the trap: **`preset_has_geoscope` checks that a
+geofilter key exists, not that it can ever match.** A scoped-only type whose
+location `_alert_lat_lng` cannot find would satisfy the gate and then pass
+every geofilter unconditionally — exactly inverting the rule. So any type added
+to `_SCOPED_ONLY_ALERT_TYPES` must also have a working branch in
+`_alert_lat_lng`; shark reports get one by carrying the `geo_point` feed shape,
+which puts them in `_GEO_POINT_ALERT_TYPES`.
+
+Shark reports stay a **single** type with the seven report categories exposed
+as subtype filters, rather than one type per category: the provider picker caps
+at 25 options, and this keeps the split per-preset. `_alert_subtype_token`
+returns the category, which lands in the archive's `category` column — so
+`_SUBTYPE_FIELDS_DEFAULT` already covers it and the dashboard needs no entry.
+Note also that the feed's endpoint serves a 48-hour window by default because
+`seen_alerts` is pruned at 7 days: a type whose records outlive their dedup
+rows re-alerts.
 
 Per-channel fan-out in `process_message_queue` is concurrent on purpose. It used
 to be serial, and one slow or rate-limited channel then blocked every other —
@@ -103,10 +197,31 @@ which is how a burst overflowed the queue. discord.py still enforces Discord's
 per-channel and global rate limits, so concurrency cannot exceed them; it just
 keeps every channel making progress.
 
-Two robustness details worth knowing before you touch the dispatch path:
+Four robustness details worth knowing before you touch the poll and dispatch path:
 
 - A `@tasks.loop` that raises an unhandled exception **stops and is not
   auto-restarted**, so the loops carry outer guards.
+- **One source cannot stop the others.** `check_alerts` checks each subscribed
+  source on its own (`_new_alerts_for`) and logs a failure as
+  `Error checking <type> alerts`, skipping that source for the cycle. A failure
+  used to end the cycle, and with it every source's alerts, user incidents and
+  radio summaries. A FIRMS feed of ~10,000 hotspots did exactly that, on and off,
+  from at least 2026-10-27 to 2026-11-02: its seen-check was one
+  `(alert_type, alert_id) IN (…)` query, which Postgres nests one OR deeper per
+  pair until its 2 MB stack runs out (`stack depth limit exceeded`, logged every
+  minute for hours at a time). `filter_unseen_alerts` now asks 400 pairs at a
+  time; 4,000 still passed on the bot's database. A source is counted as
+  bootstrapped only once its seen-batch is written, so a failed write is retried
+  next cycle instead of flooding.
+- **Most of a feed new at once is re-baselined, not posted.** When more than 200
+  of a bootstrapped source's items are new in one cycle and they are more than
+  half of it (`REBASELINE_MIN_NEW`, `REBASELINE_SHARE` in `alert_poller.py`),
+  the ids changed upstream — a source swapped in behind an endpoint, as the
+  interstate road feeds were when they moved off Live Traffic's aggregate, or a
+  new id scheme — and the bot was not restarted to bootstrap it. They are marked
+  seen with a `re-baselining <type>: N of M items new at once` warning and
+  nothing is posted; without it, every channel subscribed to the type with no
+  region would get the whole feed. Real bursts stay well under half a feed.
 - An over-budget container is dropped rather than raised. By the time dispatch
   runs, the poller has already marked every alert in the batch as seen — so one
   bad container must degrade to "that container missing", never to an exception
@@ -119,7 +234,25 @@ has its own alert types, role pings and filters:
 
 - keyword include/exclude;
 - a severity floor (RFS watch-and-act, BOM major);
-- a geographic bounding box, so a preset only fires for alerts inside a region.
+- sub-types, per source;
+- **states** (`filters.states`, e.g. `["NSW", "ACT"]`): only alerts from the
+  ticked states;
+- a geographic shape (box, circle or polygon), so a preset only fires for
+  alerts inside a region.
+
+An alert's state is its record's own `state` — every road record carries one,
+since the road feeds cover other states as well as NSW — or else its type's
+home state, the `state` field of `shared/alert-catalog.json` (every fire
+service, ACT Ambulance and each power distributor belongs to one state).
+`alert_catalog.alert_state` decides; `preset_alert_matches` gates on
+`alert_catalog.passes_states`. An alert whose state cannot be known — BOM
+warnings, satellite hotspots, pager, The Wire without a state — passes, as
+every filter lets an alert with missing metadata through. That is also why a
+States filter does not count as a region for the scoped-only types (FIRMS,
+shark reports): a hotspot carries no state, so it would pass every States
+filter. The dashboard's filters card offers the states as a tick-list, and the
+API keeps them as upper-case codes in a fixed order
+(`services/dashboardFilterValidator.ts`).
 
 Muting is a **four-tier hierarchy with inheritance**: guild → channel → preset →
 per-alert-type.
@@ -156,17 +289,88 @@ reinstate the command without solving the query first.
 The web dashboard's admin panel cannot reach into Discord. Instead the backend
 writes a row to `pending_bot_actions` in the bot's database, and the bot's
 `drain_bot_actions` loop picks it up — sync, test, cleanup, broadcast,
-`staff_notify`.
+`staff_notify`, and for bug reports and suggestions `feedback_channels` and
+`feedback_board` (next section).
 
 Rows are **HMAC-signed** with `BOT_ACTION_SIGNING_SECRET`, set to the same value
 on both sides (`backends/node/src/services/botActionSign.ts` signs,
 `discord-bot/database.py` verifies), so the bot rejects any insert that did not
-come from the backend. When the secret is unset, signing is disabled and the bot
-**fails open** — a rollout accommodation, and both sides log a warning. Generate
-one with `openssl rand -hex 32`.
+come from the backend. With the secret unset the bot **fails closed**: a queued
+action executes with no further authentication, so without the shared secret there
+is nothing to tell a backend insert from anyone else's. It refuses every queued
+action, logs one explainer the first time — naming what has stopped working: sync,
+test, broadcast and staff notifications — and completes each row as `error` with a
+reason the dashboard shows, so the misconfiguration surfaces instead of actions
+silently vanishing. This used to fail open as a rollout accommodation; the secret
+is deployed on both sides now, so an unsigned queue is a misconfiguration, not a
+migration state. Generate one with `openssl rand -hex 32`.
 
 The drainer reclaims stale `running` rows on each pass, so an action orphaned by
 a bot restart is retried rather than stuck.
+
+## Bug reports and suggestions
+
+The one place the bot WRITES to the backend. Two public channels per kind
+(bug, suggestion), chosen on the staff page's Discord settings and pushed here
+by the `feedback_channels` action, because the bot never reads the backend's
+`app_settings`; the bot keeps them in `feedback_channels`.
+
+**Intake.** The bot posts a how-to (`build_feedback_notice_embed`, with a link
+button to the same thing on the site, `build_feedback_notice_view`) — not pinned:
+every other message there is removed once filed, so it is the only one standing.
+(The `feedback_channels` action records the channels even when that post fails,
+say in a channel the bot cannot yet write to, and the start-up refresh posts it
+later; the refresh also re-edits a how-to whose words or button URL have
+changed, one kind independently of the other.) `on_message` files every
+member's message there as a report: a signed `POST /api/discord/feedback` —
+the static key plus `X-Bot-Signature`, which is `sign_bot_action(secret,
+'feedback', 'bot', body)` with the same `BOT_ACTION_SIGNING_SECRET` and
+canonical form as the outbox rows, run the other way (the backend's
+`services/auth/botSigned.ts` verifies, and fails closed without the secret).
+Attachments are read before anything else and re-sent on the board post, since
+the member's message is deleted once filed and Discord's attachment links
+expire; the board post is the only place they can live, so a kind with no board
+channel cannot keep them — a report that is only a screenshot is then asked for
+words, and one filed with screenshots is told they were not kept. Every answer
+to the member is an embed (`build_feedback_reply_embed`) in the channel,
+mentioning them and self-deleting after 10–30 s, so the channel holds nothing but
+the how-to and messages still to be fixed (Discord has no "only you can see
+this" for a reply to an ordinary message; that exists for interactions alone).
+The confirmation carries an "Open on the board" button. The message must be a `#`
+title line with the details on the lines under it (`split_feedback_message`) —
+that is what gives a report a title and a description of its own; one without
+that shape, or with no details, is answered with the format and LEFT IN PLACE:
+the member edits it into shape and `on_message_edit` files it then (their text is
+theirs to fix, not the bot's to delete). A second report within 20 s of the
+last simply waits for its turn. The backend's refusal is answered and the
+message left in place — the cap (five open reports per reporter) or a report it
+will not take (its reason is relayed; title and body are cut to the backend's
+limits in UTF-16 units, `cut_utf16`, so an emoji counts as the backend counts
+it) — as is an outage ("try again in a minute"). Discord's own system messages
+(a pin notice has a human author) are not reports. There are no prefix
+commands, so the `on_message` override has no `process_commands` to forward to.
+
+**Board.** Every report is posted with its status (`build_feedback_board_embed`):
+a Discord one by the bot itself at filing, with the files, after which it tells
+the backend the message id (`POST /api/discord/feedback/:id/board`, the
+"Open on the board" link on the staff page); a site one when the backend's
+`feedback_board` action with event `new` arrives. A status change (`status`)
+replies under the post with the new status and staff's note, and edits the
+post's Status field; a removed report (`delete`) takes down the replies and then
+the post. The map of report → message is `feedback_board_posts`, with the
+backend's own copy of the ids (sent as `channel_id`/`message_id` on `status`
+and `delete`) standing in when the bot has no record; the bot's replies are
+`feedback_board_replies`, and the delete also sweeps the channel after the post
+for any of its own replies recorded before that table existed. A post someone
+removed by hand still has its replies cleared, then is forgotten. A kind with no
+board channel skips the posting; a status change or removal still reaches a
+post made while there was one. A board link the backend refuses
+(`POST …/board` not 2xx) is logged by `_feedback_post`.
+
+The private staff alert for a new report is an ordinary `staff_notify` with
+kind `bug_report` or `suggestion`; a status change arrives as event `resolved`
+(done, declined, duplicate) or the newer `update` (looking into it), both of
+which edit the alert in place — `update` without the resolved styling.
 
 ## Guild removal does not delete anything
 
@@ -201,14 +405,49 @@ An account with no roles and no signup request is a normal public user.
 ## Where its data lives
 
 PostgreSQL when `BOT_DATABASE_URL` is set, SQLite otherwise. This is a **separate
-database from the backend's**. `apply_schema_presets.py` owns its schema and is
-idempotent; it creates `alert_presets`, `guild_mute_state`,
+database from the backend's**. `apply_schema_presets.py` owns the preset
+schema and is idempotent; it creates `alert_presets`, `guild_mute_state`,
 `channel_mute_state`, `preset_fire_log`, `preset_audit_log`,
 `pending_bot_actions`, `dash_sessions` and `source_health`, with their indexes
-and triggers.
+and triggers. The rest — the staff-alert message map, `feedback_channels`,
+`feedback_board_posts`, `feedback_board_replies` — is created by
+`Database.init_db()` at start-up, also `IF NOT EXISTS`.
 
 The backend reads this same database through `BOT_DATA_DATABASE_URL` to serve the
 dashboard, on its own pool, closed separately at shutdown.
+
+### The dashboard login is not the website login
+
+They are two independent systems that both happen to use Discord, and this
+surprises people, so: the website authenticates through **Supabase**, with
+Discord as one OAuth provider among several, and keeps a JWT in the browser.
+`dashboard.html` runs its **own** Discord OAuth app and keeps a signed
+`nswpsn_dash_sess` cookie on the API host plus a row in `dash_sessions`.
+Neither knows the other exists, so signing in to the site grants nothing on the
+dashboard.
+
+That cannot simply be bridged. The dashboard asks Discord for scope `identify
+guilds`, and the guild list *is* the dashboard — it is how it knows which
+servers you may configure. Supabase's Discord login does not request `guilds`,
+so even sharing an identity would still leave a Discord round-trip to collect
+the scope, and Supabase provider tokens are not refreshed. Closing this gap
+means changing the scope the whole site asks for, and re-consent for every
+existing account.
+
+**Sessions slide.** `DASH_SESSION_TTL_SECS` is 30 days and `loadSession`
+extends it on use, throttled by `DASH_SESSION_RENEW_AFTER_SECS` (1 day) so an
+open dashboard writes one row a day rather than one per request. It was a flat
+24h with no renewal, which signed people out a day after login however much
+they used it — if you opened the dashboard less than daily you re-authenticated
+on literally every visit.
+
+Two things make this work that are easy to break. The renewal must **re-issue
+the cookie**, because the cookie carries its own copy of `exp` and
+`loadSession` rejects on that one; extending only the server-side row renews
+nothing. And the renewal must not go through `putSession`, which bumps
+`dashboard_users.login_count` — a renewal is not a login. The last-renewal time
+is derived from `exp - TTL` rather than stored, which is also what quietly
+migrates sessions issued under the old 24h TTL.
 
 ## Identifying itself
 

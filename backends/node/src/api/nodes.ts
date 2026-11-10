@@ -21,6 +21,7 @@
  */
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { createHash } from 'node:crypto';
 import { log } from '../lib/log.js';
 import { requireRole, canManageNodes, canViewNodeData, isOwner } from '../services/auth/roles.js';
 import {
@@ -28,7 +29,6 @@ import {
   getNode,
   createNode,
   rotateNodeToken,
-  setPagerPrimary,
   setPagerTuning,
   setAdsbTuning,
   setNodeLocation,
@@ -53,10 +53,9 @@ import { getUsernameMap, getUsername } from './users.js';
 import { ConfigOverrideSchema } from '../services/nodes/configSchema.js';
 import {
   buildConfigPayload,
-  pagerPrimaryOf,
   pagerGainOf,
   pagerPpmOf,
-  pagerPrimaryOptionsFor,
+  pagerPlanWithServicesFor,
   adsbGainOf,
   adsbPpmOf,
 } from '../services/nodes/configMerge.js';
@@ -74,6 +73,37 @@ import { clearAdsbNodeState } from '../services/nodes/adsbNodeStore.js';
 import { mintNodeToken, _clearNodeTokenCache } from '../services/auth/nodeToken.js';
 
 export const nodesRouter = new Hono();
+
+/**
+ * A fingerprint of the STORED config_override, for compare-and-set on PATCH.
+ *
+ * Not `nodes.config_version`: that is the version the AGENT last reported
+ * applying, it is null until a node has connected, and it lags a push — so it
+ * says nothing about whether the row a client edited is still the row in the
+ * table. This does.
+ *
+ * Plain JSON.stringify is enough, with no canonical key ordering, because both
+ * sides of every comparison are computed this way from the same jsonb column,
+ * and Postgres normalises jsonb key order on storage. It is never compared
+ * against a hash anybody else computed.
+ */
+function configOverrideVersion(override: unknown): string {
+  return createHash('sha256')
+    .update(JSON.stringify(override ?? {}))
+    .digest('hex')
+    .slice(0, 16);
+}
+
+/** Channel identities (name, or frequency when unnamed) in a config override. */
+function channelKeys(override: unknown): string[] {
+  const channels = (override as { channels?: unknown } | null | undefined)?.channels;
+  if (!Array.isArray(channels)) return [];
+  return channels.map((ch) => {
+    const c = ch as Record<string, unknown>;
+    const name = String(c['name'] ?? '').trim().toLowerCase();
+    return name || `hz:${String(c['frequency'] ?? '')}`;
+  });
+}
 
 /**
  * Map a DB NodeRow to a clean camelCase JSON shape, merging the live
@@ -94,6 +124,9 @@ function toApi(node: NodeRow, usernames?: Map<string, string>, surveying?: Map<s
     enabled: node.enabled,
     feedEnabled: node.feed_enabled,
     configOverride: node.config_override,
+    // Hand the client the version of the override it is about to edit, so a
+    // PATCH can prove which one it was built from. See configOverrideVersion.
+    configOverrideVersion: configOverrideVersion(node.config_override),
     configVersion: node.config_version,
     agentVersion: node.agent_version,
     sdrtrunkVersion: node.sdrtrunk_version,
@@ -117,11 +150,9 @@ function toApi(node: NodeRow, usernames?: Map<string, string>, surveying?: Map<s
     // Rolling 10-min relayed count — radio calls forwarded / pager messages
     // forwarded to Pagermon. Used by the staff activity chips.
     messagesLast10m: hub.uploadsInWindow(node.id),
-    // Pager single-SDR primary frequency preference (persisted).
-    pagerPrimary: node.kind === 'pager' ? pagerPrimaryOf(node) : null,
-    // The valid primary choices for THIS node's state ({label, mhz}[]) so the
-    // staff UI renders the right options without duplicating the plan table.
-    pagerPrimaryOptions: node.kind === 'pager' ? pagerPrimaryOptionsFor(node.state) : null,
+    // THIS node's state's frequency plan ({label, mhz, service}[]), so the
+    // staff UI lists the frequencies without duplicating the plan table.
+    pagerFrequencies: node.kind === 'pager' ? pagerPlanWithServicesFor(node.state) : null,
     // Pager tuner overrides (persisted); null when unset (agent uses defaults).
     pagerGain: node.kind === 'pager' ? pagerGainOf(node) ?? null : null,
     pagerPpm: node.kind === 'pager' ? pagerPpmOf(node) ?? null : null,
@@ -148,6 +179,13 @@ const PatchSchema = z.object({
   // Validated against the same schema configMerge consumes so staff can't
   // persist an override that would later break the config build.
   config_override: ConfigOverrideSchema.optional(),
+  /**
+   * The `configOverrideVersion` the client read before editing. Optional, and
+   * when sent the write is a compare-and-set: a 409 rather than a blind
+   * replace if the stored override moved underneath the editor. See the PATCH
+   * handler for what moves it.
+   */
+  config_override_version: z.string().max(64).optional(),
   notes: z.string().max(4000).optional(),
 });
 
@@ -455,12 +493,65 @@ nodesRouter.patch('/api/nodes/:id', requireRole(canManageNodes), async (c) => {
     if (!parsed.success) {
       return c.json({ error: 'invalid body', details: parsed.error.issues }, 400);
     }
+    const { config_override_version: sentVersion, ...rest } = parsed.data;
     const patch: NodePatch = {
-      ...parsed.data,
+      ...rest,
       config_override: parsed.data.config_override as
         | Record<string, unknown>
         | undefined,
     };
+
+    // A config_override PATCH is a whole-document replace, and the document
+    // can move underneath the editor: appendWinnerChannels adds a site
+    // survey's winning channels server-side, under FOR UPDATE, while the
+    // drawer that started the survey stays open for the 45 minutes it runs.
+    // The next tuner tweak or channel save from that drawer then PATCHes the
+    // PRE-survey channel list back, pushConfigToNode stops those channels on
+    // the node, and staff are told "Config saved" while the survey record
+    // still says N added.
+    //
+    // So a client may prove which version it edited, and a mismatch is a 409
+    // carrying the current document to rebuild from. The check is a read then
+    // a write rather than one statement, because the comparison is a hash SQL
+    // cannot compute; the window that leaves is the milliseconds between two
+    // queries, against the window it closes, which is tens of minutes.
+    //
+    // A PATCH that sends no version is still accepted — the staff drawer does
+    // not send one yet — but what it would discard is logged, so the loss
+    // stops being invisible.
+    if (patch.config_override !== undefined) {
+      const stored = await getNode(id);
+      if (!stored) return c.json({ error: 'node not found' }, 404);
+      const storedVersion = configOverrideVersion(stored.config_override);
+      if (sentVersion !== undefined && sentVersion !== storedVersion) {
+        log.warn(
+          { id, sent: sentVersion, stored: storedVersion },
+          'node PATCH rejected: config_override changed since the client read it',
+        );
+        return c.json(
+          {
+            error: 'config_changed',
+            message:
+              "This node's configuration changed since you loaded it — a site survey " +
+              'may have added channels. Reload the node and apply your change again.',
+            configOverride: stored.config_override,
+            configOverrideVersion: storedVersion,
+          },
+          409,
+        );
+      }
+      if (sentVersion === undefined) {
+        const incoming = new Set(channelKeys(patch.config_override));
+        const dropped = channelKeys(stored.config_override).filter((k) => !incoming.has(k));
+        if (dropped.length > 0) {
+          log.warn(
+            { id, dropped, version: storedVersion },
+            'node PATCH drops stored channels and carried no config_override_version',
+          );
+        }
+      }
+    }
+
     const updated = await updateNode(id, patch);
     if (!updated) return c.json({ error: 'node not found' }, 404);
     // enabled (capture on/off), feed_enabled (upload on/off), and config_override
@@ -486,39 +577,12 @@ nodesRouter.patch('/api/nodes/:id', requireRole(canManageNodes), async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// PUT /api/nodes/:id/pager-primary — staff set a pager node's single-SDR
-// primary frequency. Valid labels come from the node's STATE's plan (NSW:
-// NSWRFS default / FRNSW; QLD: QFES). Persisted + pushed live.
-// ---------------------------------------------------------------------------
-const PagerPrimarySchema = z.object({ primary: z.string().min(1).max(32) });
-nodesRouter.put('/api/nodes/:id/pager-primary', requireRole(canManageNodes), async (c) => {
-  const id = c.req.param('id');
-  try {
-    const node = await getNode(id);
-    if (!node) return c.json({ error: 'node not found' }, 404);
-    if (node.kind !== 'pager') return c.json({ error: 'not a pager node' }, 400);
-    const parsed = PagerPrimarySchema.safeParse(await c.req.json().catch(() => ({})));
-    if (!parsed.success) return c.json({ error: 'invalid primary' }, 400);
-    if (!pagerPrimaryOptionsFor(node.state).some((f) => f.label === parsed.data.primary)) {
-      return c.json({ error: `invalid primary for state ${node.state ?? 'NSW'}` }, 400);
-    }
-    const updated = await setPagerPrimary(id, parsed.data.primary);
-    if (!updated) return c.json({ error: 'update failed' }, 500);
-    await pushConfigToNode(id).catch(() => {}); // apply live if online
-    return c.json(toApi(updated));
-  } catch (err) {
-    log.error({ err, id }, 'Error setting pager primary');
-    return c.json({ error: 'Failed to set primary frequency' }, 500);
-  }
-});
-
-// ---------------------------------------------------------------------------
 // PUT /api/nodes/:id/pager-tuning — staff set a pager node's tuner-gain / ppm
 // overrides (applied to all readers). Persisted + pushed live. Each field is
 // optional: send a value to set it, null to clear (revert to agent default),
 // or omit to leave it unchanged. gain: 0–60 dB or "auto" (hardware AGC);
 // ppm: -200..200. Both are stored as config_override keys, so they survive
-// restarts/updates the same way the primary frequency does.
+// restarts/updates.
 // ---------------------------------------------------------------------------
 const PagerTuningSchema = z
   .object({
@@ -608,8 +672,7 @@ nodesRouter.put('/api/nodes/:id/adsb-tuning', requireRole(canManageNodes), async
 // PUT /api/nodes/:id/state — staff move a pager node to another Australian
 // state (+ its LGA tag). The state selects both the Pagermon the relay
 // forwards into and the frequency plan, so the config is re-pushed live; the
-// antenna pin is left untouched. A stale pagerPrimary from the old state needs
-// no clearing — pagerPrimaryOf falls back to the new state's default.
+// antenna pin is left untouched.
 // ---------------------------------------------------------------------------
 const NodeStateSchema = z.object({
   state: z.enum(AU_STATES as unknown as [string, ...string[]]),

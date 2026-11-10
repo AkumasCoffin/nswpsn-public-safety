@@ -211,6 +211,56 @@ describe('GET /api/data/history', () => {
     await app.request('/api/data/history?source=waze_police&unique=1');
   });
 
+  it('refuses the page with 503 when one family\'s data query fails', async () => {
+    // Merging the families that did answer produces a page that looks
+    // complete: a `total` that still counts the missing family, and a
+    // next_cursor built from the last SURVIVING row. The next page then seeks
+    // strictly past that boundary, so the records the failed family owed to
+    // this page are never served on any later page either.
+    queryMock.mockImplementation((sql: string) => {
+      const s = String(sql);
+      if (s.includes('statement_timeout') || s === 'BEGIN' || s === 'COMMIT' || s === 'ROLLBACK') {
+        return { rows: [] };
+      }
+      if (s.includes('AS total')) return { rows: [{ total: '12' }] };
+      if (s.includes('FROM archive_power')) {
+        throw new Error('canceling statement due to statement timeout');
+      }
+      return { rows: [row({ id: 9 }), row({ id: 8 }), row({ id: 7 })] };
+    });
+
+    const app = await setupApp();
+    // A window no earlier test used, so the route's data cache cannot answer
+    // this from a fan-out that succeeded.
+    const res = await app.request('/api/data/history?unique=0&hours=3&limit=2');
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body['error']).toBe('partial_result');
+    expect(body['failed_tables']).toEqual(['archive_power']);
+    expect(body['next_cursor']).toBeUndefined();
+  });
+
+  it('still serves the page when only the COUNT query fails', async () => {
+    // The asymmetry is deliberate: total=0 means "not counted" and the
+    // frontend already treats it that way, so a stuck count must not cost the
+    // user their records.
+    queryMock.mockImplementation((sql: string) => {
+      const s = String(sql);
+      if (s.includes('statement_timeout') || s === 'BEGIN' || s === 'COMMIT' || s === 'ROLLBACK') {
+        return { rows: [] };
+      }
+      if (s.includes('AS total')) throw new Error('canceling statement due to statement timeout');
+      return { rows: [row({ id: 6 })] };
+    });
+
+    const app = await setupApp();
+    const res = await app.request('/api/data/history?source=rfs&hours=4&limit=10');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body['total']).toBe(0);
+    expect(body['count']).toBe(1);
+  });
+
   it('sets statement_timeout = 30s before each data query', async () => {
     queryMock.mockImplementation((sql: string) => {
       if (sql.includes('statement_timeout')) return { rows: [] };

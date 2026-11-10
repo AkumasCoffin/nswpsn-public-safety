@@ -27,7 +27,15 @@ import {
   canManageUsers,
 } from '../services/auth/roles.js';
 import { wirePublic } from '../services/wireSettings.js';
-import { r2PublicUrl, deleteR2Object, viewerHash, normaliseLicense, licenseLabel } from '../services/wire.js';
+import {
+  r2PublicUrl,
+  deleteUnreferencedR2Object,
+  r2KeysInUse,
+  R2_IMAGE_PREFIX,
+  viewerHash,
+  normaliseLicense,
+  licenseLabel,
+} from '../services/wire.js';
 import { RECOVERY_DAYS } from '../services/wirePurge.js';
 import { displayNameMap } from '../services/wireComments.js';
 
@@ -225,6 +233,33 @@ function imageList(v: unknown): { key: string; side: string | null }[] {
   return out;
 }
 
+/**
+ * Vet the photo keys an author is ADDING to a vehicle.
+ *
+ * The body carries raw object keys, and the keys of every published photo are
+ * readable from its public URL — so without this a contributor could list
+ * someone else's photo (or avatar, or watermark) as their own and have the
+ * object deleted out of the shared bucket the moment they dropped it from the
+ * row again. A key is acceptable when it is one our own presigner minted and
+ * nothing else already points at it; keys the vehicle already had are left
+ * alone, so editing a row photographed years ago still works.
+ */
+async function rejectForeignImages(
+  pool: Pool,
+  images: { key: string }[],
+  had: readonly string[],
+  ownerId: string,
+): Promise<string | null> {
+  const existing = new Set(had);
+  const added = images.map((im) => im.key).filter((k) => !existing.has(k));
+  if (added.length === 0) return null;
+  if (added.some((k) => !k.startsWith(R2_IMAGE_PREFIX))) {
+    return 'that photo was not uploaded through this form';
+  }
+  const taken = await r2KeysInUse(pool, added, ownerId);
+  return taken.length > 0 ? 'one of those photos belongs to someone else' : null;
+}
+
 // ---- shaping ---------------------------------------------------------------
 /* eslint-disable @typescript-eslint/no-explicit-any */
 function shapeVehicle(row: any, includeKeys = false): Record<string, unknown> {
@@ -318,8 +353,10 @@ fleetRouter.get('/api/wire/fleet', async (c) => {
 
     const vals: unknown[] = [];
     const where: string[] = [];
-    // ?deleted=1 (with mine) lists the author's vehicles awaiting purge.
-    const wantDeleted = mine && url.searchParams.get('deleted') === '1';
+    // ?deleted=1 (with mine) lists the author's vehicles awaiting purge. Needs
+    // the uid for the same reason as the article feed: without one this falls
+    // through to the public branch and would list every author's deletions.
+    const wantDeleted = mine && !!uid && url.searchParams.get('deleted') === '1';
     where.push(wantDeleted ? 'deleted_at IS NOT NULL' : 'deleted_at IS NULL');
     if (mine && uid) {
       vals.push(uid);
@@ -395,6 +432,8 @@ fleetRouter.post('/api/wire/fleet', requireRole(canFeedMedia), async (c) => {
     const v = parseVehicle(data);
     if ('error' in v) return c.json({ error: v.error }, 400);
     const authorId = currentUserId(c)!;
+    const badImage = await rejectForeignImages(pool, v.images, [], authorId);
+    if (badImage) return c.json({ error: badImage }, 400);
     const status = (!(await approvalRequired(pool)) || (await canModerateWire(authorId)))
       ? 'published' : 'pending';
     const cols = VEHICLE_COLS.replace(/\s+/g, ' ');
@@ -445,6 +484,14 @@ fleetRouter.put('/api/wire/fleet/:id', async (c) => {
     const v = parseVehicle(data);
     if ('error' in v) return c.json({ error: v.error }, 400);
 
+    // Photos dropped in this edit leave their objects behind — clean up below.
+    const prevImages = Array.isArray(prev.rows[0].images) ? (prev.rows[0].images as { key?: string }[]) : [];
+    const prevKeys = prevImages.map((im) => im.key).filter((k): k is string => !!k);
+    // Ownership follows the vehicle's author, not the caller: an admin fixing
+    // someone's typo re-sends that author's photo keys, which are theirs.
+    const badImage = await rejectForeignImages(pool, v.images, prevKeys, prev.rows[0].author_id);
+    if (badImage) return c.json({ error: badImage }, 400);
+
     const cols = VEHICLE_COLS.split(',').map((s) => s.trim());
     const sets = cols.map((col, i) =>
       `${col} = $${i + 1}${col === 'radio_ids' || col === 'specs' || col === 'images' ? '::jsonb' : ''}`);
@@ -457,11 +504,9 @@ fleetRouter.put('/api/wire/fleet/:id', async (c) => {
       `UPDATE fleet_vehicles SET ${sets.join(', ')}, updated_at = now()${nameSet} WHERE id = $${vals.length + 1}`,
       [...vals, id, ...nameVal],
     );
-    // Photos dropped in this edit leave their objects behind — clean up.
-    const prevImages = Array.isArray(prev.rows[0].images) ? (prev.rows[0].images as { key?: string }[]) : [];
     const keep = new Set(v.images.map((im) => im.key));
-    for (const im of prevImages) {
-      if (im.key && !keep.has(im.key)) deleteR2Object(im.key).catch(() => {});
+    for (const key of prevKeys) {
+      if (!keep.has(key)) deleteUnreferencedR2Object(pool, key).catch(() => {});
     }
     return c.json({ id, success: true });
   } catch (err) {

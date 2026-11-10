@@ -86,6 +86,24 @@ const SESSION_REFRESH_INTERVAL_MS = 30 * 60 * 1000; // 30 min
 // Cloudflare's JS challenge often completes within a few seconds but can
 // take longer on a headless box. Keep polling for cf_clearance up to this.
 const CF_CLEARANCE_TIMEOUT_MS = 25_000;
+// Wait before re-launching after a failed init, and the ceiling the backoff
+// climbs to. Cloudflare penalises rapid re-tries, and /api/marinetraffic/*
+// answering 503 for a few minutes costs nothing.
+const REINIT_BACKOFF_MS = 60 * 1000;
+const REINIT_BACKOFF_MAX_MS = 30 * 60 * 1000;
+
+/** Close a page / context / browser, in that order, ignoring what is gone. */
+async function closeQuietly(...handles: unknown[]): Promise<void> {
+  for (const h of handles) {
+    const close = (h as { close?: () => Promise<void> } | null)?.close;
+    if (typeof close !== 'function') continue;
+    try {
+      await close.call(h);
+    } catch {
+      // Already closed, or the browser died under us — either way, done.
+    }
+  }
+}
 
 class MarinetrafficBrowser {
   private browser: unknown = null;
@@ -95,6 +113,8 @@ class MarinetrafficBrowser {
   private initPromise: Promise<void> | null = null;
   private mutex: Promise<unknown> = Promise.resolve();
   private refreshTimer: NodeJS.Timeout | null = null;
+  private reinitTimer: NodeJS.Timeout | null = null;
+  private reinitBackoffMs = REINIT_BACKOFF_MS;
   private shuttingDown = false;
 
   isReady(): boolean {
@@ -117,11 +137,31 @@ class MarinetrafficBrowser {
         'marinetraffic browser init failed — degrading',
       );
       this.ready = false;
-      // Reset so a later init() can retry — a transient chromium launch
-      // failure must not permanently disable the worker.
-      this.initPromise = null;
+      this.scheduleReinit();
     });
     return this.initPromise;
+  }
+
+  /**
+   * Arm a re-launch, with backoff.
+   *
+   * init() already cleared initPromise so a retry was possible, but its only
+   * caller is one line at boot — so nothing ever retried and a single
+   * Cloudflare flake at startup left /api/marinetraffic/vessels answering 503
+   * until a pm2 restart. Clearing initPromise is what makes init() do work
+   * again rather than hand back the memoised first attempt.
+   */
+  private scheduleReinit(): void {
+    if (this.shuttingDown || this.isDisabled() || this.reinitTimer) return;
+    this.initPromise = null;
+    const waitMs = this.reinitBackoffMs;
+    this.reinitBackoffMs = Math.min(this.reinitBackoffMs * 2, REINIT_BACKOFF_MAX_MS);
+    log.warn({ waitMs }, 'marinetraffic: will re-launch the browser');
+    this.reinitTimer = setTimeout(() => {
+      this.reinitTimer = null;
+      void this.init();
+    }, waitMs);
+    this.reinitTimer.unref?.();
   }
 
   private async doInit(): Promise<void> {
@@ -180,29 +220,40 @@ class MarinetrafficBrowser {
       close: () => Promise<void>;
     };
 
-    const context = (await browser.newContext({
-      userAgent:
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
-      viewport: { width: 1280, height: 800 },
-      locale: 'en-AU',
-      timezoneId: 'Australia/Sydney',
-    })) as {
+    // Until the solve below succeeds the browser is only referenced by this
+    // local, so a throw in here used to orphan a headless Chromium.
+    type MtContext = {
       newPage: () => Promise<unknown>;
       cookies: (url: string) => Promise<Array<{ name: string }>>;
       close: () => Promise<void>;
     };
-
-    const page = (await context.newPage()) as {
+    type MtPage = {
       addInitScript: (script: string) => Promise<void>;
       goto: (url: string, opts: { timeout: number; waitUntil?: string }) => Promise<unknown>;
       waitForTimeout: (ms: number) => Promise<void>;
       evaluate: <T>(fn: string) => Promise<T>;
       close: () => Promise<void>;
     };
+    let context: MtContext;
+    let page: MtPage;
+    try {
+      context = (await browser.newContext({
+        userAgent:
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
+        viewport: { width: 1280, height: 800 },
+        locale: 'en-AU',
+        timezoneId: 'Australia/Sydney',
+      })) as MtContext;
 
-    await page.addInitScript(
-      'Object.defineProperty(navigator, "webdriver", {get: () => undefined})',
-    );
+      page = (await context.newPage()) as MtPage;
+
+      await page.addInitScript(
+        'Object.defineProperty(navigator, "webdriver", {get: () => undefined})',
+      );
+    } catch (err) {
+      await closeQuietly(browser);
+      throw err;
+    }
 
     try {
       // 1. Land on the map page so Cloudflare drops a session cookie + cf_clearance.
@@ -245,10 +296,9 @@ class MarinetrafficBrowser {
         { err: (err as Error).message },
         'marinetraffic: failed to load map page — degrading',
       );
-      try { await page.close(); } catch { /* ignore */ }
-      try { await context.close(); } catch { /* ignore */ }
-      try { await browser.close(); } catch { /* ignore */ }
+      await closeQuietly(page, context, browser);
       this.ready = false;
+      this.scheduleReinit();
       return;
     }
 
@@ -256,6 +306,9 @@ class MarinetrafficBrowser {
     this.context = context;
     this.page = page;
     this.ready = true;
+    // A clean start clears the penalty, so a later failure isn't made to wait
+    // out a backoff earned by an outage that has since ended.
+    this.reinitBackoffMs = REINIT_BACKOFF_MS;
 
     this.refreshTimer = setInterval(
       () => void this.refreshSession().catch(() => { /* never let a refresh rejection become unhandled */ }),
@@ -889,25 +942,19 @@ class MarinetrafficBrowser {
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
     this.ready = false;
+    if (this.reinitTimer) {
+      clearTimeout(this.reinitTimer);
+      this.reinitTimer = null;
+    }
     if (this.refreshTimer) {
       clearInterval(this.refreshTimer);
       this.refreshTimer = null;
     }
-    try {
-      const page = this.page as { close?: () => Promise<void> } | null;
-      if (page?.close) await page.close();
-    } catch { /* ignore */ }
-    try {
-      const context = this.context as { close?: () => Promise<void> } | null;
-      if (context?.close) await context.close();
-    } catch { /* ignore */ }
-    try {
-      const browser = this.browser as { close?: () => Promise<void> } | null;
-      if (browser?.close) await browser.close();
-    } catch { /* ignore */ }
+    const { page, context, browser } = this;
     this.page = null;
     this.context = null;
     this.browser = null;
+    await closeQuietly(page, context, browser);
     log.info('marinetraffic: browser shut down');
   }
 }

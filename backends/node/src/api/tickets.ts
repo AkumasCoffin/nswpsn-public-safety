@@ -242,6 +242,7 @@ ticketsRouter.post('/api/tickets', requireSupabaseJwt, async (c) => {
       kind: 'ticket',
       event: 'new',
       ref: String(ticket.id),
+      view: `tickets&id=${ticket.id}`,
       title: `Ticket #${ticket.id} · ${TICKET_CATEGORIES[category]}`,
       subtitle: subject,
       status: 'open',
@@ -292,7 +293,15 @@ ticketsRouter.get('/api/tickets/:id', requireSupabaseJwt, async (c) => {
     if (ticket.user_id !== userId && !isHandler) return c.json({ error: 'ticket not found' }, 404);
     const messages = await fetchMessages(pool, id);
     const names = isHandler ? await displayNameMap(pool, [ticket.user_id]) : undefined;
-    return c.json({ ticket: mapTicket(ticket, names), messages });
+    // Handlers also see which bug reports / suggestions this ticket was
+    // opened about (api/feedback.ts links them).
+    const feedback = isHandler
+      ? (await pool.query<{ id: number; kind: string; subject: string; status: string }>(
+          'SELECT id, kind, subject, status FROM feedback WHERE ticket_id = $1 ORDER BY id',
+          [id],
+        )).rows
+      : undefined;
+    return c.json({ ticket: mapTicket(ticket, names), messages, ...(feedback ? { feedback } : {}) });
   } catch (err) {
     log.error({ err, id }, 'ticket fetch failed');
     return c.json({ error: 'Failed to fetch ticket' }, 500);
@@ -324,6 +333,7 @@ ticketsRouter.post('/api/tickets/:id/reply', requireSupabaseJwt, async (c) => {
       kind: 'ticket',
       event: 'new',
       ref: String(ticket.id),
+      view: `tickets&id=${ticket.id}`,
       title: `Ticket #${ticket.id} · user replied${reopened ? ' (reopened)' : ''}`,
       subtitle: ticket.subject,
       status: 'open',
@@ -501,6 +511,7 @@ ticketsRouter.post('/api/staff/tickets/:id/close', requireRole(canHandleTickets)
       kind: 'ticket',
       event: 'resolved',
       ref: String(ticket.id),
+      view: `tickets&id=${ticket.id}`,
       title: `Ticket #${ticket.id} · closed`,
       subtitle: ticket.subject,
       status: 'closed',

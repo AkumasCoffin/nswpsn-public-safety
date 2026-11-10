@@ -16,7 +16,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -38,7 +37,6 @@ import (
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/activityship"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/agentcfg"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/chanmgr"
-	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/configapply"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/queue"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/rdioctl"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/relay"
@@ -155,8 +153,12 @@ func (p *program) Start(s service.Service) error {
 			// no relay listener, so every call rdio hands it is refused and
 			// dropped — silently, and forever. Only when we were NOT asked to
 			// stop: a cancelled context is a normal shutdown.
+			//
+			// Through update.RestartAgent because "exit and be relaunched" is
+			// not the same instruction on every platform — on Windows the
+			// restart has to be asked for explicitly.
 			if ctx.Err() == nil {
-				os.Exit(1)
+				update.RestartAgent("fatal component error", 1)
 			}
 		}
 	}()
@@ -190,6 +192,21 @@ func newService(configPath string) (service.Service, *program, error) {
 		DisplayName: "NSW PSN Radio Feeder Node",
 		Description: "Supervises SDR-Trunk and rdio-scanner and relays radio calls to the NSW PSN backend.",
 		Arguments:   []string{"run", "--config", cfgArg},
+		// Windows only, and applied at INSTALL time (kardianos passes these to
+		// CreateService/SetRecoveryActions), so an already-registered service
+		// has to be re-installed to pick them up. Without them the Windows SCM
+		// has no recovery actions at all — `sc qfailure nswpsn-node` prints
+		// none — and a service whose process dies stays stopped, which on a
+		// feeder node means dark until somebody logs in. The systemd side has
+		// always had Restart=always from the installer's unit.
+		// Spelled as literals because kardianos declares these keys in its
+		// windows-only file, so the named constants do not exist in a Linux
+		// build (service.OnFailure / OnFailureRestart / etc.).
+		Option: service.KeyValue{
+			"OnFailure":              "restart",
+			"OnFailureDelayDuration": "5s",
+			"OnFailureResetPeriod":   60,
+		},
 	}
 	s, err := service.New(prg, svcConfig)
 	return s, prg, err
@@ -348,13 +365,6 @@ func runAgent(ctx context.Context, configPath string) error {
 	// (the WS client builds its own equivalent client internally).
 	sdr := sdrctl.New(cfg.SDRTrunkControlPort, controlToken)
 
-	// Re-import the last-applied config into the freshly-launched sdrtrunk-vce
-	// once its control server answers, so it always runs the agent's current
-	// config (not whatever its SQLite database held from the last session) and
-	// never auto-starts a channel the operator disabled. No-op on first ever
-	// boot (no persisted config yet → sdrtrunk-vce runs its imported/preset DB).
-	go bootImportConfig(ctx, cfg, sdr)
-
 	// Localhost listener impersonating rdio call-upload.
 	listener := relay.New(cfg.RelayAddr, q)
 
@@ -373,6 +383,17 @@ func runAgent(ctx context.Context, configPath string) error {
 	// Report calls lost between rdio and the queue in the status frame, so a
 	// node shedding traffic is visible on the fleet page instead of silent.
 	ws.SetDropProvider(listener)
+
+	// Re-import the last-applied config into the freshly-launched sdrtrunk-vce
+	// once its control server answers, so it always runs the agent's current
+	// config (not whatever its SQLite database held from the last session) and
+	// never auto-starts a channel the operator disabled. No-op on first ever
+	// boot (no persisted config yet → sdrtrunk-vce runs its imported/preset DB).
+	//
+	// Started after the WS client exists because it goes THROUGH it: the import
+	// and a pushed apply are two writers to the same /config/import and have to
+	// take the same lock. See Client.BootImport.
+	go bootImportConfig(ctx, cfg, sdr, ws)
 
 	// The queue sender POSTs each buffered call to the backend relay, enriching
 	// each with P25 site headers from the control server when available.
@@ -497,23 +518,22 @@ func runAgent(ctx context.Context, configPath string) error {
 // bootImportConfig re-imports the last-applied config payload (persisted by the
 // WS client on each successful apply) into a freshly-launched sdrtrunk-vce. It
 // waits for the control server to answer /status (polling with backoff up to
-// ~90s — JVM start + calibration can be slow on a cold node), then POSTs the
-// rebuilt ConfigurationState to /config/import (idempotent full overwrite).
+// ~90s — JVM start + calibration can be slow on a cold node), then hands the
+// import to the WS client, which runs it under the config-apply lock.
 // This guarantees sdrtrunk-vce runs the agent's current config rather than a
 // stale last-session database — closing the window where it would auto-start a
 // just-disabled channel on every reboot.
-func bootImportConfig(ctx context.Context, cfg *agentcfg.Config, sdr *sdrctl.Client) {
-	raw, err := os.ReadFile(cfg.AppliedConfigPath())
-	if err != nil {
+//
+// The payload itself is read by Client.BootImport, after the wait and with the
+// lock held: the backend pushes config right after hello on exactly the boots
+// where the versions differ, so what is on disk at the end of the wait is not
+// necessarily what was there at the start of it.
+func bootImportConfig(ctx context.Context, cfg *agentcfg.Config, sdr *sdrctl.Client, ws *wsclient.Client) {
+	if _, err := os.Stat(cfg.AppliedConfigPath()); err != nil {
 		if !os.IsNotExist(err) {
 			log.Printf("startup: read last-applied config failed: %v", err)
 		}
 		return // first boot / nothing applied yet — sdrtrunk-vce uses its own DB
-	}
-	var payload configapply.ConfigPayload
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		log.Printf("startup: last-applied config unreadable (%v); skipping boot config import", err)
-		return
 	}
 
 	deadline := time.Now().Add(90 * time.Second)
@@ -535,17 +555,15 @@ func bootImportConfig(ctx context.Context, cfg *agentcfg.Config, sdr *sdrctl.Cli
 		}
 	}
 
-	deps := configapply.Deps{
-		DataDir:         cfg.DataDir,
-		PresetsDir:      cfg.PresetsDir,
-		SDRTrunkAppRoot: cfg.SDRTrunkAppRoot,
-		SDR:             sdr,
-	}
-	if err := configapply.ImportOnBoot(payload, deps); err != nil {
+	ran, err := ws.BootImport()
+	switch {
+	case err != nil:
 		log.Printf("startup: boot config import failed: %v", err)
-		return
+	case !ran:
+		log.Printf("startup: a config push already applied while sdrtrunk was starting; boot re-import skipped")
+	default:
+		log.Printf("startup: re-imported last-applied config into sdrtrunk-vce")
 	}
-	log.Printf("startup: re-imported last-applied config into sdrtrunk-vce")
 }
 
 // resolveSDRTrunk builds the sdrtrunk supervisor component. SDR-Trunk is core to

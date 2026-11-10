@@ -32,6 +32,7 @@
  */
 import { fetchJson } from './shared/http.js';
 import { registerSource } from '../services/sourceRegistry.js';
+import { liveStore } from '../store/live.js';
 import type { ArchiveRow } from '../store/archive.js';
 
 // Bounding box covers Sydney + Central Coast + Hunter Valley — the full
@@ -263,7 +264,15 @@ const AUSGRID_DISABLED =
   (process.env['AUSGRID_DISABLED'] ?? 'true').toLowerCase() !== 'false';
 
 export function register(): void {
-  if (AUSGRID_DISABLED) return;
+  if (AUSGRID_DISABLED) {
+    // LiveStore hydrates every saved snapshot at startup, before sources
+    // register. With polling off nothing replaces them, so the last outages
+    // fetched before it was switched off were served as current, indefinitely.
+    // Empty is the truth while Ausgrid is not being read.
+    liveStore.delete('ausgrid');
+    liveStore.delete('ausgrid_stats');
+    return;
+  }
   registerSource<AusgridOutagesPayload>({
     name: 'ausgrid',
     family: 'power',

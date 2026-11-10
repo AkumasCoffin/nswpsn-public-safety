@@ -31,7 +31,7 @@ DirectoryIndex index.html
 </FilesMatch>
 
 # Allow JS files that the frontend needs
-<FilesMatch "^(auth-common\.js|config\.js|analytics\.js)$">
+<FilesMatch "^(auth-common\.js|api-session\.js|config\.js|analytics\.js)$">
   Require all granted
 </FilesMatch>
 

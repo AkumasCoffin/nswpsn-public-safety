@@ -35,7 +35,7 @@
   <link rel="apple-touch-icon" sizes="180x180" href="./assets/ausaware-icon-180.png">
   <link rel="manifest" href="./site.webmanifest">
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
-  <script src="livetraffic-vocab.js?v=1"></script>
+  <script src="livetraffic-vocab.js?v=3"></script>
 
   <style>
     /* Prevent horizontal overflow */
@@ -1689,6 +1689,7 @@
     }
   </style>
   <script src="auth-common.js"></script>
+  <script src="api-session.js"></script>
 </head>
 
 <body>
@@ -2503,14 +2504,14 @@
         }
       }
       
-      // If we have access_token but no type specified, default to password reset
-      // (password resets are more common than email verifications for existing users)
-      if (params.access_token && !params.type) {
-        const redirectUrl = 'reset-password' + (window.location.hash || window.location.search);
-        window.location.href = redirectUrl;
-        return;
-      }
-      
+      // A bare access_token with no type is NOT a recovery link — a recovery
+      // redirect always carries type=recovery, which the branch above takes.
+      // The implicit-flow OAuth return has exactly this shape, and linking
+      // Discord from the profile modal returns to whichever page opened it, so
+      // treating it as a reset asked people who had just linked an account to
+      // choose a new password. Leave the fragment to supabase-js, which reads
+      // it and stores the session itself.
+
       // If we have a token parameter but no type, it might be in the URL from email
       // Check if we came from Supabase auth endpoint
       if (params.token && document.referrer.includes('supabase.co/auth')) {
@@ -2527,9 +2528,7 @@
     
     // API Base URLs
     const API_BASE = 'https://api.forcequit.xyz';
-    // API Key - loaded from backend config
-    let API_KEY = null;
-    
+
     // Scroll to section when stat card is clicked
     function scrollToSection(sectionId) {
       if (typeof umami !== 'undefined') umami.track('live-stat-card-click', { section: sectionId });
@@ -2544,24 +2543,19 @@
       }
     }
     
-    // Authenticated fetch wrapper
+    // Authenticated fetch wrapper: the page's browser session token
+    // (api-session.js) rides every call; it mints, refreshes and retries.
     function apiFetch(url, options = {}) {
-      const headers = {
-        ...options.headers,
-        ...(API_KEY ? { 'Authorization': `Bearer ${API_KEY}` } : {})
-      };
-      return fetch(url, { ...options, headers });
+      return AusApi.fetch(url, options);
     }
-    
-    // Load API config from backend
+
+    // Warm the session token before the first fetches.
     async function loadApiConfig() {
       try {
-        const res = await fetch(`${API_BASE}/api/config`);
-        const config = await res.json();
-        API_KEY = config.apiKey;
-        console.log('API config loaded');
+        await AusApi.token();
+        console.log('API session ready');
       } catch (e) {
-        console.error('Failed to load API config:', e);
+        console.error('Failed to get an API session:', e);
       }
     }
     
@@ -2813,13 +2807,20 @@
     let topOfHourTimer = null;
 
     // Shared session ID across all pages - uses localStorage to persist
-    const LIVE_PAGE_ID = localStorage.getItem('nswpsn_session_id') || (() => {
-      const id = 'session-' + (crypto.randomUUID ? crypto.randomUUID() : 
+    const LIVE_PAGE_ID = (() => {
+      // localStorage can throw in blocked-storage / private modes — guard it
+      // so a failure here doesn't abort the whole inline script. This runs at
+      // top level, so an unguarded read took the DOMContentLoaded registration
+      // with it and the page never loaded any data at all.
+      let stored = null;
+      try { stored = localStorage.getItem('nswpsn_session_id'); } catch (e) {}
+      if (stored) return stored;
+      const id = 'session-' + ((typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() :
         'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
           const r = Math.random() * 16 | 0;
           return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
         }));
-      localStorage.setItem('nswpsn_session_id', id);
+      try { localStorage.setItem('nswpsn_session_id', id); } catch (e) {}
       return id;
     })();
     const LIVE_PAGE_TYPE = 'live';
@@ -3087,9 +3088,9 @@
 
     async function loadRdioSummaries() {
       try {
-        const res = await apiFetch(`${API_BASE}/api/summaries/latest`);
+        const res = await apiFetch(`${API_BASE}/api/v1/summaries/latest`);
         if (!res.ok) throw new Error(`status ${res.status}`);
-        const data = await res.json();
+        const data = (await res.json()).data;
 
         const hourlyEl = document.getElementById('rdio-hourly-summary');
         const hourlyMeta = document.getElementById('rdio-hourly-meta');
@@ -3304,11 +3305,11 @@
       
       try {
         const response = await apiFetch(`${API_BASE}/api/news/rss?limit=10`);
-        
+
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`);
         }
-        
+
         const data = await response.json();
         newsCache = data.items || [];
         
@@ -3496,12 +3497,15 @@
       }
     }
     
-    // Escape HTML to prevent XSS
+    // Escape HTML to prevent XSS.
+    // The textContent→innerHTML trick that used to live here escapes only
+    // & < >, because inside a text node a quote means nothing. Half of what
+    // this page escapes goes into an ATTRIBUTE, where a quote ends the value,
+    // so it has to cover " and ' as well — same five characters as escHTML.
     function escapeHtml(text) {
       if (!text) return '';
-      const div = document.createElement('div');
-      div.textContent = text;
-      return div.innerHTML;
+      return String(text).replace(/[&<>"']/g, c =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     }
 
     function stripHtml(text) {
@@ -3515,7 +3519,11 @@
       try {
         const u = new URL(url, window.location.href);
         if (u.protocol !== 'http:' && u.protocol !== 'https:') return '#';
-        return escapeHtml(url);
+        // The PARSED href, not the original string: the scheme check was made
+        // against u, so anything the parser dropped or re-encoded on the way
+        // (a stray quote in a feed's <link>, say) must not travel on into the
+        // href it vouched for.
+        return escapeHtml(u.href);
       } catch {
         return '#';
       }
@@ -4241,7 +4249,7 @@
         
         // Traffic endpoints - categorize by type (and cache for loadLatestTraffic)
         // API now returns pre-filtered active incidents with count field
-        apiFetch(`${API_BASE}/api/traffic/incidents`).then(r => r.json()).then(d => {
+        apiFetch(`${API_BASE}/api/v1/traffic/incidents`).then(r => r.json()).then(d => {
           apiDataCache.traffic = apiDataCache.traffic || {};
           apiDataCache.traffic.incidents = d;
           
@@ -4276,26 +4284,26 @@
           setDotStatus('dot-traffic', true);
         }).catch(() => setDotStatus('dot-traffic', false)),
         
-        apiFetch(`${API_BASE}/api/traffic/roadwork`).then(r => r.json()).then(d => {
+        apiFetch(`${API_BASE}/api/v1/traffic/roadwork`).then(r => r.json()).then(d => {
           apiDataCache.traffic = apiDataCache.traffic || {};
           apiDataCache.traffic.roadwork = d;
           // Use count from API if available
           results.traffic.roadwork = d.count !== undefined ? d.count : (d.features?.length || 0);
         }).catch(() => {}),
         
-        apiFetch(`${API_BASE}/api/traffic/fire`).then(r => r.json()).then(d => {
+        apiFetch(`${API_BASE}/api/v1/traffic/fire`).then(r => r.json()).then(d => {
           apiDataCache.traffic = apiDataCache.traffic || {};
           apiDataCache.traffic.fire = d;
           results.traffic.fires = d.count !== undefined ? d.count : (d.features?.length || 0);
         }).catch(() => {}),
         
-        apiFetch(`${API_BASE}/api/traffic/flood`).then(r => r.json()).then(d => {
+        apiFetch(`${API_BASE}/api/v1/traffic/flood`).then(r => r.json()).then(d => {
           apiDataCache.traffic = apiDataCache.traffic || {};
           apiDataCache.traffic.flood = d;
           results.traffic.floods = d.count !== undefined ? d.count : (d.features?.length || 0);
         }).catch(() => {}),
         
-        apiFetch(`${API_BASE}/api/traffic/majorevent`).then(r => r.json()).then(d => {
+        apiFetch(`${API_BASE}/api/v1/traffic/majorevent`).then(r => r.json()).then(d => {
           apiDataCache.traffic = apiDataCache.traffic || {};
           apiDataCache.traffic.majorevent = d;
           results.traffic.major_events = d.count !== undefined ? d.count : (d.features?.length || 0);
@@ -4325,8 +4333,9 @@
           setDotStatus('dot-rfs', true);
         }).catch(() => setDotStatus('dot-rfs', false)),
         
-        // BOM warnings - combined endpoint (no duplicates)
-        apiFetch(`${API_BASE}/api/bom/warnings`).then(r => r.json()).then(d => {
+        // BOM warnings - combined endpoint (no duplicates). /api/v1/ wraps
+        // non-GeoJSON answers in `data`; the cache holds the warnings themselves.
+        apiFetch(`${API_BASE}/api/v1/bom/warnings`).then(r => r.json()).then(j => j.data).then(d => {
           apiDataCache.bom = d;
           
           // Get counts from the response (API provides counts.land, counts.marine, counts.general)
@@ -4339,7 +4348,7 @@
         }).catch(() => setDotStatus('dot-bom', false)),
         
         // Beachwatch - cache for loadLatestBeaches
-        apiFetch(`${API_BASE}/api/beachwatch`).then(r => r.json()).then(d => {
+        apiFetch(`${API_BASE}/api/v1/beachwatch`).then(r => r.json()).then(d => {
           apiDataCache.beachwatch = d;
           const features = d.features || [];
           results.environment.beaches = features.length;
@@ -4360,7 +4369,7 @@
         }).catch(() => setDotStatus('dot-beachwatch', false)),
         
         // BeachSafe - surf conditions and patrol data
-        apiFetch(`${API_BASE}/api/beachsafe`).then(r => r.json()).then(d => {
+        apiFetch(`${API_BASE}/api/v1/beachsafe`).then(r => r.json()).then(j => j.data).then(d => {
           apiDataCache.beachsafe = d;
           const beaches = Array.isArray(d) ? d : [];
           results.environment.beachsafeCount = beaches.length;
@@ -4723,9 +4732,9 @@
               
               <div class="tt-outage-header">
                 <div class="tt-badges-row" style="margin-bottom:0;">
-                  <span class="tt-badge" style="background:${isMaintenance ? '#f97316' : (isPlanned ? '#a855f7' : '#ef4444')};">${escapeHtml(i.type).toUpperCase()}</span>
+                  <span class="tt-badge" style="background:${isMaintenance ? '#f97316' : (isPlanned ? '#a855f7' : '#ef4444')};">${escapeHtml(String(i.type || '').toUpperCase())}</span>
                   ${i.provider === 'Essential' ? '<span class="tt-badge" style="background:#06b6d4; font-size:0.55rem;">ESSENTIAL</span>' : ''}
-                  <span class="tt-status-text">${i.status || 'Active'}</span>
+                  <span class="tt-status-text">${escapeHtml(i.status || 'Active')}</span>
                 </div>
                 <div class="tt-badges-row" style="margin-bottom:0; gap:0.3rem;">
                   ${customers > 0 ? `<span class="tt-customers"><i class="fas fa-users"></i> ${customers.toLocaleString()}</span>` : ''}
@@ -4848,40 +4857,38 @@
         // Use cached data if available, otherwise fetch
         let incidents, fires, floods, majorEvents;
         
-        // alpine/council/works were added after the original four. They are
+        // alpine/council were added after the original four. They are
         // separate reporting streams (council roads especially — it shares no
         // records at all with the state-road feeds), so they widen this list
-        // rather than duplicating it.
-        let alpine, council, works;
+        // rather than duplicating it. Incidents, floods and major events
+        // carry QLD, SA, VIC and ACT records as well as NSW's.
+        let alpine, council;
         if (isCacheValid() && apiDataCache.traffic) {
           incidents = apiDataCache.traffic.incidents || { features: [] };
           fires = apiDataCache.traffic.fire || { features: [] };
           floods = apiDataCache.traffic.flood || { features: [] };
           majorEvents = apiDataCache.traffic.majorevent || { features: [] };
           // loadAllStats() only ever primes the original four keys, so on a
-          // cache hit these three would be permanently empty. Fetch them on
+          // cache hit these two would be permanently empty. Fetch them on
           // demand instead of inheriting a gap.
           const jc = (path) => apiFetch(`${API_BASE}${path}`).then(r => r.json()).catch(() => ({ features: [] }));
-          [alpine, council, works] = await Promise.all([
-            apiDataCache.traffic.alpine || jc('/api/traffic/alpine'),
-            apiDataCache.traffic.lga || jc('/api/traffic/lga'),
-            apiDataCache.traffic.works || jc('/api/traffic/works')
+          [alpine, council] = await Promise.all([
+            apiDataCache.traffic.alpine || jc('/api/v1/traffic/alpine'),
+            apiDataCache.traffic.lga || jc('/api/v1/traffic/lga')
           ]);
           apiDataCache.traffic.alpine = alpine;
           apiDataCache.traffic.lga = council;
-          apiDataCache.traffic.works = works;
         } else {
           const j = (path) => apiFetch(`${API_BASE}${path}`).then(r => r.json()).catch(() => ({ features: [] }));
-          [incidents, fires, floods, majorEvents, alpine, council, works] = await Promise.all([
-            j('/api/traffic/incidents'),
-            j('/api/traffic/fire'),
-            j('/api/traffic/flood'),
-            j('/api/traffic/majorevent'),
-            j('/api/traffic/alpine'),
-            j('/api/traffic/lga'),
-            j('/api/traffic/works')
+          [incidents, fires, floods, majorEvents, alpine, council] = await Promise.all([
+            j('/api/v1/traffic/incidents'),
+            j('/api/v1/traffic/fire'),
+            j('/api/v1/traffic/flood'),
+            j('/api/v1/traffic/majorevent'),
+            j('/api/v1/traffic/alpine'),
+            j('/api/v1/traffic/lga')
           ]);
-          // Cache all seven, not just the new three: the branch above reads
+          // Cache all six, not just the new two: the branch above reads
           // every key back, so a partial write here would make the next
           // cached call render an empty list.
           apiDataCache.traffic = apiDataCache.traffic || {};
@@ -4891,7 +4898,6 @@
           apiDataCache.traffic.majorevent = majorEvents;
           apiDataCache.traffic.alpine = alpine;
           apiDataCache.traffic.lga = council;
-          apiDataCache.traffic.works = works;
         }
         
         // `let`: the render below caps this to a top slice.
@@ -5113,7 +5119,6 @@
         // blanket 'Council' — most are roadwork, and the planned vs
         // emergency split is the useful distinction.
         processFeatures(council, 'Roadwork', 'pill-green', 'lga');
-        processFeatures(works, 'Works', 'pill-orange', 'works');
         
         // Sort by: priority (major first), then unplanned before planned, then by time (newest first)
         items.sort((a, b) => {
@@ -5144,11 +5149,10 @@
         const floodCount = items.filter(i => i.type.toUpperCase().includes('FLOOD') || i.type.toUpperCase().includes('ADVERSE WEATHER')).length;
         const majorCount = items.filter(i => i.isMajor || i.type.toUpperCase().includes('MAJOR EVENT') || i.type.toUpperCase().includes('SPECIAL')).length;
         
-        // Council, Works and Alpine matched none of the buckets above, so
-        // ~2,500 items counted toward Total while appearing in no chip.
-        // These are tagged by the label passed to processFeatures.
+        // Council and Alpine matched none of the buckets above, so they
+        // counted toward Total while appearing in no chip. These are tagged
+        // by the label passed to processFeatures.
         const councilCount = items.filter(i => i.feed === 'lga').length;
-        const worksCount = items.filter(i => i.feed === 'works').length;
         const alpineCount = items.filter(i => i.feed === 'alpine').length;
         const ltColor = (id) => (window.LiveTrafficVocab ? LiveTrafficVocab.color(id) : '#94a3b8');
 
@@ -5172,7 +5176,6 @@
             ${majorCount > 0 ? `<span style="color: #ef4444;"><strong><i class="fas fa-exclamation-circle"></i> Major:</strong> ${majorCount}</span>` : ''}
             ${alpineCount > 0 ? `<span style="color: ${ltColor('alpine')};"><strong><i class="fas fa-snowflake"></i> Alpine:</strong> ${alpineCount}</span>` : ''}
             ${councilCount > 0 ? `<span style="color: ${ltColor('lga')};"><strong><i class="fas fa-building-columns"></i> Council:</strong> ${councilCount}</span>` : ''}
-            ${worksCount > 0 ? `<span style="color: ${ltColor('works')};"><strong><i class="fas fa-helmet-safety"></i> Works:</strong> ${worksCount}</span>` : ''}
             ${withGPS > 0 ? `<span style="color: #60a5fa;"><i class="fas fa-map-marker-alt"></i> ${withGPS} mappable</span>` : ''}
           </div>
           <div class="collapsible-list ${items.length > showCount ? 'collapsed' : ''}" id="traffic-list">
@@ -5219,7 +5222,7 @@
       
       try {
         // Use cached data if available, otherwise fetch
-        const data = apiDataCache.bom || await apiFetch(`${API_BASE}/api/bom/warnings`).then(r => r.json());
+        const data = apiDataCache.bom || await apiFetch(`${API_BASE}/api/v1/bom/warnings`).then(r => r.json()).then(j => j.data);
         
         const items = [];
         
@@ -5364,8 +5367,8 @@
       try {
         // Fetch both data sources in parallel
         const [beachwatchData, beachsafeData] = await Promise.all([
-          apiFetch(`${API_BASE}/api/beachwatch`).then(r => r.json()).catch(() => ({ features: [] })),
-          apiFetch(`${API_BASE}/api/beachsafe`).then(r => r.json()).catch(() => [])
+          apiFetch(`${API_BASE}/api/v1/beachwatch`).then(r => r.json()).catch(() => ({ features: [] })),
+          apiFetch(`${API_BASE}/api/v1/beachsafe`).then(r => r.json()).then(j => j.data).catch(() => [])
         ]);
         
         const features = beachwatchData.features || [];
@@ -5875,7 +5878,7 @@
       const container = document.getElementById('act-ambulance-list');
       if (!container) return;
 
-      apiFetch(`${API_BASE}/api/act-ambulance/incidents`)
+      apiFetch(`${API_BASE}/api/v1/act-ambulance/incidents`)
         .then(r => r.json())
         .then(data => {
           const feats = Array.isArray(data.features) ? data.features : [];

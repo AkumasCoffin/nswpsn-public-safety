@@ -215,9 +215,31 @@ interface DetailCacheEntry {
 }
 const detailCache = new Map<string, DetailCacheEntry>();
 const DETAIL_TTL_MS = 120_000; // 2 min, matches python @cached(ttl=120)
+// The key is whatever airport the caller typed, so the cache must not grow
+// with every distinct name ever asked for: expired entries are swept on each
+// store, and past this many the oldest goes. Airservices lists 39 airports.
+const DETAIL_MAX_ENTRIES = 500;
+
+function storeDetail(airport: string, detail: AviationDetail, now: number): void {
+  for (const [key, entry] of detailCache) {
+    if (now >= entry.expiresAt) detailCache.delete(key);
+  }
+  detailCache.delete(airport); // re-insert at the end, so the cap drops the oldest
+  detailCache.set(airport, { detail, expiresAt: now + DETAIL_TTL_MS });
+  while (detailCache.size > DETAIL_MAX_ENTRIES) {
+    const oldest = detailCache.keys().next().value;
+    if (oldest === undefined) break;
+    detailCache.delete(oldest);
+  }
+}
 
 export function _resetDetailCacheForTests(): void {
   detailCache.clear();
+}
+
+/** TEST-ONLY: entries held. */
+export function _detailCacheSizeForTests(): number {
+  return detailCache.size;
 }
 
 export async function fetchAviationCameraDetail(
@@ -267,7 +289,7 @@ export async function fetchAviationCameraDetail(
     cameras,
     count: cameras.length,
   };
-  detailCache.set(airport, { detail, expiresAt: now + DETAIL_TTL_MS });
+  storeDetail(airport, detail, now);
   return detail;
 }
 

@@ -212,23 +212,49 @@ describe('adsb.inAuBbox', () => {
 });
 
 describe('adsb.shardCircles', () => {
-  it('partitions all circles into equal shards every tick', async () => {
+  const ids = (shards: { id: string }[][]) => shards.flat().map((c) => c.id).sort();
+
+  it('partitions all circles every tick, however many upstreams are answering', async () => {
     const { shardCircles, CIRCLES } = await import('../../../src/sources/adsb.js');
+    const all = [...CIRCLES].map((c) => c.id).sort();
     for (const tick of [0, 1, 2, 3, 7]) {
-      const shards = [0, 1, 2, 3].map((u) => shardCircles(tick, u));
-      const ids = shards.flat().map((c) => c.id).sort();
-      expect(ids).toEqual([...CIRCLES].map((c) => c.id).sort()); // exact partition
-      for (const sh of shards) expect(sh.length).toBe(CIRCLES.length / 4);
+      for (const [full, probes] of [[4, 0], [3, 0], [2, 0], [1, 0], [2, 1], [1, 2]] as const) {
+        const shards = shardCircles(tick, full, probes);
+        expect(shards).toHaveLength(full + probes);
+        expect(ids(shards)).toEqual(all); // exact partition
+        for (let p = 0; p < probes; p++) expect(shards[p]).toHaveLength(1);
+      }
+      for (const sh of shardCircles(tick, 4)) expect(sh.length).toBe(CIRCLES.length / 4);
     }
   });
 
-  it('rotates each circle through every upstream over 4 ticks', async () => {
+  it('rotates each circle through every answering upstream', async () => {
     const { shardCircles, CIRCLES } = await import('../../../src/sources/adsb.js');
     const first = CIRCLES[0]?.id;
-    const owners = [0, 1, 2, 3].map(
-      (tick) => [0, 1, 2, 3].find((u) => shardCircles(tick, u).some((c) => c.id === first)),
-    );
-    expect([...owners].sort()).toEqual([0, 1, 2, 3]);
+    for (const full of [4, 2]) {
+      const owners = [0, 1, 2, 3].map((tick) =>
+        shardCircles(tick, full).findIndex((sh) => sh.some((c) => c.id === first)),
+      );
+      expect(new Set(owners).size).toBe(full);
+    }
+  });
+
+  it('gives a capped upstream no more than its share and the rest to the others', async () => {
+    const { shardCircles, CIRCLES } = await import('../../../src/sources/adsb.js');
+    const all = [...CIRCLES].map((c) => c.id).sort();
+    const shards = shardCircles(0, 2, 1, [3, Infinity]);
+    expect(shards.map((s) => s.length)).toEqual([1, 3, CIRCLES.length - 4]);
+    expect(ids(shards)).toEqual(all);
+  });
+
+  it('with every upstream capped, leaves out the circles dealt most recently', async () => {
+    const { shardCircles, CIRCLES } = await import('../../../src/sources/adsb.js');
+    // Circles 0-9 were dealt last poll, the rest the poll before.
+    const lastDealt = CIRCLES.map((_, i) => (i < 10 ? 5 : 4));
+    const shards = shardCircles(6, 2, 0, [5, 4], lastDealt);
+    expect(shards.map((s) => s.length)).toEqual([5, 4]);
+    const dealt = new Set(shards.flat().map((c) => c.id));
+    for (let i = 0; i < 10; i++) expect(dealt.has(CIRCLES[i]!.id)).toBe(false);
   });
 });
 
@@ -439,5 +465,122 @@ describe('adsb.fetchAdsbAircraft', () => {
     const assertion = expect(p).rejects.toThrow(/all upstreams failed/);
     await vi.runAllTimersAsync();
     await assertion;
+  });
+});
+
+describe('adsb upstream health', () => {
+  const T0 = 1_800_000_000_000;
+  const status = (code: number, retryAfterMs: number | null = null) =>
+    Object.assign(new Error(`HTTP ${code} for https://x/`), { status: code, retryAfterMs });
+  const callsTo = (host: string) =>
+    fetchJsonMock.mock.calls.filter(([url]) => String(url).includes(host)).length;
+  async function poll() {
+    const { fetchAdsbAircraft } = await import('../../../src/sources/adsb.js');
+    const p = fetchAdsbAircraft();
+    p.catch(() => {}); // an all-down poll rejects before the timers finish
+    await vi.runAllTimersAsync();
+    return p;
+  }
+
+  beforeEach(async () => {
+    fetchJsonMock.mockReset();
+    vi.useFakeTimers();
+    vi.setSystemTime(T0);
+    const { _resetAdsbHoldoverForTests, _resetAdsbTrailsForTests } = await import('../../../src/sources/adsb.js');
+    _resetAdsbHoldoverForTests();
+    _resetAdsbTrailsForTests();
+  });
+
+  it('a refusing upstream stops its sweep, then is paused and its circles shared out', async () => {
+    let refuse = true;
+    fetchJsonMock.mockImplementation((url: string) =>
+      refuse && url.includes('airplanes.live') ? Promise.reject(status(403)) : Promise.resolve({ ac: [raw()] }),
+    );
+    let snap = await poll();
+    expect(callsTo('airplanes.live')).toBe(1); // first 403 halts the other 6
+    expect(snap.upstreams.find((u) => u.id === 'airplanes_live')).toMatchObject({ ok: false, circles_ok: 0 });
+
+    fetchJsonMock.mockClear();
+    vi.setSystemTime(T0 + 20_000);
+    snap = await poll();
+    expect(callsTo('airplanes.live')).toBe(0);
+    expect(fetchJsonMock.mock.calls).toHaveLength(28); // every circle still fetched
+    const ap = snap.upstreams.find((u) => u.id === 'airplanes_live');
+    expect(ap).toMatchObject({ ok: false, circles_total: 0 });
+    expect(ap?.error).toMatch(/^paused \(refused\)/);
+
+    // An hour on it gets one probe circle; answering, it rejoins in full.
+    refuse = false;
+    fetchJsonMock.mockClear();
+    vi.setSystemTime(T0 + 61 * 60_000);
+    await poll();
+    expect(callsTo('airplanes.live')).toBe(1);
+    fetchJsonMock.mockClear();
+    vi.setSystemTime(T0 + 62 * 60_000);
+    await poll();
+    expect(callsTo('airplanes.live')).toBe(7);
+  });
+
+  it('a 429 pauses for its Retry-After, and a failed probe goes back to sleep', async () => {
+    fetchJsonMock.mockImplementation((url: string) =>
+      url.includes('adsb.lol') ? Promise.reject(status(429, 5_000)) : Promise.resolve({ ac: [raw()] }),
+    );
+    await poll();
+    expect(callsTo('adsb.lol')).toBe(1);
+    const sweepEnd = Date.now();
+
+    fetchJsonMock.mockClear();
+    vi.setSystemTime(sweepEnd + 4_000);
+    await poll();
+    expect(callsTo('adsb.lol')).toBe(0);
+
+    fetchJsonMock.mockClear();
+    vi.setSystemTime(Date.now() + 6_000);
+    await poll();
+    expect(callsTo('adsb.lol')).toBe(1); // the probe, refused again
+
+    fetchJsonMock.mockClear();
+    vi.setSystemTime(Date.now() + 1_000);
+    await poll();
+    expect(callsTo('adsb.lol')).toBe(0);
+  });
+
+  it('a 429 halves the circles it is dealt, and clean polls earn them back', async () => {
+    let limit = true;
+    fetchJsonMock.mockImplementation((url: string) =>
+      limit && url.includes('adsb.lol') ? Promise.reject(status(429)) : Promise.resolve({ ac: [raw()] }),
+    );
+    await poll(); // asked for 7, refused: share 3, paused 30 s
+    limit = false;
+    const at = (ms: number) => vi.setSystemTime(Date.now() + ms);
+
+    fetchJsonMock.mockClear();
+    at(31_000);
+    await poll();
+    expect(callsTo('adsb.lol')).toBe(1); // the probe
+
+    // Rejoined at its reduced share; the other three take up the rest.
+    for (let i = 0; i < 4; i++) {
+      fetchJsonMock.mockClear();
+      at(20_000);
+      await poll();
+      expect(callsTo('adsb.lol')).toBe(3);
+      expect(fetchJsonMock.mock.calls).toHaveLength(28);
+    }
+    fetchJsonMock.mockClear();
+    at(20_000);
+    await poll();
+    expect(callsTo('adsb.lol')).toBe(4);
+  });
+
+  it('with every upstream paused the probes cover the whole map', async () => {
+    fetchJsonMock.mockImplementation(() => Promise.reject(status(403)));
+    await expect(poll()).rejects.toThrow(/all upstreams failed/);
+    fetchJsonMock.mockReset();
+    fetchJsonMock.mockResolvedValue({ ac: [raw()] });
+    vi.setSystemTime(T0 + 61 * 60_000);
+    const snap = await poll();
+    expect(fetchJsonMock.mock.calls).toHaveLength(28);
+    expect(snap.count).toBe(1);
   });
 });

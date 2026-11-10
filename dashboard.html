@@ -3033,7 +3033,7 @@ const _DASH_SEVERITY_TYPE_LABELS = {};
 const _DASH_FILTER_SEVERITY_TYPES = new Set();
 const _DASH_SUBTYPE_AWARE_TYPES = new Set();
 
-// Lazy-fetched + cached `/api/data/history/filters` providers tree.
+// Lazy-fetched + cached `/api/v1/history/filters` providers tree.
 // First call kicks off a request; subsequent calls reuse the same promise.
 // Used to populate the subtype filter chip lists with whatever values
 // have actually been observed in data_history.
@@ -3051,8 +3051,8 @@ function fetchFilterCatalogue() {
   // {providers: []} forever. On error we surface the empty result
   // to the caller but clear the cached promise so the next call
   // retries.
-  _dashFilterFetchPromise = fetch(API + '/api/data/history/filters')
-    .then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))
+  _dashFilterFetchPromise = fetch(API + '/api/v1/history/filters')
+    .then(r => r.ok ? r.json().then(j => j.data) : Promise.reject(new Error('HTTP ' + r.status)))
     .catch((err) => {
       _dashFilterFetchPromise = null;
       console.warn('[dash] filter catalogue fetch failed:', err);
@@ -3250,6 +3250,10 @@ function humanizeSubtype(v) {
     .join(' ');
 }
 
+// The states a preset can be limited to (filters.states), in the order the
+// API stores them (lib/stateMask.ts AU_STATES).
+const _DASH_STATE_CODES = ['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'NT', 'ACT'];
+
 function presetFilters(preset) {
   const f = (preset && preset.filters) || {};
   // Geofilter: prefer the new `geofilter` key. Legacy presets stored a
@@ -3294,6 +3298,7 @@ function presetFilters(preset) {
     keywords_exclude: Array.isArray(f.keywords_exclude) ? f.keywords_exclude : [],
     severity_min: sev,
     subtype_filters: subtypeFilters,
+    states: Array.isArray(f.states) ? _DASH_STATE_CODES.filter(s => f.states.includes(s)) : [],
     geofilter: gf,
   };
 }
@@ -3307,6 +3312,7 @@ function filtersSummary(preset) {
   if (nSev) bits.push(`severity (${nSev} source${nSev === 1 ? '' : 's'})`);
   const nSub = Object.keys(f.subtype_filters).length;
   if (nSub) bits.push(`subtypes (${nSub} source${nSub === 1 ? '' : 's'})`);
+  if (f.states.length) bits.push(f.states.join(', '));
   if (f.geofilter) {
     const t = f.geofilter.type;
     bits.push(t === 'ring' ? 'circle' : (t === 'polygon' ? 'polygon' : 'square'));
@@ -3761,6 +3767,7 @@ function renderFiltersCard(preset) {
   let expanded = !!(f.keywords_include.length || f.keywords_exclude.length
                     || Object.keys(f.severity_min).length
                     || Object.keys(f.subtype_filters).length
+                    || f.states.length
                     || f.geofilter);
 
   const summarySpan = el('span', { class: 'filters-summary' }, filtersSummary(preset));
@@ -3782,7 +3789,7 @@ function renderFiltersCard(preset) {
   card.appendChild(el('div', { class: 'card-row' }, [
     el('span', { class: 'label' }, [
       el('span', {}, 'Filters'),
-      el('span', { class: 'sub' }, 'Restrict this preset to alerts that match keywords, a severity floor, sub-types, or a region.'),
+      el('span', { class: 'sub' }, 'Restrict this preset to alerts that match keywords, a severity floor, sub-types, states, or a region.'),
     ]),
     el('div', { style: 'display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap' }, [summarySpan, toggleBtn]),
   ]));
@@ -3991,6 +3998,36 @@ function renderFiltersCard(preset) {
     body.appendChild(subtypeWrap);
   }
 
+  // ---- States (tick the ones to keep; none ticked = every state) ----
+  const stateSelections = new Set(f.states);
+  const stateChips = [];
+  const stateSummary = el('span', { style: 'font-size:0.7rem;color:var(--text-soft);' },
+    stateSelections.size ? `${stateSelections.size} selected` : 'all states');
+  const stateBox = el('div', { style: 'display:flex;flex-wrap:wrap;gap:0.3rem;margin-top:0.2rem;' });
+  for (const code of _DASH_STATE_CODES) {
+    const chip = el('button', {
+      type: 'button',
+      class: 'chip subtype-chip' + (stateSelections.has(code) ? ' active' : ''),
+    }, code);
+    chip.onclick = (e) => {
+      e.preventDefault();
+      if (stateSelections.has(code)) stateSelections.delete(code);
+      else stateSelections.add(code);
+      chip.classList.toggle('active', stateSelections.has(code));
+      stateSummary.textContent = stateSelections.size ? `${stateSelections.size} selected` : 'all states';
+    };
+    stateChips.push(chip);
+    stateBox.appendChild(chip);
+  }
+  body.appendChild(el('div', {}, [
+    el('label', { class: 'field-label' }, ['States ', stateSummary]),
+    stateBox,
+    el('div', { style: 'font-size:0.7rem;color:var(--text-soft);margin-top:0.35rem' },
+      'Only alerts from the ticked states. Road alerts carry their state; each fire, '
+      + 'ambulance and power source belongs to one. Alerts with no state (BOM, satellite '
+      + 'hotspots, pager) still come through — use the map below to narrow those.'),
+  ]));
+
   // ---- geofilter (interactive map) ----
   const geofilterMap = makeGeofilterMap(preset, f.geofilter);
   body.appendChild(el('div', {}, [
@@ -4017,6 +4054,8 @@ function renderFiltersCard(preset) {
     if (exc.length) out.keywords_exclude = exc;
     if (Object.keys(sev).length) out.severity_min = sev;
     if (Object.keys(subtypes).length) out.subtype_filters = subtypes;
+    const states = _DASH_STATE_CODES.filter(s => stateSelections.has(s));
+    if (states.length) out.states = states;
     if (gf) out.geofilter = gf;
     return out;
   };
@@ -4057,6 +4096,9 @@ function renderFiltersCard(preset) {
         const summary = row.querySelector('.subtype-summary');
         if (summary) summary.textContent = 'all subtypes';
       }
+      stateSelections.clear();
+      for (const chip of stateChips) chip.classList.remove('active');
+      stateSummary.textContent = 'all states';
       geofilterMap.set(null);
       await patchPreset(preset.id, { filters: {} });
     },

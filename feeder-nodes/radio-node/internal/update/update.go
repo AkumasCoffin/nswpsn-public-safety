@@ -5,13 +5,21 @@
 // and self-replaces the running agent binary (via a detached helper on Windows,
 // an in-place rename + re-exec on Unix).
 //
-// PLACEHOLDER-SAFE
-// ----------------
-// The live backend manifest currently ships PLACEHOLDER urls and EMPTY sha256
-// values. Every entry point here treats an empty/placeholder url or empty sha256
-// as "nothing to do": FetchManifest still succeeds, EnsureComponent resolves
-// whatever (if anything) is already installed without downloading, and
-// StageAgentUpdate returns ErrNothingToDo. No downloads, no errors, no crashes.
+// MISSING-ARTIFACT-SAFE
+// ---------------------
+// An entry may legitimately have no artifact to offer yet, and every entry
+// point here treats an empty/placeholder url or empty sha256 as "nothing to
+// do": FetchManifest still succeeds, EnsureComponent resolves whatever (if
+// anything) is already installed without downloading, and StageAgentUpdate
+// returns ErrNothingToDo. No downloads, no errors, no crashes.
+//
+// That is a fallback, NOT the normal case — this comment used to say the live
+// manifest shipped placeholders throughout, which stopped being true without
+// anyone noticing. assets/node-versions.json commits empty agent digests, but
+// the backend fills each one at serve time by hashing the binary present in its
+// downloads directory (api/node-updates.ts), and deploy.sh builds them there.
+// So a version bump in that manifest does reach running nodes, and the empty
+// path below is reached only for an artifact nobody has published.
 package update
 
 import (

@@ -24,6 +24,7 @@ import { Hono } from 'hono';
 import type { BodyData } from 'hono/utils/body';
 import { z } from 'zod';
 import { config } from '../config.js';
+import { BLOCKED_CAPCODES, isPagerTimeCode, pagerNoiseReason } from '../services/pagerFilter.js';
 import { log } from '../lib/log.js';
 import { describeRelayError } from '../lib/relayError.js';
 import { resolveNodeToken } from '../services/auth/nodeToken.js';
@@ -45,7 +46,6 @@ import { maybeFlushNodeTracks } from '../services/nodes/nodeTrackArchive.js';
 import { normalizeNodeUploadWithTrails, ingestNodeTrailPoints } from '../sources/adsb.js';
 import {
   recordActivityEvents,
-  markRecorded,
   mergeAutomaticPatch,
   recordPagerEvent,
   upsertSiteSnapshots,
@@ -108,6 +108,30 @@ function parsePatchMembers(raw: string | null): number[] {
     if (Number.isInteger(n) && n > 0 && !out.includes(n)) out.push(n);
   }
   return out;
+}
+
+/**
+ * NSW Police Force talkgroups, inclusive ranges. Their calls are never relayed
+ * into central rdio.
+ *
+ * The force is encrypted end to end, so there is never audio to hear. Its
+ * agency is configured encrypted, which pushes no rdio system or talkgroups to
+ * the nodes (globalConfig.ts), yet a node still uploads one now and then — a
+ * call whose encryption the decoder missed, recorded as noise (about 50 a day
+ * on 12502 alone, October 2026). Central rdio has none of these talkgroups
+ * either, so it answered each upload 200 and threw the call away. The relay is the one
+ * place every node's uploads pass through, so they stop here.
+ */
+const NSWPF_TALKGROUP_RANGES: ReadonlyArray<readonly [number, number]> = [
+  [10450, 10485],
+  [11701, 11708],
+  [12001, 12275],
+  [12501, 12515],
+];
+
+export function isNswPfTalkgroup(talkgroup: number | null): boolean {
+  if (talkgroup === null) return false;
+  return NSWPF_TALKGROUP_RANGES.some(([lo, hi]) => talkgroup >= lo && talkgroup <= hi);
 }
 
 /** First STRING value of a multipart field parsed with { all: true }
@@ -181,48 +205,17 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
     return c.json({ error: 'bad body' }, 400);
   }
 
-  // 6a. Recorded-flag stamp (migration 044). Deferred to the DELIVERED paths
-  //     below (feed-off, and a successful forward) rather than run here.
-  //
-  //     It used to run unconditionally at this point, before we knew whether
-  //     the call reached central rdio. A failed forward returns 502, the
-  //     agent's queue re-POSTs the identical body, and this ran AGAIN — each
-  //     time flagging another event row and folding the same audio_bytes into
-  //     node_radio_hourly, a FOREVER table. Because an outage makes every
-  //     queued call retry, that was correlated mass over-counting, not noise.
-  //     bumpNodeCallStat was immune only because it already sat in those two
-  //     branches; this now follows the same rule.
-  //
-  //     It also makes the flag truthful: `recorded` means "audio exists in
-  //     central rdio", so a call whose forward permanently failed should NOT
-  //     carry it, and no longer does.
-  const stampRecorded = async (): Promise<void> => {
+  // 6a. Automatic-patch merge. Deferred to the DELIVERED paths below
+  //     (feed-off, and a successful forward) rather than run here, so a 502
+  //     and the agent's re-POST of the same body do the work once, on the
+  //     attempt that lands.
+  const mergeUploadPatch = async (): Promise<void> => {
     if (r.kind !== 'radio') return;
     try {
-      // The call's OWN start time, not arrival time — matching is keyed on
-      // when the call happened, so a late delivery still finds its event.
+      // The call's OWN start time, not arrival time, so a late delivery still
+      // finds the calls it belongs to.
       const epoch = Number(formFirstString(form, 'dateTime') ?? '');
       const startedAt = Number.isFinite(epoch) ? new Date(epoch * 1000) : new Date();
-      const audioField = form['audio'];
-      const audioFile = Array.isArray(audioField)
-        ? audioField.find((x) => x instanceof File)
-        : audioField;
-      await markRecorded(
-        node.id,
-        safeInt(formFirstString(form, 'talkgroup')),
-        startedAt,
-        audioFile instanceof File ? audioFile.size : 0,
-        // vce sends the calling radio and the traffic-channel frequency with
-        // every upload (RdioScannerBroadcaster: FormField.SOURCE / FREQUENCY).
-        // They identify WHICH call this audio is, which timestamp proximity
-        // alone cannot when a talkgroup is busy.
-        safeInt(formFirstString(form, 'source')),
-        safeInt(formFirstString(form, 'frequency')),
-        // The radio's over-the-air alias, when it transmitted one. Sent on
-        // every upload (FormField.TALKER_ALIAS) and previously discarded here,
-        // which is why every radio showed as a bare id.
-        formFirstString(form, 'talkerAlias') ?? null,
-      );
       // AUTOMATIC patches. vce sends the talkgroups it saw carrying this
       // transmission as `patches` (RdioScannerBroadcaster), and this upload is
       // the ONLY place that reaches us — the activity feed the grouping runs on
@@ -245,11 +238,21 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
         safeInt(formFirstString(form, 'source')),
       );
     } catch (err) {
-      log.warn({ err, node: node.id.slice(0, 8) }, 'node relay: recorded stamp failed');
+      log.warn({ err, node: node.id.slice(0, 8) }, 'node relay: patch merge failed');
     }
   };
 
-  // 6b. Feed gate. A node is enabled (decoding, streaming spectrum/status) but
+  // 6b. NSW PF talkgroups never reach central rdio (see isNswPfTalkgroup).
+  //     Acked, so the agent's queue drains instead of retrying a call that can
+  //     never be delivered. Not counted and not merged: no audio went
+  //     anywhere.
+  const talkgroup = safeInt(formFirstString(form, 'talkgroup'));
+  if (isNswPfTalkgroup(talkgroup)) {
+    log.info(`node relay: NSW PF talkgroup ${talkgroup}, not forwarded node=${node.id.slice(0, 8)}`);
+    return c.json({ ok: true, fed: false, dropped: 'nswpf talkgroup' });
+  }
+
+  // 6c. Feed gate. A node is enabled (decoding, streaming spectrum/status) but
   //     its feed to the central rdio is a separate switch that starts OFF. When
   //     the feed is off, accept + COUNT the call (so reception shows in the
   //     node's per-node stats) but do NOT forward it, and ack so the agent's
@@ -265,8 +268,8 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
       log.warn({ err, node: node.id.slice(0, 8) }, 'node relay: stat bump failed (feed off)');
     }
     // Delivered as far as it will ever go: the feed is off by policy, not by
-    // failure, so the flag belongs here.
-    await stampRecorded();
+    // failure, so the merge belongs here.
+    await mergeUploadPatch();
     log.info(`node relay: feed off, not forwarded node=${node.id.slice(0, 8)} bytes=${bytes}`);
     return c.json({ ok: true, fed: false });
   }
@@ -326,10 +329,9 @@ nodeIngestRouter.post('/api/node-ingest/call-upload', async (c) => {
     } catch (err) {
       log.warn({ err, node: node.id.slice(0, 8) }, 'node relay: stat bump failed');
     }
-    // The audio is now in central rdio, so the flag is true. Only here —
-    // a 502 below leaves it unflagged and the agent's retry stamps it once,
-    // on the attempt that actually lands.
-    await stampRecorded();
+    // Only here: a 502 below leaves the calls unmerged and the agent's retry
+    // merges them once, on the attempt that actually lands.
+    await mergeUploadPatch();
     log.info(`node relay ok node=${node.id.slice(0, 8)} bytes=${bytes}`);
     return c.json({ ok: true });
   }
@@ -772,66 +774,9 @@ const MAX_PAGER_BYTES = 256 * 1024;
 // second of budget, so a drain stays smooth rather than gulping the minute.
 const PAGER_BATCH_MAX = 25;
 
-// Capcodes to drop entirely (non-message data/encoded transmitters), the
-// union of built-in defaults and the PAGER_BLOCKED_CAPCODES env. Defaults
-// exist because these are properties of the NSW networks this deployment
-// listens to, not of any one install:
-//   1850000 — FRNSW network idle/keepalive, one page every ~65s around the
-//             clock, empty body. The empty-body guard below also drops it;
-//             blocking the capcode keeps it out even if the payload varies.
-const DEFAULT_BLOCKED_CAPCODES = ['1850000'];
-const BLOCKED_CAPCODES = new Set(
-  [
-    ...DEFAULT_BLOCKED_CAPCODES,
-    ...(config.PAGER_BLOCKED_CAPCODES || '').split(','),
-  ]
-    .map((s) => s.trim())
-    .filter(Boolean),
-);
-
-/**
- * Why a decoded page is noise rather than a message, or null when it is real.
- *
- * 'empty' — tone-only pages (a valid reception, but bodyless; Pagermon
- * rejects them outright, and one at the head of a node's disk queue wedged it
- * for days — see the relay guards). 'too short' — POCSAG bit-error garbage:
- * corrupted decodes land on random capcodes with one- or two-character
- * bodies ("r", "lj", ";", "=m", all live examples). No genuine page on these
- * networks is two characters; the shortest real traffic (a clock tick) is
- * four digits and has its own filter.
- */
-export function pagerNoiseReason(message: string): 'empty' | 'too short' | null {
-  const t = (message || '').trim();
-  if (t.length === 0) return 'empty';
-  if (t.length <= 2) return 'too short';
-  return null;
-}
-
-/**
- * A page whose whole body is a time of day — `0018`, `2342`, `2111`.
- *
- * FRNSW transmitters send these as a clock tick, once every few minutes, and
- * they arrived in volume the moment the FRNSW capcodes were added: they were
- * half of every window of the feed. There is no incident in them, no capcode
- * to address them to, and nothing downstream can do anything with one.
- *
- * Matched by SHAPE rather than by capcode, because the capcode carrying them
- * is an implementation detail of whichever transmitter is ticking and a new
- * one would start the noise again. Requiring a valid HH:MM — hours under 24,
- * minutes under 60 — is what keeps a genuine four-digit body (a turnout
- * number, a brigade code) out of the filter; `9999` is not a time and is not
- * dropped.
- *
- * Deliberately NOT checked against the message's own timestamp. The tick runs
- * a minute or two behind what stamps it (21:37 carrying `2136`), and a clock
- * comparison would be a second thing to get wrong for no gain: a bare time of
- * day is content-free whether or not it agrees with the clock.
- */
-const PAGER_TIME_CODE_RE = /^([01]\d|2[0-3])[0-5]\d$/;
-
-export function isPagerTimeCode(message: string): boolean {
-  return PAGER_TIME_CODE_RE.test((message || '').trim());
-}
+// What gets filtered (blocked capcodes, empty/garbage bodies, FRNSW clock
+// ticks) lives in services/pagerFilter.ts, because the staff Data tab splits
+// stored pages by the same rules.
 
 // Two rate limits, because one was conflating two different things and the
 // conflation lost real traffic. A node draining a large disk backlog (seen at
