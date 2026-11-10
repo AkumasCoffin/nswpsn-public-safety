@@ -397,6 +397,13 @@ const Schema = z.object({
     .default('false')
     .transform((s) => s === 'true'),
 
+  // Daily gap-fill of the aircraft history from adsb.lol's globe_history
+  // archive (services/adsbGlobeHistory.ts). Downloads ~3.7 GB a day.
+  ADSB_HISTORY_IMPORT: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((s) => s === 'true'),
+
   // Kill switch for the Dorsal Watch shark-report feed. When true the source
   // still registers but serves an empty snapshot, so /api/dorsal/reports and
   // the beaches map layer go quiet without a redeploy.

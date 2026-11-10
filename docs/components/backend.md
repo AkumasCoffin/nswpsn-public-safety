@@ -666,7 +666,7 @@ watcher depend on, not an oversight — see
 which is a different condition entirely.
 
 Kill switches that stay off while the credential remains configured:
-`ADSB_DISABLED`, `TRANSPORT_DISABLED`, `TFNSW_DISABLED`,
+`ADSB_DISABLED`, `ADSB_HISTORY_IMPORT` (on by default), `TRANSPORT_DISABLED`, `TFNSW_DISABLED`,
 `TFNSW_POSITIONS_DISABLED` (on by default), `CENTRALWATCH_DISABLED`,
 `MARINETRAFFIC_DISABLED`, `CF_TRANSFORMS_DISABLED`,
 `RDIO_INCIDENT_ALERTS_ENABLED` (off by default), `WIRE_PUBLIC` (off by default).
@@ -866,6 +866,21 @@ is stored as time slices, the way readsb's heatmap is: `adsb_track_chunks`
 
 `adsb_tracks` was kept as the rollback path until the playback had been
 checked across the cutover, then dropped by `140`.
+
+**Gap fill from adsb.lol's archive (seq −2).** adsb.lol publishes each UTC
+day's full traces (ODbL) as a GitHub release, `adsblol/globe_history_<year>`,
+about 14:30 AEDT the next day, so this is daily: nothing finer exists.
+`services/adsbGlobeHistory.ts` checks hourly for a released day in the last
+week that has no seq −2 marker and imports the newest one, in a worker
+thread (`adsbGlobeHistoryWorker.ts`): it streams the ~3.7 GB tar
+(`lib/tarEntries.ts`), keeps trace points inside the Australian bbox, and per
+aircraft-minute adds only the history points more than 10 s from a stored
+point that survive the live writer's reduction together with the stored ones
+(a turn, or a gap of 30 s+). A minute with nothing stored gets the history
+on its own. Rows are written `ON CONFLICT DO NOTHING`, and a `'{}'` row at the
+day's first minute marks it done, last, so a cut-short run is simply redone.
+About 110 GB a month of download; `ADSB_HISTORY_IMPORT=false` turns it off,
+and so does `ADSB_DISABLED`.
 
 ### Rollup reads: the seam has to be visible to the planner
 

@@ -49,11 +49,10 @@ import {
   maybeFlushAdsbTracks,
 } from '../services/adsbTrackArchive.js';
 
-// Australia bbox [W,S,E,N]. Filter applies a 0.3° buffer so aircraft
-// riding the edge don't flap in/out between ticks; the API reports the
-// unbuffered box.
-const AU_BBOX: [number, number, number, number] = [112.0, -44.3, 154.3, -9.7];
-const BBOX_BUFFER_DEG = 0.3;
+// Australia bbox and its edge buffer live in lib/auBbox.ts, shared with the
+// globe-history import (which runs in a worker and must not load this module).
+import { AU_BBOX, inAuBbox } from '../lib/auBbox.js';
+export { inAuBbox };
 
 const RADIUS_NM = 250; // max allowed by all the upstreams
 
@@ -447,16 +446,6 @@ export function normalizeNodeUploadWithTrails(
     if (pts.length > 0) trails.set(rec.hex, pts);
   }
   return { records: out, trails };
-}
-
-export function inAuBbox(lat: number, lon: number): boolean {
-  const [w, s, e, n] = AU_BBOX;
-  return (
-    lat >= s - BBOX_BUFFER_DEG &&
-    lat <= n + BBOX_BUFFER_DEG &&
-    lon >= w - BBOX_BUFFER_DEG &&
-    lon <= e + BBOX_BUFFER_DEG
-  );
 }
 
 interface UpstreamResult {

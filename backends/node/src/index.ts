@@ -98,6 +98,7 @@ import {
   stopAdsbDailyFlush,
 } from './services/nodes/adsbNodeStore.js';
 import { stopAdsbTrackArchive } from './services/adsbTrackArchive.js';
+import { startAdsbGlobeHistory, stopAdsbGlobeHistory } from './services/adsbGlobeHistory.js';
 import {
   startNodeUptimeFlush,
   stopNodeUptimeFlush,
@@ -156,6 +157,7 @@ async function preflight(): Promise<void> {
   startNodeEventsPruner(); // hourly 30-day prune of node_radio_events / node_pager_events
   startNodeHourlyRollup(); // hourly rebuild of node_radio_hourly* from the detail table
   startAdsbDailyFlush(); // 1-min flush of ADS-B per-node daily counters
+  startAdsbGlobeHistory(); // daily gap-fill of aircraft history from adsb.lol's archive
   startNodeUptimeFlush(); // 1-min flush of per-node presence (all kinds)
   startApiKeyUsageFlush(); // 1-min flush of per-key request counts (api_key_usage_hourly)
   startWhisperHealth();   // probe the faster-whisper backends rdio transcribes through
@@ -310,6 +312,7 @@ async function shutdown(signal: string) {
     await stopAdsbDailyFlush();
     // And the minute of aircraft positions in progress, so a deploy does not
     // leave a hole in the history map.
+    await stopAdsbGlobeHistory();
     await stopAdsbTrackArchive();
     await stopNodeUptimeFlush();
     await stopApiKeyUsageFlush();
