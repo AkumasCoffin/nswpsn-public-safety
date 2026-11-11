@@ -132,8 +132,12 @@ SDR-Trunk main class `io.github.dsheirer`, never the operator-configured command
 that could be something as generic as `java`, and matching it would SIGKILL
 unrelated JVMs belonging to other users.
 
-The local rdio-scanner binds `127.0.0.1:17391` — admin API and upload on the same
-port (`main.go:54-60`). SDR-Trunk's state lives under `--app-root`, with its
+The local rdio-scanner binds `127.0.0.1:17391` — listener page, admin API and
+upload on the same port (`main.go:54-60`). It never leaves loopback; the owner's
+network reaches its listener page through `internal/localweb` (see
+[Listening locally](#listening-locally)).
+
+SDR-Trunk's state lives under `--app-root`, with its
 config database at `<app-root>/database/sdrtrunk.sqlite`.
 
 A fresh per-boot bearer token (32 random hex bytes) is generated and shared
@@ -221,6 +225,42 @@ than re-sending it. Keep NTP running on the node host.
 `siteship` replaces the full snapshot each time — no cursor — and **pauses while a
 site survey is running**, because a survey locks onto sites all over the council
 area and none of them is a site this node monitors.
+
+## Listening locally
+
+A node's own rdio-scanner hears every reception before the agent relays it, so
+its listener page is the quickest way for an owner to check what their node
+decodes. `internal/localweb` serves it to the owner's network on
+`0.0.0.0:17380` (`local_listen_addr` in `agent.yaml`; `"off"` disables it).
+
+It is a reverse proxy with an **allowlist**, because rdio serves its listener
+page, admin page and admin/upload API on one port:
+
+| Passes | Everything else |
+|---|---|
+| `GET` `/`, `/stream` (the page) | `/admin`, any other page route |
+| `GET` `/assets/…`, `/plugins/…`, top-level files (`main.<hash>.js`, `favicon.ico`) | all of `/api/*` — admin, call upload, plugin API, public calls API |
+| `GET` `/api/stats`, `/api/stats/talkgroup-units` (the page's public stats view) | any method but `GET`/`HEAD` |
+| websocket upgrade on `/` or `/stream` | paths that are not already clean (`..`, `%2F`) |
+
+Everything else is a 404 and never reaches rdio, so an admin route added to rdio
+later is blocked by default. There is no way to the admin panel from the network,
+with or without the password.
+
+- **Failure is not fatal.** If the port is taken, the agent logs it and feeds as
+  normal; only the relay listener restarts the agent.
+- **Windows** adds an inbound firewall rule, `NSWPSN Node Listen`, at every start
+  (nodes self-update and never re-run the installer). It is limited to
+  `remoteip=localsubnet` and applies on every profile, because home networks are
+  often filed as "Public". `nodeagent uninstall` removes it.
+- **Linux** leaves the firewall to the host: open TCP 17380 in ufw/firewalld if
+  one is active. A node in Docker or an LXC needs the port passed through.
+- **The link** comes back in the status frame (`localListen: {port, ip, host}`),
+  only while the proxy is bound and not on a loopback address. The backend takes
+  it off the frame before storing the status (`services/nodes/localListen.ts`), so
+  it reaches the node's **owner only**: `GET /api/feeder/me` → "Listen locally" on
+  `feeder.html`, plus a `<hostname>.local` link. Staff views carry the node's
+  local IP as before, but never the link — staff are not on that network.
 
 ## The control WebSocket
 
@@ -344,6 +384,7 @@ shipper pause.
 | `decodeprobe` | turns live channel state into a decode verdict |
 | `enrol` | single-use code → node token |
 | `keys` | stable per-agency rdio API keys |
+| `localweb` | listen-only proxy serving the rdio listener page to the owner's network |
 | `presets` | `go:embed` of the base playlist and rdio config |
 | `protocol` | the JSON WebSocket envelope |
 | `queue` | disk-backed bounded FIFO |

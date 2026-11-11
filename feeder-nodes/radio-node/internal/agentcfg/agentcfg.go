@@ -47,6 +47,12 @@ type Config struct {
 	DataDir   string `yaml:"data_dir"`
 	RelayAddr string `yaml:"relay_addr"`
 
+	// LocalListenAddr is where the owner's own network can open this node's
+	// rdio listener page (internal/localweb). Default every interface on
+	// 17380; "off" disables it. Not empty-for-off: an empty value is defaulted
+	// and written back like every other field.
+	LocalListenAddr string `yaml:"local_listen_addr"`
+
 	// SDRTrunkControlPort is the REST port of the SDR-Trunk headless control
 	// server the agent launches sdrtrunk with (WS spectrum is port+1).
 	SDRTrunkControlPort int `yaml:"sdrtrunk_control_port"`
@@ -67,6 +73,7 @@ type Config struct {
 
 const (
 	defaultRelayAddr   = "127.0.0.1:17390"
+	defaultLocalListen = "0.0.0.0:17380"
 	defaultDataDir     = "./data"
 	defaultControlPort = 17392
 	defaultPresetsDir  = "./presets"
@@ -144,7 +151,19 @@ func (c *Config) validateSecurity() error {
 			log.Printf("WARNING: relay_addr %q is not loopback; the local relay is unauthenticated — any host that can reach it can inject calls under this node's identity", a)
 		}
 	}
+	// local_listen_addr is meant to be reachable from the network; it only
+	// passes rdio's listener page (see internal/localweb), so it is announced
+	// rather than warned about.
+	if c.LocalListenEnabled() {
+		log.Printf("local_listen_addr %q: rdio listener page open to this network (admin and API blocked); set \"off\" to disable", c.LocalListenAddr)
+	}
 	return nil
+}
+
+// LocalListenEnabled reports whether the LAN listener page should run.
+func (c *Config) LocalListenEnabled() bool {
+	a := strings.TrimSpace(c.LocalListenAddr)
+	return a != "" && !strings.EqualFold(a, "off")
 }
 
 // isLoopbackHost reports whether h is localhost or a loopback IP.
@@ -170,6 +189,10 @@ func (c *Config) applyDefaults() bool {
 	}
 	if strings.TrimSpace(c.RelayAddr) == "" {
 		c.RelayAddr = defaultRelayAddr
+		changed = true
+	}
+	if strings.TrimSpace(c.LocalListenAddr) == "" {
+		c.LocalListenAddr = defaultLocalListen
 		changed = true
 	}
 	if strings.TrimSpace(c.DataDir) == "" {

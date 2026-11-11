@@ -45,6 +45,7 @@ import {
 } from '../services/nodes/registry.js';
 import { getUsername } from './users.js';
 import { hub } from '../services/nodes/hub.js';
+import { localListenLinks } from '../services/nodes/localListen.js';
 import { nodeUptime, nodeUptimeMany } from '../services/nodes/nodeUptime.js';
 import { liveCallWindow } from '../services/nodeCallWindow.js';
 import { getZoneGroups, isValidZone } from '../services/nodes/rfsZones.js';
@@ -98,6 +99,7 @@ function feederNodeView(n: NodeRow, surveying?: Map<string, number>) {
   const online = hub.isOnline(n.id);
   const live = hub.liveStatus(n.id);
   const st = live.status;
+  const lan = online ? hub.localListenOf(n.id) : null;
   const callsLast10m = hub.uploadsInWindow(n.id);
   const isPager = n.kind === 'pager';
   const isAdsb = n.kind === 'adsb';
@@ -183,6 +185,9 @@ function feederNodeView(n: NodeRow, surveying?: Map<string, number>) {
     sdrtrunkVersion: n.sdrtrunk_version,
     rdioVersion: n.rdio_version,
     localIp: n.local_ip,
+    /** This node's own listener page on the owner's network, while it is
+     *  online and serving one. Owner-only: never in the staff views. */
+    localListen: lan ? localListenLinks(lan) : null,
     sdrUp,
     decoding: !!decoding,
     /** Channels automatic management currently holds stopped (incl. mid-probe). */

@@ -87,6 +87,7 @@ const { attachNodeWebSockets, closeNodeWebSockets } = await import(
   '../../../src/api/node-ws.js'
 );
 const { log } = await import('../../../src/lib/log.js');
+const { hub } = await import('../../../src/services/nodes/hub.js');
 
 let server: Server;
 let base: string;
@@ -196,6 +197,50 @@ describe('agent frames', () => {
     await settle();
     expect(touchNodeSeenThrottled).toHaveBeenCalledTimes(3);
     expect(touchNodeSeen).not.toHaveBeenCalled();
+  });
+});
+
+describe('local listener page report', () => {
+  const report = { port: 17380, ip: '192.168.1.50', host: 'shack-pc' };
+
+  it('keeps it for the owner and off every staff view of the status', async () => {
+    const agent = await connect('/api/node-ws/agent', agentHeaders);
+    const staff = await connect('/api/node-ws/staff');
+    staff.send(JSON.stringify({ t: 'auth', data: { token: 'good' } }));
+    await waitFor(staff, 'authOk');
+    staff.send(JSON.stringify({ t: 'subscribeNode', data: { nodeId: NODE_ID } }));
+    await waitFor(staff, 'nodeStatus');
+
+    const broadcast = waitFor(staff, 'nodeStatus');
+    agent.send(JSON.stringify({ t: 'status', data: { components: {}, localListen: report } }));
+    const frame = (await broadcast) as { data: { status: Record<string, unknown> } };
+
+    expect(hub.localListenOf(NODE_ID)).toEqual(report);
+    // Staff are not on the owner's network: the link never reaches them.
+    expect(frame.data.status).not.toHaveProperty('localListen');
+    expect(hub.liveStatus(NODE_ID).status).not.toHaveProperty('localListen');
+  });
+
+  it('drops a report that is not a usable address', async () => {
+    const agent = await connect('/api/node-ws/agent', agentHeaders);
+    for (const bad of [
+      { ...report, port: 0 },
+      { ...report, port: '17380' },
+      { ...report, ip: 'not-an-ip' },
+      { ...report, ip: '"><script>' },
+    ]) {
+      agent.send(JSON.stringify({ t: 'status', data: { components: {}, localListen: bad } }));
+      await settle();
+      expect(hub.localListenOf(NODE_ID)).toBeNull();
+    }
+    // A bad host only loses the .local link, not the page.
+    agent.send(JSON.stringify({ t: 'status', data: { localListen: { ...report, host: 'a b.evil' } } }));
+    await settle();
+    expect(hub.localListenOf(NODE_ID)).toEqual({ ...report, host: null });
+    // And a frame without one clears it: the page stopped.
+    agent.send(JSON.stringify({ t: 'status', data: { components: {} } }));
+    await settle();
+    expect(hub.localListenOf(NODE_ID)).toBeNull();
   });
 });
 

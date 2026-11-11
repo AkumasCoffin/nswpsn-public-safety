@@ -14,6 +14,7 @@ import type { WebSocket } from 'ws';
 import { randomUUID } from 'node:crypto';
 import { log } from '../../lib/log.js';
 import { envelope, type StatusData } from './protocol.js';
+import type { LocalListen } from './localListen.js';
 
 interface AgentConn {
   ws: WebSocket;
@@ -23,6 +24,9 @@ interface AgentConn {
   lastStatus: StatusData | null;
   lastStatusAt: number | null;
   connectedAt: number;
+  /** The owner's LAN listener page. Kept apart from lastStatus so no staff
+   *  view of the raw status ever carries it (see localListen.ts). */
+  localListen: LocalListen | null;
 }
 
 interface StaffConn {
@@ -196,6 +200,7 @@ class NodeHub {
       lastStatus: null,
       lastStatusAt: null,
       connectedAt: Date.now(),
+      localListen: null,
     });
     // A fresh connection means the restart part of an update finished — but
     // after a COMPONENT update the decoder it launches is still starting, so
@@ -244,6 +249,17 @@ class NodeHub {
       status: a?.lastStatus ?? null,
       lastStatusAt: a?.lastStatusAt ?? null,
     };
+  }
+
+  /** Owner-only: where this node serves its listener page, per its latest
+   *  status frame. Gone with the connection. */
+  setLocalListen(nodeId: string, l: LocalListen | null): void {
+    const a = this.agents.get(nodeId);
+    if (a) a.localListen = l;
+  }
+
+  localListenOf(nodeId: string): LocalListen | null {
+    return this.agents.get(nodeId)?.localListen ?? null;
   }
 
   recordStatus(nodeId: string, status: StatusData): void {

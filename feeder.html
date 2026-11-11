@@ -338,6 +338,9 @@
     .node-loc .nl-item { display: inline-flex; align-items: center; gap: 0.3rem; }
     .node-loc .nl-item i { opacity: 0.7; }
     .node-loc .nl-warn { color: #fbbf24; }
+    .nl-listen a, .nm-listen a { color: var(--accent, #38bdf8); text-decoration: none; }
+    .nl-listen a:hover, .nm-listen a:hover { text-decoration: underline; }
+    .nm-listen .nm-listen-alt { opacity: 0.75; margin-left: 0.5rem; }
     .node-loc .nl-key code, .node-loc .nl-ip code { background: rgba(255,255,255,0.06); border: 1px solid var(--border-subtle); border-radius: 4px; padding: 0.02rem 0.32rem; font-size: 0.7rem; color: var(--text-soft); }
     /* Pager node modal: Overview / Messages / Filtered tabs (the owner's
        view of their own decoded pages). */
@@ -1161,6 +1164,11 @@
       // The node's own LAN address, straight from the agent — so an owner can
       // find the box on their network without logging into their router.
       const ipItem = node.localIp ? `<span class="nl-item nl-ip" title="Local network address of this node"><i class="fas fa-network-wired"></i> <code>${escapeHtml(node.localIp)}</code></span>` : '';
+      // The node's own scanner page, for listening from home. The card is one
+      // big button, so the link keeps its click and Enter to itself.
+      const listenItem = node.localListen && node.localListen.url
+        ? `<span class="nl-item nl-listen" title="${_LISTEN_TIP}"><i class="fas fa-headphones"></i> <a href="${escapeHtml(node.localListen.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" onkeydown="event.stopPropagation()">Listen locally</a></span>`
+        : '';
       // The whole card is one button that opens the node modal — every
       // action that used to crowd the row lives in the modal's header now.
       return `
@@ -1175,7 +1183,7 @@
               ${agentHtml}
             </div>
             <div class="node-sub"><span class="${statusCls}">${statusText}</span> · last seen ${escapeHtml(lastSeen)}${uptimeHtml}</div>
-            <div class="node-loc">${regionItem}${pinItem}${keyItem}${ipItem}</div>
+            <div class="node-loc">${regionItem}${pinItem}${keyItem}${ipItem}${listenItem}</div>
             <div class="node-chips">${chips}</div>
             ${statHtml}
           </div>
@@ -1398,6 +1406,20 @@
     let _nmNodeId = null;
     let _nmEsc = null;
 
+    // A radio node serves its own scanner page to its owner's network (the
+    // agent's listen-only proxy in front of its rdio). Only reachable from
+    // that network, so this page is the only place the link appears.
+    const _LISTEN_TIP = "Your node's own scanner page. Only works from the same network as the node.";
+
+    function _nmListenHtml(node) {
+      const l = node.localListen;
+      if (!l || !l.url) return '';
+      const alt = l.hostUrl
+        ? `<a class="nm-listen-alt" href="${escapeHtml(l.hostUrl)}" target="_blank" rel="noopener" title="The same page by machine name, if your network resolves .local names">${escapeHtml(l.hostUrl.replace(/^http:\/\//, ''))}</a>`
+        : '';
+      return `<i class="fas fa-headphones"></i> <a href="${escapeHtml(l.url)}" target="_blank" rel="noopener">Listen locally</a>${alt}`;
+    }
+
     function _nmHeadStatus(node) {
       const online = !!node.online;
       const updating = !!node.updating;
@@ -1482,6 +1504,7 @@
                   ? '<span class="st-upd">Surveying…</span> · channels stopped until it finishes'
                   : _nmHeadStatus(node)}</div>
                 ${node.localIp ? `<div class="node-sub nm-ip" id="nm-ip" title="Local network address of this node"><i class="fas fa-network-wired"></i> <code>${escapeHtml(node.localIp)}</code></div>` : '<div class="node-sub nm-ip" id="nm-ip" hidden></div>'}
+                <div class="node-sub nm-listen" id="nm-listen" title="${_LISTEN_TIP}"${node.localListen ? '' : ' hidden'}>${_nmListenHtml(node)}</div>
               </div>
             </div>
             <div class="nm-actions">
@@ -2771,6 +2794,11 @@
             if (dot) dot.className = 'node-dot ' + (cur.updating ? 'updating' : (cur.online ? 'online' : ''));
             const sub = document.getElementById('nm-sub');
             if (sub) sub.innerHTML = _nmHeadStatus(cur);
+            const listen = document.getElementById('nm-listen');
+            if (listen) {
+              listen.hidden = !cur.localListen;
+              listen.innerHTML = _nmListenHtml(cur);
+            }
             const ip = document.getElementById('nm-ip');
             if (ip && cur.localIp) {
               ip.hidden = false;

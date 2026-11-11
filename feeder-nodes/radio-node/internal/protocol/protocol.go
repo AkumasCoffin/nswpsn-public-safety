@@ -93,6 +93,18 @@ type Status struct {
 	// at a time, so staff watching the node need to see that is what they are
 	// looking at rather than a node that has gone strange. Absent when idle.
 	SiteSurvey any `json:"siteSurvey,omitempty"`
+	// LocalListen is where the owner can open this node's rdio listener page
+	// on their own network (internal/localweb). Absent while that page is off
+	// or not bound. The backend shows it to the node's owner only.
+	LocalListen *LocalListen `json:"localListen,omitempty"`
+}
+
+// LocalListen addresses the LAN listener page. IP is the address the page is
+// reachable on; Host is the machine name, for a <host>.local link.
+type LocalListen struct {
+	Port int    `json:"port"`
+	IP   string `json:"ip,omitempty"`
+	Host string `json:"host,omitempty"`
 }
 
 // HelloAck is the server's response to Hello.
