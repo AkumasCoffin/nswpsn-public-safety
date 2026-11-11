@@ -6344,7 +6344,7 @@ export interface FeederNodeDecode {
     /** When the automatic channel manager held this site's channel
      *  (auto-stopped, or probing), clamped to the range: the same intervals
      *  the staff site chart shades. */
-    holds: Array<{ from: string; to: string }>;
+    holds: ChanMgrHold[];
   }>;
 }
 
@@ -6449,6 +6449,40 @@ function intervalMs(interval: string): number {
  * log keeps ~50 rows per node, so a very busy manager can out-run a 7-day
  * window — missing holds degrade to "red" shading, never to false data.
  */
+/**
+ * One hold, plus what the owner's tooltip says about it. The staff chart reads
+ * only from/to; the rest is parsed from the agent's log text (chanmgr.go),
+ * which carries the figures: "auto-stopped — decode 42%, below 70% for 10m0s",
+ * "test failed — median decode 55% still below 70%; retry in 30m0s",
+ * "test passed — median decode 92%; channel restored".
+ */
+export interface ChanMgrHold {
+  from: string;
+  to: string;
+  /** The decode % the stop was decided on; null when it never locked. */
+  stopPct: number | null;
+  /** 'lowDecode': below the threshold for the dwell. 'noLock': never locked. */
+  stopReason: 'lowDecode' | 'noLock';
+  /** The latest re-check inside the hold, if one ran. */
+  lastCheckAt: string | null;
+  /** Its median decode %; null when it could not lock or measure. */
+  lastCheckPct: number | null;
+  /** Still stopped: when the agent will check it next. */
+  nextCheckAt: string | null;
+  /** Ended: 'passed' (a re-check restored it) or 'released' (handed back). */
+  endedBy: 'passed' | 'released' | null;
+}
+
+// The agent's retest cadence (chanmgr.go firstProbeDelay / probeInterval):
+// used only when the node is offline and its live schedule is unknown.
+const CHANMGR_FIRST_PROBE_MS = 10 * 60_000;
+const CHANMGR_PROBE_INTERVAL_MS = 30 * 60_000;
+
+function chanMgrPct(text: string): number | null {
+  const m = /decode (\d+(?:\.\d+)?)%/.exec(text);
+  return m ? Number(m[1]) : null;
+}
+
 async function siteChanMgrHolds(
   pool: Pool,
   system: number,
@@ -6457,7 +6491,7 @@ async function siteChanMgrHolds(
   nodeId: string | null,
   startMs: number,
   nowMs: number,
-): Promise<Array<{ from: string; to: string }>> {
+): Promise<ChanMgrHold[]> {
   try {
     const chanParams: unknown[] = [system, rfss, site];
     let chanWhere = 'system_id = $1 AND rfss = $2 AND site_id = $3 AND channel_name IS NOT NULL';
@@ -6474,45 +6508,106 @@ async function siteChanMgrHolds(
     const names = [...new Set(chans.rows.map((x) => x.channel_name.trim()))];
     const pairKey = new Set(chans.rows.map((x) => `${x.node_id}\u0000${x.channel_name.trim()}`));
 
-    const ev = await pool.query<{ node_id: string; at_ms: string; channel: string; kind: string }>(
-      `SELECT node_id, at_ms, channel, kind FROM node_chanmgr_log
+    const ev = await pool.query<{ node_id: string; at_ms: string; channel: string; kind: string; text: string }>(
+      `SELECT node_id, at_ms, channel, kind, text FROM node_chanmgr_log
         WHERE node_id = ANY($1::text[]) AND channel = ANY($2::text[]) AND at_ms >= $3
         ORDER BY at_ms ASC`,
       [nodes, names, startMs - 86400_000], // a day of lookback catches holds opened before the window
     );
 
-    const open = new Map<string, number>();
-    const raw: Array<{ from: number; to: number }> = [];
+    type Raw = {
+      from: number; to: number; nodeId: string; channel: string;
+      stopPct: number | null; stopReason: 'lowDecode' | 'noLock';
+      checks: number; lastCheckAt: number | null; lastCheckPct: number | null;
+      endedBy: 'passed' | 'released' | null;
+    };
+    const open = new Map<string, Raw>();
+    const raw: Raw[] = [];
+    const opened = (e: { node_id: string; channel: string }, from: number, text: string | null): Raw => {
+      const pct = text === null ? null : chanMgrPct(text);
+      return {
+        from, to: nowMs, nodeId: e.node_id, channel: e.channel.trim(),
+        stopPct: pct, stopReason: text !== null && pct === null ? 'noLock' : 'lowDecode',
+        checks: 0, lastCheckAt: null, lastCheckPct: null, endedBy: null,
+      };
+    };
     for (const e of ev.rows) {
       const key = `${e.node_id}\u0000${e.channel.trim()}`;
       if (!pairKey.has(key)) continue; // same name on an unrelated node
       const at = Number(e.at_ms);
+      const text = e.text ?? '';
       if (e.kind === 'stopped' || e.kind === 'recovered') {
-        if (!open.has(key)) open.set(key, at);
+        // A 'recovered' (agent restart) re-opens a stop whose own record may
+        // have fallen out of the log; it carries no stop figures.
+        if (!open.has(key)) open.set(key, opened(e, at, e.kind === 'stopped' ? text : null));
       } else if (e.kind === 'probeFail') {
-        if (!open.has(key)) open.set(key, Math.max(startMs, at - 20 * 60_000));
+        let h = open.get(key);
+        if (!h) { h = opened(e, Math.max(startMs, at - 20 * 60_000), null); open.set(key, h); }
+        h.checks += 1;
+        h.lastCheckAt = at;
+        h.lastCheckPct = chanMgrPct(text);
       } else if (e.kind === 'probePass' || e.kind === 'released') {
-        const from = open.get(key);
-        if (from !== undefined) {
-          raw.push({ from, to: at });
+        const h = open.get(key);
+        if (h) {
+          h.to = at;
+          if (e.kind === 'probePass') {
+            h.checks += 1;
+            h.lastCheckAt = at;
+            h.lastCheckPct = chanMgrPct(text);
+            h.endedBy = 'passed';
+          } else {
+            h.endedBy = 'released';
+          }
+          raw.push(h);
           open.delete(key);
         }
       }
     }
-    for (const from of open.values()) raw.push({ from, to: nowMs });
+    for (const h of open.values()) raw.push(h);
 
-    // Clamp + merge.
+    // Still stopped: when it will be checked next. The node's live schedule
+    // when it is connected (the agent reports nextProbeAtMs per channel),
+    // else the agent's fixed cadence from the last check or the stop.
+    const nextCheck = (h: Raw): number | null => {
+      if (h.endedBy !== null) return null;
+      const cm = (hub.liveStatus(h.nodeId).status as { channelManager?: { channels?: Record<string, { nextProbeAtMs?: number }> } } | null)
+        ?.channelManager?.channels?.[h.channel];
+      if (cm && typeof cm.nextProbeAtMs === 'number') return cm.nextProbeAtMs;
+      return (h.lastCheckAt ?? h.from) + (h.checks === 0 ? CHANMGR_FIRST_PROBE_MS : CHANMGR_PROBE_INTERVAL_MS);
+    };
+
+    // Clamp + merge. Overlapping holds (two channels on one site) become one
+    // interval that keeps the earliest stop and the latest check.
     const clamped = raw
-      .map((h) => ({ from: Math.max(h.from, startMs), to: Math.min(h.to, nowMs) }))
+      .map((h) => ({ ...h, from: Math.max(h.from, startMs), to: Math.min(h.to, nowMs), next: nextCheck(h) }))
       .filter((h) => h.to > h.from)
       .sort((x, y) => x.from - y.from);
     const merged: typeof clamped = [];
     for (const h of clamped) {
       const last = merged[merged.length - 1];
-      if (last && h.from <= last.to) last.to = Math.max(last.to, h.to);
-      else merged.push({ ...h });
+      if (last && h.from <= last.to) {
+        last.to = Math.max(last.to, h.to);
+        if ((h.lastCheckAt ?? 0) > (last.lastCheckAt ?? 0)) {
+          last.lastCheckAt = h.lastCheckAt;
+          last.lastCheckPct = h.lastCheckPct;
+        }
+        if (h.next !== null) last.next = last.next === null ? h.next : Math.min(last.next, h.next);
+        if (h.endedBy === null) last.endedBy = null;
+      } else {
+        merged.push({ ...h });
+      }
     }
-    return merged.map((h) => ({ from: new Date(h.from).toISOString(), to: new Date(h.to).toISOString() }));
+    const isoOrNull = (ms: number | null) => (ms === null ? null : new Date(ms).toISOString());
+    return merged.map((h) => ({
+      from: new Date(h.from).toISOString(),
+      to: new Date(h.to).toISOString(),
+      stopPct: h.stopPct,
+      stopReason: h.stopReason,
+      lastCheckAt: isoOrNull(h.lastCheckAt),
+      lastCheckPct: h.lastCheckPct,
+      nextCheckAt: isoOrNull(h.next),
+      endedBy: h.endedBy,
+    }));
   } catch (err) {
     log.warn({ err }, 'site-decode holds lookup failed');
     return [];

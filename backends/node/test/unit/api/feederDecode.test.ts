@@ -59,16 +59,28 @@ beforeEach(() => {
   queryMock.mockImplementation(async (sql: string, params?: unknown[]) => {
     // The hold lookup: which of this node's channels carry the site...
     if (sql.includes('SELECT DISTINCT node_id, channel_name FROM node_site_snapshots')) {
-      return params?.[2] === 7 ? { rows: [{ node_id: RADIO.id, channel_name: 'KH CC' }] } : { rows: [] };
+      if (params?.[2] === 7) return { rows: [{ node_id: RADIO.id, channel_name: 'KH CC' }] };
+      if (params?.[2] === 9) return { rows: [{ node_id: RADIO.id, channel_name: 'SB CC' }] };
+      return { rows: [] };
     }
-    // ...and what the channel manager did to them: stopped an hour ago, and
-    // released 20 minutes later.
+    // ...and what the channel manager did to them, in the agent's own words.
+    // Knights Hill: stopped on low decode an hour ago, re-checked and failed,
+    // then handed back. Saddleback: stopped for no lock 30 minutes ago, still
+    // stopped.
     if (sql.includes('node_chanmgr_log')) {
       const now = Date.now();
-      return { rows: [
-        { node_id: RADIO.id, at_ms: String(now - 60 * 60_000), channel: 'KH CC', kind: 'stopped' },
-        { node_id: RADIO.id, at_ms: String(now - 40 * 60_000), channel: 'KH CC', kind: 'released' },
-      ] };
+      const names = (params?.[1] ?? []) as string[];
+      const rows = [
+        { node_id: RADIO.id, at_ms: String(now - 60 * 60_000), channel: 'KH CC', kind: 'stopped',
+          text: 'auto-stopped — decode 42%, below 70% for 10m0s' },
+        { node_id: RADIO.id, at_ms: String(now - 50 * 60_000), channel: 'KH CC', kind: 'probeFail',
+          text: 'test failed — median decode 55% still below 70%; retry in 30m0s' },
+        { node_id: RADIO.id, at_ms: String(now - 40 * 60_000), channel: 'KH CC', kind: 'released',
+          text: 'started by operator — released until it misbehaves again' },
+        { node_id: RADIO.id, at_ms: String(now - 30 * 60_000), channel: 'SB CC', kind: 'stopped',
+          text: 'auto-stopped — no control-channel lock for 5m0s' },
+      ];
+      return { rows: rows.filter((r) => names.includes(r.channel)) };
     }
     if (sql.includes('node_site_snapshots')) {
       return { rows: [{ system_id: 1, rfss: 1, site_id: 7, channel_name: 'Knights Hill' }] };
@@ -124,11 +136,24 @@ describe('GET /api/feeder/nodes/:id/decode', () => {
     expect(mins).toHaveLength(d.at.length);
     expect(mins.filter((v) => v != null)).toEqual([71]);
     // The channel manager's hold, as an interval; a site it never touched has none.
-    const holds = (s: unknown) => (s as { holds: Array<{ from: string; to: string }> }).holds;
+    type Hold = {
+      from: string; to: string; stopPct: number | null; stopReason: string;
+      lastCheckAt: string | null; lastCheckPct: number | null; nextCheckAt: string | null; endedBy: string | null;
+    };
+    const holds = (s: unknown) => (s as { holds: Hold[] }).holds;
     expect(holds(kh)).toHaveLength(1);
     const h = holds(kh)[0]!;
     expect(new Date(h.to).getTime() - new Date(h.from).getTime()).toBe(20 * 60_000);
-    expect(holds(d.sites[1])).toEqual([]);
+    expect(h).toMatchObject({ stopPct: 42, stopReason: 'lowDecode', lastCheckPct: 55, endedBy: 'released', nextCheckAt: null });
+    expect(new Date(h.lastCheckAt!).getTime()).toBe(new Date(h.from).getTime() + 10 * 60_000);
+
+    // Still stopped: no figure (it never locked), and the next check is the
+    // agent's first-retest delay after the stop (the node is offline here, so
+    // there is no live schedule to read).
+    const sb = holds(d.sites[1]);
+    expect(sb).toHaveLength(1);
+    expect(sb[0]).toMatchObject({ stopPct: null, stopReason: 'noLock', lastCheckAt: null, endedBy: null });
+    expect(new Date(sb[0]!.nextCheckAt!).getTime()).toBe(new Date(sb[0]!.from).getTime() + 10 * 60_000);
     expect((kh as unknown as { avgPct: number }).avgPct).toBeCloseTo(95.25);
 
     const sql = queryMock.mock.calls.find(([q]) => String(q).includes('node_site_decode_samples'))!;

@@ -461,7 +461,9 @@
     .dc-held { background-image: repeating-linear-gradient(135deg, #a5b4fc 0 2px, transparent 2px 5px); }
     .dc-none.dc-held { background-color: rgba(129,140,248,0.18); }
     .dc-dot.dc-held { border-radius: 2px; background-color: rgba(129,140,248,0.18); }
-    .dc-tip-held { margin-top: 0.4rem; color: #c7d2fe; font-size: 0.74rem; line-height: 1.4; }
+    .dc-tip-held { margin-top: 0.45rem; padding-top: 0.4rem; border-top: 1px solid var(--border-subtle); }
+    .dc-tip-held-h { display: flex; align-items: center; gap: 0.4rem; color: #c7d2fe; font-weight: 600; }
+    .dc-tip-msg { color: var(--text-soft); font-size: 0.72rem; line-height: 1.4; margin: 0.2rem 0 0.4rem; }
     .dc-note { font-size: 0.72rem; color: var(--text-soft); margin-top: 0.6rem; }
     .dc-empty { color: var(--text-soft); text-align: center; padding: 2rem 1rem; font-size: 0.85rem; }
     @media (max-width: 640px) {
@@ -1938,32 +1940,48 @@
         const t = (dt) => dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         const day = start.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
         const hold = _decodeHoldAt(_decodeData, site, i);
-        // A hold can run for days: show its own dates when it starts or ends
-        // on another day than the block.
+        // Times on another day than the block carry their date.
         const when = (iso) => {
           const dt = new Date(iso);
           return dt.toDateString() === start.toDateString()
             ? t(dt)
             : `${dt.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })} ${t(dt)}`;
         };
-        const holdOpen = hold && Date.now() - new Date(hold.to).getTime() < 2 * 60000;
-        const holdHtml = hold
-          ? `<div class="dc-tip-held"><i class="fas fa-pause"></i> The channel manager auto-stopped this channel
-              from ${escapeHtml(when(hold.from))}${holdOpen ? ' and it is still stopped' : ` to ${escapeHtml(when(hold.to))}`}.
-              It stops a channel that is not decoding and checks it again later.</div>`
-          : '';
+        const row = (label, value) => `<div class="dc-tip-row"><span>${label}</span><b>${value}</b></div>`;
+        let holdHtml = '';
+        if (hold) {
+          const lastCheck = hold.lastCheckAt
+            ? (hold.lastCheckPct != null ? `${Math.round(hold.lastCheckPct)}%` : 'No lock')
+            : 'Not checked yet';
+          const endRow = hold.endedBy === 'passed'
+            ? row('Restored', escapeHtml(when(hold.to)))
+            : hold.endedBy === 'released'
+              ? row('Restarted', escapeHtml(when(hold.to)))
+              : (hold.nextCheckAt ? row('Next check', escapeHtml(when(hold.nextCheckAt))) : '');
+          holdHtml = `<div class="dc-tip-held">
+              <div class="dc-tip-held-h"><span class="dc-dot dc-none dc-held"></span>Auto-stopped</div>
+              <div class="dc-tip-msg">${hold.stopReason === 'noLock'
+                ? 'The channel was stopped as it could not lock on for an extended period.'
+                : 'The channel was stopped as it had a low decode rate for an extended period.'}</div>
+              ${row('Stopped', escapeHtml(when(hold.from)))}
+              ${row('Last check', lastCheck)}
+              ${endRow}
+            </div>`;
+        }
         const name = site.name || `Site ${site.rfss}-${site.site}`;
         const tip = _decodeTipEl();
+        // A stopped block with no reading is explained by the stop alone; the
+        // band line would only repeat "No reading".
         tip.innerHTML = `
           <div class="dc-tip-site">${escapeHtml(name)}</div>
           <div class="dc-tip-time">${escapeHtml(day)}, ${escapeHtml(t(start))}–${escapeHtml(t(end))}</div>
           ${avg == null
-            ? `<div class="dc-tip-row">${hold ? 'Nothing was measured while it was stopped.' : 'Nothing was measured in this period.'}</div>`
+            ? (hold ? '' : `<div class="dc-tip-row">Nothing was measured in this period.</div>`)
             : `<div class="dc-tip-row"><span>Average</span><b>${avg.toFixed(1)}%</b></div>
                ${worst != null && Math.round(worst) < Math.round(avg)
                  ? `<div class="dc-tip-row"><span>Lowest</span><b>${worst.toFixed(1)}%</b></div>` : ''}`}
-          <div class="dc-tip-band"><span class="dc-dot dc-${band}"></span><span>${_DECODE_WORD[band]}</span>${avg == null ? '' : `<span>${
-            band === 'good' ? 'decoding cleanly' : band === 'fair' ? 'some errors' : 'struggling to decode'}</span>`}</div>
+          ${avg == null && hold ? '' : `<div class="dc-tip-band"><span class="dc-dot dc-${band}"></span><span>${_DECODE_WORD[band]}</span>${avg == null ? '' : `<span>${
+            band === 'good' ? 'decoding cleanly' : band === 'fair' ? 'some errors' : 'struggling to decode'}</span>`}</div>`}
           ${holdHtml}`;
         if (_decodeHot !== cell) {
           if (_decodeHot) _decodeHot.classList.remove('dc-hot');
