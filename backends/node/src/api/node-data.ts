@@ -6309,12 +6309,19 @@ nodeDataRouter.get('/api/node-data/live', requireRole(canViewNodeData), async (c
  * as a gap, and the range stops at the samples' 7-day retention. Sites are
  * the ones this node actually reported in the range, busiest first, capped
  * so the chart stays readable.
+ *
+ * A site is keyed by (rfss, site), not by system: the node logs readings it
+ * took before it identified the system under system -1, so one tower showed
+ * up twice (Knights Hill under 721 and under -1). A site heard for less than
+ * FEEDER_DECODE_MIN_SAMPLES readings in the range is a passing glimpse, not
+ * one the node decodes, and is left out.
  */
 export const FEEDER_DECODE_RANGES: Record<string, { interval: string; bucketMinutes: number }> = {
   '24h': { interval: '24 hours', bucketMinutes: 10 },
   '7d': { interval: '7 days', bucketMinutes: 60 },
 };
 const FEEDER_DECODE_MAX_SITES = 8;
+const FEEDER_DECODE_MIN_SAMPLES = 30; // ~30 minutes of per-minute readings
 
 export interface FeederNodeDecode {
   range: string;
@@ -6330,6 +6337,8 @@ export interface FeederNodeDecode {
     decodePct: Array<number | null>;
     /** The latest bucket with a reading, for a one-glance figure. */
     latestPct: number | null;
+    /** Mean over the buckets with a reading. */
+    avgPct: number | null;
   }>;
 }
 
@@ -6349,14 +6358,15 @@ export async function feederNodeDecode(
       decode_pct: string | null;
       samples: number;
     }>(
-      `SELECT system_id, rfss, site_id,
+      // MAX(system_id): the real system wins over the -1 placeholder.
+      `SELECT MAX(system_id) AS system_id, rfss, site_id,
               to_timestamp(floor(extract(epoch FROM sampled_at) / ${bucketMinutes * 60})
                            * ${bucketMinutes * 60}) AS bucket,
               AVG(decode_pct) FILTER (WHERE decode_pct > 0) AS decode_pct,
               COUNT(*) FILTER (WHERE decode_pct > 0)::int AS samples
          FROM node_site_decode_samples
         WHERE node_id = $1 AND sampled_at >= now() - $2::interval
-        GROUP BY system_id, rfss, site_id, bucket`,
+        GROUP BY rfss, site_id, bucket`,
       [nodeId, interval],
     ),
     siteNames(pool),
@@ -6372,17 +6382,19 @@ export async function feederNodeDecode(
     pct: Map<number, number> }>();
   for (const x of r.rows) {
     if (x.decode_pct === null) continue;
-    const key = `${x.system_id}:${x.rfss}:${x.site_id}`;
+    const key = `${x.rfss}:${x.site_id}`;
     let e = bySite.get(key);
     if (!e) {
       e = { system: x.system_id, rfss: x.rfss, site: x.site_id, samples: 0, pct: new Map() };
       bySite.set(key, e);
     }
+    if (x.system_id > e.system) e.system = x.system_id;
     e.samples += num(x.samples);
     e.pct.set(new Date(x.bucket).getTime(), Number(x.decode_pct));
   }
 
   const sites = [...bySite.values()]
+    .filter((e) => e.samples >= FEEDER_DECODE_MIN_SAMPLES)
     .sort((a, b) => b.samples - a.samples)
     .slice(0, FEEDER_DECODE_MAX_SITES)
     .map((e) => {
@@ -6391,10 +6403,12 @@ export async function feederNodeDecode(
       for (let i = decodePct.length - 1; i >= 0; i--) {
         if (decodePct[i] != null) { latestPct = decodePct[i]!; break; }
       }
+      const read = decodePct.filter((v): v is number => v != null);
+      const avgPct = read.length ? read.reduce((a, b) => a + b, 0) / read.length : null;
       return {
         system: e.system, rfss: e.rfss, site: e.site,
         name: siteNameFor(siteMap, e.system, e.rfss, e.site),
-        decodePct, latestPct,
+        decodePct, latestPct, avgPct,
       };
     });
   return { range, bucketMinutes, at, sites };

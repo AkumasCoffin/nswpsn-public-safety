@@ -63,9 +63,14 @@ beforeEach(() => {
     if (sql.includes('node_site_decode_samples')) {
       return {
         rows: [
-          { system_id: 1, rfss: 1, site_id: 7, bucket: bucketAgo(30), decode_pct: '96.5', samples: 10 },
-          { system_id: 1, rfss: 1, site_id: 7, bucket: bucketAgo(0), decode_pct: '94', samples: 10 },
-          { system_id: 1, rfss: 1, site_id: 9, bucket: bucketAgo(0), decode_pct: '61', samples: 3 },
+          // The same tower, once before the system was identified (-1):
+          // one site, named from the real system.
+          { system_id: -1, rfss: 1, site_id: 7, bucket: bucketAgo(30), decode_pct: '96.5', samples: 20 },
+          { system_id: 1, rfss: 1, site_id: 7, bucket: bucketAgo(0), decode_pct: '94', samples: 15 },
+          { system_id: 1, rfss: 1, site_id: 9, bucket: bucketAgo(20), decode_pct: '70', samples: 25 },
+          { system_id: 1, rfss: 1, site_id: 9, bucket: bucketAgo(0), decode_pct: '61', samples: 10 },
+          // A glimpse: too few readings to be a site the node decodes.
+          { system_id: 1, rfss: 3, site_id: 2, bucket: bucketAgo(0), decode_pct: '40', samples: 5 },
           // A bucket that only ever read zero: "not measured", not a site.
           { system_id: 1, rfss: 2, site_id: 1, bucket: bucketAgo(0), decode_pct: null, samples: 0 },
         ],
@@ -101,6 +106,7 @@ describe('GET /api/feeder/nodes/:id/decode', () => {
     expect(kh.decodePct).toHaveLength(d.at.length);
     expect(kh.latestPct).toBe(94);
     expect(kh.decodePct.filter((v) => v != null)).toEqual([96.5, 94]);
+    expect((kh as unknown as { avgPct: number }).avgPct).toBeCloseTo(95.25);
 
     const sql = queryMock.mock.calls.find(([q]) => String(q).includes('node_site_decode_samples'))!;
     expect(sql[1]).toEqual([RADIO.id, '24 hours']);
