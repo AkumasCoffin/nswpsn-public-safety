@@ -455,6 +455,13 @@
     .dc-fair { background: #f59e0b; }
     .dc-poor { background: #ef4444; }
     .dc-none { background: rgba(148,163,184,0.12); }
+    /* Held by the channel manager (auto-stopped or probing): a hatch over
+       whatever the block otherwise shows, so it reads as "stopped on
+       purpose" rather than as a fault. */
+    .dc-held { background-image: repeating-linear-gradient(135deg, #a5b4fc 0 2px, transparent 2px 5px); }
+    .dc-none.dc-held { background-color: rgba(129,140,248,0.18); }
+    .dc-dot.dc-held { border-radius: 2px; background-color: rgba(129,140,248,0.18); }
+    .dc-tip-held { margin-top: 0.4rem; color: #c7d2fe; font-size: 0.74rem; line-height: 1.4; }
     .dc-note { font-size: 0.72rem; color: var(--text-soft); margin-top: 0.6rem; }
     .dc-empty { color: var(--text-soft); text-align: center; padding: 2rem 1rem; font-size: 0.85rem; }
     @media (max-width: 640px) {
@@ -1549,6 +1556,7 @@
               <span><span class="dc-dot dc-fair"></span>Fair, 65–90%</span>
               <span><span class="dc-dot dc-poor"></span>Poor, under 65%</span>
               <span><span class="dc-dot dc-none"></span>No reading</span>
+              <span><span class="dc-dot dc-none dc-held"></span>Auto-stopped by the channel manager</span>
             </div>
             <div class="dc-note">How much of each site's control channel your node decodes cleanly. Steady green is healthy; amber or red means interference, a weak signal or the node being busy. Hover or tap a block for its details.</div>
           </div>
@@ -1858,7 +1866,7 @@
       const rows = sites.map((s, si) => {
         const name = s.name || `Site ${s.rfss}-${s.site}`;
         const cells = (s.decodePct || []).map((v, i) =>
-          `<span class="dc-cell dc-${_decodeBand(v)}" data-s="${si}" data-i="${i}"></span>`).join('');
+          `<span class="dc-cell dc-${_decodeBand(v)}${_decodeHoldAt(d, s, i) ? ' dc-held' : ''}" data-s="${si}" data-i="${i}"></span>`).join('');
         const band = _decodeBand(s.latestPct);
         return `<div class="dc-row">
           <div class="dc-name" title="${escapeHtml(name)}">${escapeHtml(name)}</div>
@@ -1877,6 +1885,15 @@
         </div>
         ${rows}`;
       _decodeTipWire(el);
+    }
+
+    // The channel-manager hold overlapping bucket i of a site, if any.
+    function _decodeHoldAt(d, site, i) {
+      const startIso = (d.at || [])[i];
+      if (!startIso || !(site.holds || []).length) return null;
+      const t0 = new Date(startIso).getTime();
+      const t1 = t0 + (d.bucketMinutes || 10) * 60000;
+      return site.holds.find(h => new Date(h.from).getTime() < t1 && new Date(h.to).getTime() > t0) || null;
     }
 
     // One tooltip for every strip, driven by delegated pointer events: a 7-day
@@ -1920,18 +1937,34 @@
         const end = new Date(start.getTime() + (_decodeData.bucketMinutes || 10) * 60000);
         const t = (dt) => dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         const day = start.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+        const hold = _decodeHoldAt(_decodeData, site, i);
+        // A hold can run for days: show its own dates when it starts or ends
+        // on another day than the block.
+        const when = (iso) => {
+          const dt = new Date(iso);
+          return dt.toDateString() === start.toDateString()
+            ? t(dt)
+            : `${dt.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })} ${t(dt)}`;
+        };
+        const holdOpen = hold && Date.now() - new Date(hold.to).getTime() < 2 * 60000;
+        const holdHtml = hold
+          ? `<div class="dc-tip-held"><i class="fas fa-pause"></i> The channel manager auto-stopped this channel
+              from ${escapeHtml(when(hold.from))}${holdOpen ? ' and it is still stopped' : ` to ${escapeHtml(when(hold.to))}`}.
+              It stops a channel that is not decoding and checks it again later.</div>`
+          : '';
         const name = site.name || `Site ${site.rfss}-${site.site}`;
         const tip = _decodeTipEl();
         tip.innerHTML = `
           <div class="dc-tip-site">${escapeHtml(name)}</div>
           <div class="dc-tip-time">${escapeHtml(day)}, ${escapeHtml(t(start))}–${escapeHtml(t(end))}</div>
           ${avg == null
-            ? `<div class="dc-tip-row">Nothing was measured in this period.</div>`
+            ? `<div class="dc-tip-row">${hold ? 'Nothing was measured while it was stopped.' : 'Nothing was measured in this period.'}</div>`
             : `<div class="dc-tip-row"><span>Average</span><b>${avg.toFixed(1)}%</b></div>
                ${worst != null && Math.round(worst) < Math.round(avg)
                  ? `<div class="dc-tip-row"><span>Lowest</span><b>${worst.toFixed(1)}%</b></div>` : ''}`}
           <div class="dc-tip-band"><span class="dc-dot dc-${band}"></span><span>${_DECODE_WORD[band]}</span>${avg == null ? '' : `<span>${
-            band === 'good' ? 'decoding cleanly' : band === 'fair' ? 'some errors' : 'struggling to decode'}</span>`}</div>`;
+            band === 'good' ? 'decoding cleanly' : band === 'fair' ? 'some errors' : 'struggling to decode'}</span>`}</div>
+          ${holdHtml}`;
         if (_decodeHot !== cell) {
           if (_decodeHot) _decodeHot.classList.remove('dc-hot');
           cell.classList.add('dc-hot');

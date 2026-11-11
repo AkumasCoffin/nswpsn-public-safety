@@ -6341,6 +6341,10 @@ export interface FeederNodeDecode {
     latestPct: number | null;
     /** Mean over the buckets with a reading. */
     avgPct: number | null;
+    /** When the automatic channel manager held this site's channel
+     *  (auto-stopped, or probing), clamped to the range: the same intervals
+     *  the staff site chart shades. */
+    holds: Array<{ from: string; to: string }>;
   }>;
 }
 
@@ -6399,11 +6403,16 @@ export async function feederNodeDecode(
     if (x.decode_min !== null) e.min.set(t, Number(x.decode_min));
   }
 
-  const sites = [...bySite.values()]
+  const shown = [...bySite.values()]
     .filter((e) => e.samples >= FEEDER_DECODE_MIN_SAMPLES)
     .sort((a, b) => b.samples - a.samples)
-    .slice(0, FEEDER_DECODE_MAX_SITES)
-    .map((e) => {
+    .slice(0, FEEDER_DECODE_MAX_SITES);
+  // Two small queries per site, at most eight sites, all at once.
+  const holds = await Promise.all(
+    shown.map((e) => siteChanMgrHolds(pool, e.system, e.rfss, e.site, nodeId, startMs, nowMs)),
+  );
+  const sites = shown
+    .map((e, idx) => {
       const decodePct = at.map((iso) => e.pct.get(new Date(iso).getTime()) ?? null);
       const decodeMin = at.map((iso) => e.min.get(new Date(iso).getTime()) ?? null);
       let latestPct: number | null = null;
@@ -6416,6 +6425,7 @@ export async function feederNodeDecode(
         system: e.system, rfss: e.rfss, site: e.site,
         name: siteNameFor(siteMap, e.system, e.rfss, e.site),
         decodePct, decodeMin, latestPct, avgPct,
+        holds: holds[idx] ?? [],
       };
     });
   return { range, bucketMinutes, at, sites };

@@ -56,7 +56,20 @@ function bucketAgo(minutesAgo: number): Date {
 
 beforeEach(() => {
   queryMock.mockReset();
-  queryMock.mockImplementation(async (sql: string) => {
+  queryMock.mockImplementation(async (sql: string, params?: unknown[]) => {
+    // The hold lookup: which of this node's channels carry the site...
+    if (sql.includes('SELECT DISTINCT node_id, channel_name FROM node_site_snapshots')) {
+      return params?.[2] === 7 ? { rows: [{ node_id: RADIO.id, channel_name: 'KH CC' }] } : { rows: [] };
+    }
+    // ...and what the channel manager did to them: stopped an hour ago, and
+    // released 20 minutes later.
+    if (sql.includes('node_chanmgr_log')) {
+      const now = Date.now();
+      return { rows: [
+        { node_id: RADIO.id, at_ms: String(now - 60 * 60_000), channel: 'KH CC', kind: 'stopped' },
+        { node_id: RADIO.id, at_ms: String(now - 40 * 60_000), channel: 'KH CC', kind: 'released' },
+      ] };
+    }
     if (sql.includes('node_site_snapshots')) {
       return { rows: [{ system_id: 1, rfss: 1, site_id: 7, channel_name: 'Knights Hill' }] };
     }
@@ -110,6 +123,12 @@ describe('GET /api/feeder/nodes/:id/decode', () => {
     const mins = (kh as unknown as { decodeMin: Array<number | null> }).decodeMin;
     expect(mins).toHaveLength(d.at.length);
     expect(mins.filter((v) => v != null)).toEqual([71]);
+    // The channel manager's hold, as an interval; a site it never touched has none.
+    const holds = (s: unknown) => (s as { holds: Array<{ from: string; to: string }> }).holds;
+    expect(holds(kh)).toHaveLength(1);
+    const h = holds(kh)[0]!;
+    expect(new Date(h.to).getTime() - new Date(h.from).getTime()).toBe(20 * 60_000);
+    expect(holds(d.sites[1])).toEqual([]);
     expect((kh as unknown as { avgPct: number }).avgPct).toBeCloseTo(95.25);
 
     const sql = queryMock.mock.calls.find(([q]) => String(q).includes('node_site_decode_samples'))!;
