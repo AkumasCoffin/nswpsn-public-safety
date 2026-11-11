@@ -662,6 +662,7 @@
     .nd-ready.bad { background: rgba(239,68,68,0.15); color: #f87171; }
     .nd-ready.unknown { background: var(--accent-soft); color: var(--text-soft); }
     .nd-ready.updating { background: rgba(168,85,247,0.18); color: #c084fc; }
+    .nd-ready.testing { background: rgba(245,158,11,0.16); color: var(--warning, #f59e0b); }
     /* Amber tier. This class was already being emitted (the Calibrating… chip)
        with no rule behind it, so that chip rendered as bare unstyled text. */
     .nd-ready.warn { background: rgba(234,179,8,0.15); color: #fbbf24; }
@@ -740,6 +741,16 @@
       color: #fca5a5; background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.3);
       border-radius: 4px; padding: 0.02rem 0.34rem; vertical-align: middle;
     }
+    .nd-pager-test-badge {
+      font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700;
+      color: var(--warning, #f59e0b); background: rgba(245,158,11,0.12); border: 1px solid rgba(245,158,11,0.3);
+      border-radius: 4px; padding: 0.02rem 0.34rem; vertical-align: middle;
+    }
+    .nd-pager-test-notice {
+      margin: 0 0 0.8rem; padding: 0.45rem 0.65rem; border-radius: 6px; font-size: 0.8rem;
+      color: var(--warning, #f59e0b); background: rgba(245,158,11,0.1); border: 1px solid rgba(245,158,11,0.3);
+    }
+    .nd-pager-test-row { display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.4rem; }
     .node-drawer-panel {
       background:
         linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 30%),
@@ -4821,6 +4832,7 @@
           <div class="nd-panel nd-span-all nd-pager-only">
             <div class="nd-panel-h"><i class="fas fa-tower-broadcast"></i> Frequencies</div>
             <div class="nd-panel-b" id="nd-readers"></div>
+            <div class="nd-panel-b" id="nd-pager-test" style="border-top:1px solid var(--border-subtle,#334155);"></div>
           </div>
 
           <!-- Receiver (adsb) -->
@@ -11183,7 +11195,7 @@
       return 'Installing & restarting';
     }
 
-    function _ndActivityHtml(online, sdrUp, decoding, feedEnabled, uploading, kind, updating, decodedLabels, decoderState, updStage) {
+    function _ndActivityHtml(online, sdrUp, decoding, feedEnabled, uploading, kind, updating, decodedLabels, decoderState, updStage, testing) {
       const chip = (state, label) => `<span class="nd-ready ${state}">${label}</span>`;
       const isPager = kind === 'pager';
       let dec;
@@ -11201,7 +11213,10 @@
         dec = chip('ok', isPager ? 'Decoding ' + (labels.length ? labels.join(' + ') : 'POCSAG') : 'Decoding');
       } else dec = chip('unknown', 'Idle');
       let feed;
-      if (!feedEnabled) feed = chip('unknown', 'Feed off');
+      // Testing mode keeps every page out of Pagermon, whatever the feed toggle
+      // says, so it is what the feed chip reports.
+      if (isPager && testing) feed = chip('testing', '<i class="fas fa-flask"></i> Testing');
+      else if (!feedEnabled) feed = chip('unknown', 'Feed off');
       else feed = uploading ? chip('ok', isPager ? 'Uploading' : 'Feeding') : chip('unknown', 'Feed on');
       return `<div class="node-ready-row">${dec}${feed}</div>`;
     }
@@ -11334,7 +11349,7 @@
             ...(node.os ? [['os', node.os]] : []),
           ].map(([k, v]) => `<span><span class="k">${k}</span> ${escapeHtml(v == null ? '—' : String(v))}</span>`).join('')}</div>
           ${_ndHealthHtml(kind, st, sdrUp)}
-          ${_ndActivityHtml(online, sdrUp, decoding, feedEnabled, uploading, kind, updating, node.pagerDecoding, decoderState, updStage)}
+          ${_ndActivityHtml(online, sdrUp, decoding, feedEnabled, uploading, kind, updating, node.pagerDecoding, decoderState, updStage, node.pagerTesting === true)}
           ${_ndAlertsHtml(kind, st, pinned, place)}
           <div class="dev-card-secondary nd-uptime-row">${uptimeHtml}</div>
           <div class="dev-card-secondary">
@@ -11657,7 +11672,9 @@
     let _ndEvents = [];
     let _ndPagerMsgs = [];         // pager nodes: recent decoded pages (buffered server-side + live)
     let _ndSpectrumTunerId = null; // tunerId of the active spectrum stream
-    let _ndReadersSig = null;      // last-rendered pager Readers-panel signature (rebuild guard)
+    let _ndReadersSig = null;
+    let _ndPagerTestSig = null;    // last-rendered testing-mode editor signature (rebuild guard)
+    let _ndPagerTestDraft = null;  // the editor's rows [{label, mhz}] while open, else null      // last-rendered pager Readers-panel signature (rebuild guard)
     let _ndAdsbSig = null;         // ditto for the ADS-B Receiver panel
     let _nd2TrackMap = null;       // Leaflet map for the ADS-B coverage view
     let _nd2TrackLayer = null;     // the drawn traces, replaced on each refresh
@@ -11724,6 +11741,7 @@
       _ndTuners = []; _ndChannels = []; _ndCalls = []; _ndEvents = []; _ndPagerMsgs = [];
       _ndTunersSig = null;
       _ndReadersSig = null;
+      _ndPagerTestSig = null; _ndPagerTestDraft = null;
       _ndAdsbSig = null;
       _ndSpectrumTunerId = null;
       _ndAudioLabel = null; _ndAudioPlayhead = 0;
@@ -12613,12 +12631,17 @@
       // Supported gain steps the agent reports for this SDR (dB) → a dropdown of
       // valid values; falls back to a free-text field if none are known yet.
       const gains = (st && Array.isArray(st.pagerGains)) ? st.pagerGains : [];
+      const testing = nFresh.pagerTesting === true;
+
+      // The testing-mode editor has its own container and guard, so a status
+      // frame never wipes a frequency half-typed into it.
+      _ndRenderPagerTest(nFresh);
 
       // Rebuild-guard: this panel re-renders on every status frame (~15s). An
       // unconditional innerHTML rebuild snaps an open <select> shut and wipes a
       // half-typed field mid-tune, so skip when nothing shown here changed.
       const sig = JSON.stringify([online, [...reported], _ndAudioLabel, msgs, qd,
-        gainVal, ppmVal, gains, freqs]);
+        gainVal, ppmVal, gains, freqs, testing]);
       if (sig === _ndReadersSig) return;
       _ndReadersSig = sig;
 
@@ -12661,6 +12684,7 @@
       }
 
       el.innerHTML = `
+        ${testing ? `<div class="nd-pager-test-notice"><i class="fas fa-flask"></i> <strong>Testing</strong>: the state plan is replaced by the frequencies below, and pages stay in this drawer only (not forwarded to Pagermon).</div>` : ''}
         <div class="dev-card-secondary" style="margin:0 0 0.8rem; border-top:0; padding-top:0;">
           <span>decoder <strong class="${decoderCls}">${escapeHtml(decoder)}</strong></span>
           <span>messages <strong>${msgs}</strong> · last 10 min</span>
@@ -12812,6 +12836,166 @@
         showToast(`Could not save tuner override: ${e.message}`, 'error');
       } finally {
         if (el) el.disabled = false;
+      }
+    }
+
+    // Testing mode (staff): replace the node's state plan with frequencies typed
+    // here. Its pages then stay in this drawer: the relay neither forwards them
+    // to Pagermon nor stores them. The stored list is kept while testing is off,
+    // so switching back on restores it. Rendered in its own container with its
+    // own guard (the readers panel re-renders on every status frame).
+    function _ndRenderPagerTest(nFresh) {
+      const el = document.getElementById('nd-pager-test');
+      if (!el) return;
+      const testing = nFresh.pagerTesting === true;
+      const stored = Array.isArray(nFresh.pagerTestFrequencies) ? nFresh.pagerTestFrequencies : [];
+      const sig = JSON.stringify([testing, stored, _ndPagerTestDraft]);
+      if (sig === _ndPagerTestSig) return;
+      _ndPagerTestSig = sig;
+
+      const tuneInput = 'background:rgba(255,255,255,0.05); color:var(--text-primary,#e2e8f0); border:1px solid var(--border-subtle,#334155); border-radius:6px; padding:0.25rem 0.4rem; font-size:0.8rem;';
+      const switchRow = `
+        <div class="nd-switch-row" style="margin-bottom:${testing || _ndPagerTestDraft ? '0.7rem' : '0'};">
+          <label class="node-switch nd-write" title="Receives only the frequencies below; pages are not forwarded to Pagermon.">
+            <input type="checkbox" ${testing ? 'checked' : ''} onchange="_ndPagerTestToggle(this.checked, this)">
+            <span class="track"></span>
+          </label>
+          <span>Testing mode <b>${testing ? 'on' : 'off'}</b></span>
+        </div>`;
+
+      // The editor shows while testing is on, or while being filled in to turn it on.
+      if (!testing && !_ndPagerTestDraft) { el.innerHTML = switchRow; return; }
+      const editing = _ndPagerTestDraft != null;
+      const rows = editing ? _ndPagerTestDraft : stored.map(f => ({ label: f.label, mhz: f.mhz }));
+      const body = rows.map((f, i) => `
+        <div class="nd-pager-test-row">
+          <input type="text" class="nd-write-input" maxlength="16" placeholder="Label" value="${escapeHtml(f.label || '')}"
+            ${editing ? '' : 'disabled'} oninput="_ndPagerTestEdit(${i}, 'label', this.value)" style="${tuneInput} width:7rem;">
+          <input type="number" class="nd-write-input" step="0.0001" min="24" max="1766" placeholder="MHz" value="${f.mhz == null || f.mhz === '' ? '' : escapeHtml(String(f.mhz))}"
+            ${editing ? '' : 'disabled'} oninput="_ndPagerTestEdit(${i}, 'mhz', this.value)" style="${tuneInput} width:7.5rem; text-align:right;">
+          <span class="nd-sub">MHz</span>
+          ${editing ? `<button class="btn btn-secondary btn-sm" onclick="_ndPagerTestRemove(${i})" title="Remove this frequency"><i class="fas fa-xmark"></i></button>` : ''}
+        </div>`).join('');
+      const actions = editing
+        ? `<div class="nd-controls" style="margin-top:0.5rem;">
+             <button class="btn btn-secondary btn-sm" onclick="_ndPagerTestAdd()"${rows.length >= 8 ? ' disabled' : ''}><i class="fas fa-plus"></i> Add frequency</button>
+             <button class="btn btn-primary btn-sm nd-write" onclick="_ndPagerTestApply(this)"><i class="fas fa-check"></i> Apply</button>
+             <button class="btn btn-secondary btn-sm" onclick="_ndPagerTestCancel()">Cancel</button>
+           </div>`
+        : `<div class="nd-controls" style="margin-top:0.5rem;">
+             <button class="btn btn-secondary btn-sm nd-write" onclick="_ndPagerTestOpen()"><i class="fas fa-pen"></i> Edit frequencies</button>
+           </div>`;
+      el.innerHTML = switchRow + body + actions;
+    }
+
+    function _ndPagerTestNode() {
+      return (allNodes || []).find(x => String(x.id) === String(_ndNodeId)) || _ndNode || {};
+    }
+
+    function _ndPagerTestRefresh() {
+      _ndRenderPagerTest(_ndPagerTestNode());
+    }
+
+    function _ndPagerTestStored() {
+      const n = _ndPagerTestNode();
+      return Array.isArray(n.pagerTestFrequencies) ? n.pagerTestFrequencies : [];
+    }
+
+    function _ndPagerTestOpen() {
+      const stored = _ndPagerTestStored();
+      _ndPagerTestDraft = stored.length ? stored.map(f => ({ label: f.label, mhz: f.mhz })) : [{ label: '', mhz: '' }];
+      _ndPagerTestRefresh();
+    }
+
+    // Typing updates the draft only: re-rendering here would drop focus. The
+    // draft is in the guard's signature, so a later render still sees it.
+    function _ndPagerTestEdit(i, field, value) {
+      if (!_ndPagerTestDraft || !_ndPagerTestDraft[i]) return;
+      _ndPagerTestDraft[i][field] = value;
+      _ndPagerTestSig = JSON.stringify([_ndPagerTestNode().pagerTesting === true,
+        _ndPagerTestStored(), _ndPagerTestDraft]);
+    }
+
+    function _ndPagerTestAdd() {
+      if (!_ndPagerTestDraft || _ndPagerTestDraft.length >= 8) return;
+      _ndPagerTestDraft.push({ label: '', mhz: '' });
+      _ndPagerTestRefresh();
+    }
+
+    function _ndPagerTestRemove(i) {
+      if (!_ndPagerTestDraft) return;
+      _ndPagerTestDraft.splice(i, 1);
+      if (!_ndPagerTestDraft.length) _ndPagerTestDraft.push({ label: '', mhz: '' });
+      _ndPagerTestRefresh();
+    }
+
+    function _ndPagerTestCancel() {
+      _ndPagerTestDraft = null;
+      _ndPagerTestRefresh();
+    }
+
+    // The switch. On with a stored list turns testing straight back on; on with
+    // nothing stored opens the editor instead, so a node is never put into
+    // testing with no frequency. Off keeps the stored list.
+    async function _ndPagerTestToggle(on, el) {
+      if (on) {
+        if (!_ndPagerTestStored().length) {
+          if (el) el.checked = false;
+          _ndPagerTestOpen();
+          return;
+        }
+        await _ndSetPagerTesting({ enabled: true }, el);
+      } else {
+        _ndPagerTestDraft = null;
+        await _ndSetPagerTesting({ enabled: false }, el);
+      }
+    }
+
+    async function _ndPagerTestApply(el) {
+      const frequencies = [];
+      for (const r of (_ndPagerTestDraft || [])) {
+        const label = String(r.label || '').trim();
+        const mhzText = String(r.mhz == null ? '' : r.mhz).trim();
+        if (!label && !mhzText) continue; // an empty spare row
+        if (!/^[A-Za-z0-9_-]{1,16}$/.test(label)) { showToast('Labels are 1–16 letters, digits, - or _.', 'error'); return; }
+        const mhz = Number(mhzText);
+        if (!mhzText || !Number.isFinite(mhz) || mhz < 24 || mhz > 1766) { showToast(`${label}: frequency must be 24–1766 MHz.`, 'error'); return; }
+        if (frequencies.some(f => f.label === label)) { showToast(`${label} is used twice.`, 'error'); return; }
+        frequencies.push({ label, mhz });
+      }
+      if (!frequencies.length) { showToast('Add at least one frequency.', 'error'); return; }
+      if (frequencies.length > 8) { showToast('At most 8 frequencies.', 'error'); return; }
+      if (await _ndSetPagerTesting({ enabled: true, frequencies }, el)) {
+        _ndPagerTestDraft = null;
+        _ndPagerTestRefresh();
+      }
+    }
+
+    async function _ndSetPagerTesting(body, el) {
+      if (el) el.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${_ndNodeId}/pager-testing`, {
+          method: 'PUT',
+          headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          const j = await res.json().catch(() => null);
+          throw new Error((j && j.error) || `HTTP ${res.status}`);
+        }
+        showToast(body.enabled
+          ? 'Testing mode on: readers restart on the test frequencies.'
+          : 'Testing mode off: back to the state plan.', 'success');
+        await loadNodes();
+        return true;
+      } catch (e) {
+        showToast(`Could not set testing mode: ${e.message}`, 'error');
+        if (el && el.type === 'checkbox') el.checked = !el.checked;
+        return false;
+      } finally {
+        if (el) el.disabled = false;
+        _ndPagerTestSig = null;
+        _ndPagerTestRefresh();
       }
     }
 
@@ -14458,9 +14642,11 @@
           // Filtered (blocked-capcode) messages are buffered but not forwarded —
           // show them dimmed with a badge so staff can see what's being dropped.
           const filt = m.filtered ? ' nd-pager-filtered' : '';
-          const badge = m.filtered
-            ? `<span class="nd-pager-filt-badge" title="Not forwarded to Pagermon (${escapeHtml(m.filtered)})">filtered</span> `
-            : '';
+          const badge = m.testing
+            ? `<span class="nd-pager-test-badge" title="Heard in testing mode: shown here only, not forwarded to Pagermon or stored">testing</span> `
+            : m.filtered
+              ? `<span class="nd-pager-filt-badge" title="Not forwarded to Pagermon (${escapeHtml(m.filtered)})">filtered</span> `
+              : '';
           return `<div class="nd-event-row nd-log-row${filt}">
             <span class="nd-ev-time">${escapeHtml(time)}</span>
             <span class="nd-ev-type">${badge}<span class="node-mono">${escapeHtml(m.address || '')}</span> ${escapeHtml(m.message || '')}</span>

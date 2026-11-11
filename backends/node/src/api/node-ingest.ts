@@ -29,7 +29,8 @@ import { log } from '../lib/log.js';
 import { describeRelayError } from '../lib/relayError.js';
 import { resolveNodeToken } from '../services/auth/nodeToken.js';
 import { ingestSurveyResults } from '../services/siteSurvey.js';
-import { bumpNodeCallStat, getNode, touchNodeSeenThrottled } from '../services/nodes/registry.js';
+import { bumpNodeCallStat, getNode, touchNodeSeenThrottled, type NodeRow } from '../services/nodes/registry.js';
+import { pagerTestingOf } from '../services/nodes/configMerge.js';
 import { getPagerIngest } from '../services/nodes/globalConfig.js';
 import { hub } from '../services/nodes/hub.js';
 import { markNodeSeen } from '../services/nodes/nodeUptime.js';
@@ -826,7 +827,7 @@ type PagerRelayOutcome =
 
 async function relayOnePagerMessage(
   node: { id: string; feed_enabled: boolean },
-  nodeRow: { name?: string | null; state?: string | null } | null,
+  nodeRow: NodeRow | null,
   ingest: { url: string; apiKey: string },
   parsed: z.infer<typeof PagerMsgSchema>,
 ): Promise<PagerRelayOutcome> {
@@ -846,6 +847,23 @@ async function relayOnePagerMessage(
   }
 
   log.info(`pager rx node=${node.id.slice(0, 8)} addr=${parsed.address} src=${parsed.source} freq=${parsed.freqMhz ?? '?'}`);
+
+  // Testing mode: the node is on hand-programmed frequencies, so its pages are
+  // shown in the staff drawer only — never forwarded to Pagermon and never
+  // stored, which keeps them out of the map, /logs and the pager stats. Acked
+  // like Feed off so the agent deletes them from its queue.
+  if (pagerTestingOf(nodeRow)) {
+    hub.recordPagerMessage(node.id, {
+      address: parsed.address,
+      message: parsed.message,
+      source: parsed.source,
+      freqMhz: typeof parsed.freqMhz === 'number' ? parsed.freqMhz : null,
+      at: Date.now(),
+      testing: true,
+    });
+    log.info(`pager relay: TESTING, not forwarded addr=${parsed.address} node=${node.id.slice(0, 8)}`);
+    return { acked: true, fed: false };
+  }
 
   try {
     const tsMs = parsed.timestamp ? new Date(parsed.timestamp).getTime() : NaN;

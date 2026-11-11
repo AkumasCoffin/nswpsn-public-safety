@@ -66,6 +66,9 @@ export interface PagerMessageView {
    *  e.g. "blocked capcode". Shown dimmed in the drawer so staff can see what's
    *  being dropped. Absent for normal forwarded pages. */
   filtered?: string;
+  /** Set when the node was in testing mode: shown in the drawer only, never
+   *  forwarded or stored. */
+  testing?: boolean;
 }
 
 class NodeHub {

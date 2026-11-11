@@ -461,6 +461,35 @@ export async function setPagerTuning(
 }
 
 /**
+ * Turn a pager node's testing mode on or off, and optionally replace its test
+ * frequencies. Off removes only `pagerTesting`: the list is kept so turning
+ * testing back on restores it. Merged into config_override like
+ * setPagerTuning. Guarded to kind='pager'.
+ */
+export async function setPagerTesting(
+  id: string,
+  patch: { enabled: boolean; frequencies?: Array<{ label: string; mhz: number }> },
+): Promise<NodeRow | null> {
+  const pool = await getPool();
+  if (!pool) return null;
+
+  const setObj: Record<string, unknown> = {};
+  const removeKeys: string[] = [];
+  if (patch.enabled) setObj['pagerTesting'] = true;
+  else removeKeys.push('pagerTesting');
+  if (patch.frequencies !== undefined) setObj['pagerTestFrequencies'] = patch.frequencies;
+
+  const res = await pool.query<NodeRow>(
+    `UPDATE nodes
+       SET config_override = (COALESCE(config_override, '{}'::jsonb) - $2::text[]) || $3::jsonb
+     WHERE id = $1 AND kind = 'pager'
+     RETURNING ${NODE_COLS}`,
+    [id, removeKeys, JSON.stringify(setObj)],
+  );
+  return res.rows[0] ?? null;
+}
+
+/**
  * Set (or clear) an ADS-B node's gain / ppm overrides, merged into the JSONB
  * config_override so they persist across restarts/updates without touching
  * other keys. Pass a value to set it, `null` to clear it, or `undefined` to
