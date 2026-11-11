@@ -14333,7 +14333,7 @@
       if (!running) { ban.innerHTML = ''; return; }
       const p = _ndSurveyLive || {};
       const detail = p.running
-        ? `${escapeHtml(p.phase || 'testing')}${p.total ? ` · site ${p.done || 0} of ${p.total}` : ''}${p.current ? ` · ${escapeHtml(p.current)}` : ''}`
+        ? `${escapeHtml(p.phase || 'testing')}${p.total ? ` · site ${_ndNum(p.done)} of ${_ndNum(p.total)}` : ''}${p.current ? ` · ${escapeHtml(p.current)}` : ''}`
         : 'starting — waiting for the node to pick it up';
       ban.innerHTML = `
         <i class="fas fa-spinner fa-spin nd-sb-spin"></i>
@@ -14393,7 +14393,7 @@
       const live = _ndSurveyLive && _ndSurveyLive.running ? _ndSurveyLive : null;
       if (sub) {
         sub.innerHTML = live
-          ? `<span style="color:#fbbf24;">${escapeHtml(live.phase || 'testing')} ${live.total ? `· ${live.done || 0}/${live.total}` : ''}</span>
+          ? `<span style="color:#fbbf24;">${escapeHtml(live.phase || 'testing')} ${live.total ? `· ${_ndNum(live.done)}/${_ndNum(live.total)}` : ''}</span>
              <button class="btn btn-secondary btn-sm nd-write" style="margin-left:8px;" onclick="_ndCancelSurvey()">Cancel</button>`
           : (_ndSurveys.length ? 'newest first · last 10 runs' : '');
       }
