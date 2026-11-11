@@ -215,7 +215,8 @@ describe('local listener page report', () => {
     agent.send(JSON.stringify({ t: 'status', data: { components: {}, localListen: report } }));
     const frame = (await broadcast) as { data: { status: Record<string, unknown> } };
 
-    expect(hub.localListenOf(NODE_ID)).toEqual(report);
+    // The hostname the agent sends is not kept.
+    expect(hub.localListenOf(NODE_ID)).toEqual({ port: 17380, ip: '192.168.1.50' });
     // Staff are not on the owner's network: the link never reaches them.
     expect(frame.data.status).not.toHaveProperty('localListen');
     expect(hub.liveStatus(NODE_ID).status).not.toHaveProperty('localListen');
@@ -233,10 +234,9 @@ describe('local listener page report', () => {
       await settle();
       expect(hub.localListenOf(NODE_ID)).toBeNull();
     }
-    // A bad host only loses the .local link, not the page.
-    agent.send(JSON.stringify({ t: 'status', data: { localListen: { ...report, host: 'a b.evil' } } }));
+    agent.send(JSON.stringify({ t: 'status', data: { localListen: report } }));
     await settle();
-    expect(hub.localListenOf(NODE_ID)).toEqual({ ...report, host: null });
+    expect(hub.localListenOf(NODE_ID)).not.toBeNull();
     // And a frame without one clears it: the page stopped.
     agent.send(JSON.stringify({ t: 'status', data: { components: {} } }));
     await settle();

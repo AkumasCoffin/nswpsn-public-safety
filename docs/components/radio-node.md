@@ -258,9 +258,10 @@ with or without the password.
 - **The link** comes back in the status frame (`localListen: {port, ip, host}`),
   only while the proxy is bound and not on a loopback address. The backend takes
   it off the frame before storing the status (`services/nodes/localListen.ts`), so
-  it reaches the node's **owner only**: `GET /api/feeder/me` → "Listen locally" on
-  `feeder.html`, plus a `<hostname>.local` link. Staff views carry the node's
-  local IP as before, but never the link — staff are not on that network.
+  it reaches the node's **owner only**: `GET /api/feeder/me` → a "Listen locally"
+  button on `feeder.html`, by IP (the agent's hostname is not used: `.local`
+  names only resolve on some networks). Staff views carry the node's local IP as
+  before, but never the link — staff are not on that network.
 
 ## The control WebSocket
 

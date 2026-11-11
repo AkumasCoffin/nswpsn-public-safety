@@ -87,7 +87,7 @@ function app(router: Hono, userId: string) {
 beforeEach(() => {
   hub.registerAgent(NODE.id!, fakeSocket, NODE.user_id!, 'install-1');
   hub.recordStatus(NODE.id!, { components: {} });
-  hub.setLocalListen(NODE.id!, { port: 17380, ip: '192.168.1.50', host: 'shack-pc' });
+  hub.setLocalListen(NODE.id!, { port: 17380, ip: '192.168.1.50' });
 });
 
 afterEach(() => {
@@ -99,10 +99,7 @@ describe('local listener link', () => {
     const res = await app(feederRouter, 'user-owner').request('/api/feeder/me');
     expect(res.status).toBe(200);
     const body = (await res.json()) as { nodes: Array<Record<string, unknown>> };
-    expect(body.nodes[0]!['localListen']).toEqual({
-      url: 'http://192.168.1.50:17380',
-      hostUrl: 'http://shack-pc.local:17380',
-    });
+    expect(body.nodes[0]!['localListen']).toEqual({ url: 'http://192.168.1.50:17380' });
   });
 
   it('is gone once the node goes offline', async () => {
@@ -112,12 +109,9 @@ describe('local listener link', () => {
     expect(body.nodes[0]!['localListen']).toBeNull();
   });
 
-  it('brackets an IPv6 address and skips the .local link without a hostname', async () => {
+  it('brackets an IPv6 address', async () => {
     const { localListenLinks } = await import('../../../src/services/nodes/localListen.js');
-    expect(localListenLinks({ port: 17380, ip: 'fe80::1', host: null })).toEqual({
-      url: 'http://[fe80::1]:17380',
-      hostUrl: null,
-    });
+    expect(localListenLinks({ port: 17380, ip: 'fe80::1' })).toEqual({ url: 'http://[fe80::1]:17380' });
   });
 
   it('never reaches the staff view, which still shows the IP', async () => {

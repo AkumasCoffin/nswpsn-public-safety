@@ -11,11 +11,7 @@ import { isIP } from 'node:net';
 export interface LocalListen {
   port: number;
   ip: string;
-  host: string | null;
 }
-
-// A single DNS label, which is all an OS hostname is for a <host>.local link.
-const HOST_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
 
 /** Validate the agent's report. Anything off is dropped, not repaired: the
  *  values end up in an href on the owner's page. */
@@ -26,16 +22,14 @@ export function parseLocalListen(raw: unknown): LocalListen | null {
   if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) return null;
   const ip = typeof r.ip === 'string' ? r.ip.trim() : '';
   if (!isIP(ip)) return null;
-  const host = typeof r.host === 'string' && HOST_RE.test(r.host.trim()) ? r.host.trim() : null;
-  return { port, ip, host };
+  // The agent also sends its hostname; it is not used. A <host>.local link
+  // only works where the network resolves .local names, and the address
+  // always does.
+  return { port, ip };
 }
 
-/** The owner-facing links: by address, and by machine name where the network
- *  resolves .local names (most home networks do). */
-export function localListenLinks(l: LocalListen): { url: string; hostUrl: string | null } {
+/** The owner-facing link, by address. */
+export function localListenLinks(l: LocalListen): { url: string } {
   const addr = isIP(l.ip) === 6 ? `[${l.ip}]` : l.ip;
-  return {
-    url: `http://${addr}:${l.port}`,
-    hostUrl: l.host ? `http://${l.host}.local:${l.port}` : null,
-  };
+  return { url: `http://${addr}:${l.port}` };
 }
