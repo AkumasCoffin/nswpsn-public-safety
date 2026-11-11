@@ -515,11 +515,19 @@
     /* Wider than .fs-modal (940): the body hosts the same content plus a
        header bar of actions. Same specificity trick as .modal.fs-modal so
        source order cannot demote it. */
-    .modal.node-modal { max-width: 1040px; padding: 0; }
-    /* Sticky glassy header (the page .header precedent) — the modal itself
-       is the scroll container, so the bar pins to its top edge. */
+    /* One fixed size for every node kind and tab, so the popup does not jump
+       around or float mid-screen when its content is short. The header stays
+       put and only the body scrolls, inside the rounded frame; dark native
+       scrollbars instead of the browser's light ones. */
+    .modal.node-modal {
+      max-width: 1040px; padding: 0;
+      height: min(900px, calc(100vh - 2rem)); max-height: none;
+      display: flex; flex-direction: column; overflow: hidden;
+      color-scheme: dark;
+    }
+    #node-modal, #node-modal * { scrollbar-width: thin; scrollbar-color: rgba(148,163,184,0.35) transparent; }
     .nm-head {
-      position: sticky; top: 0; z-index: 5;
+      flex: none;
       display: flex; align-items: center; justify-content: space-between;
       gap: 0.8rem; flex-wrap: wrap;
       padding: 1rem 1.4rem;
@@ -539,13 +547,13 @@
     .nm-group { display: flex; gap: 0.35rem; flex-wrap: wrap; }
     .nm-group + .nm-group { border-left: 1px solid var(--border-subtle); padding-left: 0.6rem; }
     .nm-close { font-size: 1rem; line-height: 1; padding: 0.32rem 0.6rem; }
-    .nm-body { padding: 1.1rem 1.4rem 1.4rem; }
+    .nm-body { flex: 1; min-height: 0; overflow-y: auto; padding: 1.1rem 1.4rem 1.4rem; }
     /* Anything that must stack above the open node modal (the location
        picker and the install modal). Base overlay is z-index 1000. */
     .modal-overlay.overlay-top { z-index: 1100; }
     @media (max-width: 640px) {
-      .modal.node-modal { max-width: none; width: 100%; min-height: 100%; border-radius: 0; }
-      .nm-head { position: static; border-radius: 0; }
+      .modal.node-modal { max-width: none; width: 100%; height: 100%; border-radius: 0; }
+      .nm-head { border-radius: 0; }
     }
     /* One-time token modal */
     .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex;
