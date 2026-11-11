@@ -106,3 +106,6 @@ uploads/*
 # Cached ArcGIS pages for scripts/import-boundaries.mjs. Tens of MB,
 # re-downloadable, and the DB is the copy that matters.
 data/boundaries/source/
+
+# Local developer notes; not part of the site (the repo root is the webroot).
+/dev-docs/
