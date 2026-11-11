@@ -34,6 +34,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <style>
     /* Tokens mirror staff.html so the page looks native to the admin/site. */
     :root {
@@ -413,7 +414,23 @@
     .fs-li-c { color: var(--accent); font-variant-numeric: tabular-nums; flex-shrink: 0; font-size: 0.75rem; }
     .fs-li-empty { color: var(--text-soft); }
     .fs-act-h { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-soft); margin: 0.9rem 0 0.45rem; font-weight: 600; }
-    .sv-meta { font-size: 0.75rem; color: var(--text-soft); margin-bottom: 0.5rem; }
+    .sv-meta { font-size: 0.75rem; color: var(--text-soft); margin-bottom: 0.7rem; }
+    /* A titled panel on the radio node page: decode health, site survey. */
+    .nm-card { background: rgba(255,255,255,0.02); border: 1px solid var(--border-subtle); border-radius: 9px;
+               padding: 0.75rem 0.85rem 0.85rem; margin-top: 0.9rem; }
+    .nm-card-h { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
+    .nm-card-t { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-soft); font-weight: 600; }
+    .nm-card .fs-wins { margin: 0; }
+    .dc-wrap { position: relative; height: 280px; }
+    .dc-note { font-size: 0.72rem; color: var(--text-soft); margin-top: 0.4rem; }
+    .dc-empty { color: var(--text-soft); text-align: center; padding: 3rem 1rem; font-size: 0.85rem; }
+    /* Survey totals: the activity tiles' look, tinted by meaning. */
+    .sv-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.5rem; }
+    .sv-tiles .fs-tile-v.sv-good { color: #4ade80; }
+    .sv-tiles .fs-tile-v.sv-weak { color: #fbbf24; }
+    .sv-tiles .fs-tile-v.sv-soft { color: var(--text-soft); }
+    .sv-best { font-size: 0.78rem; color: var(--text-soft); margin-top: 0.6rem; }
+    .sv-best b { color: var(--text-primary); font-weight: 600; }
     /* A survey has the node's channels stopped; to an owner that looks like a
        fault unless the page says otherwise. */
     .nl-surveying { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.6rem;
@@ -424,29 +441,6 @@
       background: rgba(251, 191, 36, 0.09); border: 1px solid rgba(251, 191, 36, 0.4); color: #fde68a; }
     .nm-survey-note i { margin-top: 0.15rem; color: #fbbf24; }
     .nm-survey-note b { color: #fff; }
-    .sv-row { display: grid; grid-template-columns: 1fr auto auto; gap: 0.5rem; align-items: center;
-              padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border-subtle); font-size: 0.82rem; }
-    .sv-row:last-child { border-bottom: 0; }
-    .sv-site { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .sv-freq { color: var(--text-soft); font-size: 0.72rem; }
-    .sv-pct { font-variant-numeric: tabular-nums; font-weight: 600; }
-    .sv-pass .sv-pct { color: #4ade80; }
-    .sv-fail .sv-pct { color: #fbbf24; }
-    .sv-none .sv-pct { color: var(--text-soft); font-weight: 500; }
-    .sv-added { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em;
-                color: #4ade80; border: 1px solid rgba(74,222,128,0.4); border-radius: 999px; padding: 0.05rem 0.4rem; }
-    .fs-act { max-height: 40vh; overflow-y: auto; display: flex; flex-direction: column; gap: 0.2rem; }
-    .fs-arow {
-      display: grid; grid-template-columns: 4.5rem minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1.2fr) 2.5rem;
-      gap: 0.75rem; align-items: baseline; padding: 0.4rem 0.7rem; border-radius: 7px;
-      background: rgba(255,255,255,0.03); border: 1px solid var(--border-subtle); font-size: 0.82rem;
-    }
-    .fs-atime { color: var(--text-soft); font-size: 0.7rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
-    .fs-atg { color: var(--text-primary); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .fs-aun, .fs-asite { color: var(--text-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .fs-aun i, .fs-asite i { opacity: 0.6; font-size: 0.72rem; }
-    .fs-arx { text-align: right; }
-    .fs-rx { color: var(--text-soft); font-size: 0.7rem; font-variant-numeric: tabular-nums; }
 
     /* ---- ADS-B receiver activity (showAdsbStats) ---- */
     .ab-polar-wrap { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;
@@ -466,13 +460,9 @@
     .ab-hex { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #7dd3fc; }
     .ab-soft { color: var(--text-soft); }
     .ab-detail { color: var(--text-soft); font-size: 0.7rem; }
-    .fs-enc { color: #fcd34d; background: rgba(234,179,8,0.14); border: 1px solid rgba(234,179,8,0.4);
-      font-size: 0.58rem; font-weight: 700; padding: 0.02rem 0.28rem; border-radius: 4px; margin-right: 0.35rem; vertical-align: middle; }
     @media (max-width: 640px) {
       .fs-tiles { grid-template-columns: repeat(3, 1fr); }
       .fs-cols, .fs-cols.pg-cols { grid-template-columns: 1fr; }
-      .fs-arow { grid-template-columns: 3.6rem minmax(0, 1fr) 1.8rem; }
-      .fs-aun, .fs-asite { display: none; }
     }
     /* Add-node form */
     .add-node { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.25rem 0 0.5rem; }
@@ -548,7 +538,7 @@
     /* Lists sized for the old popup get the page's height instead: one
        scrollbar (the page's), not a box scrolling inside it. The ADS-B tables
        can run to hundreds of rows, so they keep a cap, just a taller one. */
-    .node-page .fs-act, .node-page .msg-list { max-height: none; overflow: visible; }
+    .node-page .msg-list { max-height: none; overflow: visible; }
     .node-page .ab-scroll { max-height: 60vh; }
     /* Anything that must stack above the open node page (the location
        picker and the install modal). Base overlay is z-index 1000. */
@@ -1509,6 +1499,16 @@
         body = `
           <div class="fs-wins">${winBtns('stats', 'setStatsWindow')}</div>
           <div id="stats-body"><div class="loading" style="padding:2rem;"><i class="fas fa-spinner"></i></div></div>
+          <div class="nm-card">
+            <div class="nm-card-h">
+              <span class="nm-card-t">Decode health</span>
+              <div class="fs-wins">${['24h', '7d'].map(w =>
+                `<button class="fs-win${w === '24h' ? ' active' : ''}" data-kind="decode" data-w="${w}" onclick="setDecodeRange('${w}')">${w === '24h' ? '24h' : '7 days'}</button>`).join('')}</div>
+            </div>
+            <div class="dc-wrap"><canvas id="decode-chart" role="img" aria-label="Decode rate per site over time"></canvas>
+              <div class="dc-empty" id="decode-empty" hidden></div></div>
+            <div class="dc-note">How much of each site's control channel your node decodes cleanly. Steady and high is healthy; drops mean interference, a weak signal or the node being busy.</div>
+          </div>
           <div id="survey-body"></div>`;
       }
 
@@ -1582,6 +1582,10 @@
         _statsWindow = '24h';
         loadNodeStats();
         _statsPoll = setInterval(loadNodeStats, 15000);
+        // Samples land about once a minute, so the chart refreshes at that pace.
+        _decodeRange = '24h';
+        loadNodeDecode();
+        _decodePoll = setInterval(loadNodeDecode, 60000);
         // Site surveys change only when staff run one, so this is fetched once
         // on open rather than polled.
         loadNodeSurveys(nodeId);
@@ -1594,6 +1598,8 @@
       if (_pgPoll) { clearInterval(_pgPoll); _pgPoll = null; }
       if (_statsPoll) { clearInterval(_statsPoll); _statsPoll = null; }
       if (_abPoll) { clearInterval(_abPoll); _abPoll = null; }
+      if (_decodePoll) { clearInterval(_decodePoll); _decodePoll = null; }
+      if (_decodeChart) { _decodeChart.destroy(); _decodeChart = null; }
       // Bumping the sequence drops any response still in flight for this node.
       _pgSeq++; _pgBusy = false;
       _pgNodeId = null; _statsNodeId = null; _abNodeId = null; _nmNodeId = null;
@@ -1632,7 +1638,7 @@
 
     // --- Per-node activity & stats (radio nodes) -----------------------------
     // A LIGHT owner-facing summary of what this node is hearing: calls,
-    // receptions, top talkgroup / unit / site, and a short recent-call feed.
+    // receptions, top talkgroup / unit / site.
     // Deliberately less than the staff Data page. Polls every 15s while open.
     let _statsPoll = null;
     let _statsNodeId = null;
@@ -1689,7 +1695,7 @@
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        _renderNodeSurveys(data.surveys || []);
+        _renderNodeSurveys(data.surveys || [], data.passPct);
       } catch (e) {
         // A node that has never been surveyed is the normal case, and so is an
         // older backend that has no such endpoint: say nothing rather than
@@ -1698,47 +1704,152 @@
       }
     }
 
-    function _renderNodeSurveys(surveys) {
+    function _renderNodeSurveys(surveys, passPct) {
       const body = document.getElementById('survey-body');
       if (!body) return;
       const latest = surveys[0];
       if (!latest) { body.innerHTML = ''; return; }
       const statusText = {
-        running: 'The test is running now.', done: 'The test finished.',
-        failed: 'The test did not finish.', timeout: 'The test timed out.',
+        running: 'Running now', done: 'Finished',
+        failed: 'Did not finish', timeout: 'Timed out',
       }[latest.status] || '';
-      // An owner wants to know which sites their node hears, strongest first.
-      // Sites the dataset lists no control channel for were never testable and
-      // are not a result — they are counted in the summary, not listed.
-      const RANK = { pass: 0, fail: 1, unmeasured: 2, noLock: 3 };
+      // Totals, not a row per site: an owner wants to know how well placed
+      // their node is, not read through every tower that was tested.
       const all = latest.results || [];
-      const notTestable = all.filter(r => r.verdict === 'skipped').length;
-      const rows = all
-        .filter(r => r.verdict !== 'skipped')
-        .sort((a, b) => (RANK[a.verdict] ?? 9) - (RANK[b.verdict] ?? 9)
-          || (b.medianPct ?? -1) - (a.medianPct ?? -1)
-          || String(a.siteName || '').localeCompare(String(b.siteName || '')))
-        .map(r => {
-        const cls = r.verdict === 'pass' ? 'sv-pass' : r.verdict === 'fail' ? 'sv-fail' : 'sv-none';
-        const pct = r.medianPct != null
-          ? `${Math.round(r.medianPct)}%`
-          : r.verdict === 'skipped' ? 'not listed'
-          : r.verdict === 'noLock' ? 'not heard'
-          : 'no reading';
-        const freq = r.freqHz ? `<span class="sv-freq">${(r.freqHz / 1e6).toFixed(4)} MHz</span>` : '';
-        return `<div class="sv-row ${cls}">
-          <span class="sv-site">${escapeHtml(r.siteName || '—')} ${freq}</span>
-          <span class="sv-pct">${pct}</span>
-          <span>${r.added ? '<span class="sv-added">added</span>' : ''}</span>
-        </div>`;
-      }).join('');
+      const count = (pred) => all.filter(pred).length;
+      const tested = count(r => r.verdict !== 'skipped');
+      const good = count(r => r.verdict === 'pass');
+      const weak = count(r => r.verdict === 'fail');
+      const notHeard = count(r => r.verdict === 'noLock' || r.verdict === 'unmeasured');
+      const notListed = count(r => r.verdict === 'skipped');
+      const added = all.filter(r => r.added).length || latest.added || 0;
+      const best = all.filter(r => r.medianPct != null).sort((a, b) => b.medianPct - a.medianPct)[0];
+      const tile = (v, label, cls) =>
+        `<div class="fs-tile"><div class="fs-tile-v ${cls || ''}">${Number(v).toLocaleString()}</div><div class="fs-tile-l">${label}</div></div>`;
+      const ago = _statsTimeAgo(latest.startedAt);
       body.innerHTML = `
-        <div class="fs-act-h">Site survey</div>
-        <div class="sv-meta">We checked how well your node hears ${latest.candidates || 0} nearby radio site(s).
-          ${statusText}${latest.added ? ` ${latest.added} site(s) were added to its channel list.` : ''}
-          ${notTestable ? ` ${notTestable} had no control channel listed and could not be tested.` : ''}
-          ${_statsTimeAgo(latest.startedAt) ? `Last run ${escapeHtml(_statsTimeAgo(latest.startedAt))}.` : ''}</div>
-        ${rows || '<div class="msg-empty">No sites were tested.</div>'}`;
+        <div class="nm-card">
+          <div class="nm-card-h"><span class="nm-card-t">Site survey</span></div>
+          <div class="sv-meta">How well your node hears the radio sites near it.
+            ${statusText ? escapeHtml(statusText) : ''}${ago ? ` · last run ${escapeHtml(ago)}` : ''}</div>
+          <div class="sv-tiles">
+            ${tile(tested, 'Sites tested')}
+            ${tile(good, `Heard well${passPct ? ` (${passPct}%+)` : ''}`, 'sv-good')}
+            ${tile(weak, 'Heard weakly', 'sv-weak')}
+            ${tile(notHeard, 'Not heard', 'sv-soft')}
+            ${tile(added, 'Added to channels', 'sv-good')}
+            ${notListed ? tile(notListed, 'Not testable', 'sv-soft') : ''}
+          </div>
+          ${best ? `<div class="sv-best">Strongest: <b>${escapeHtml(best.siteName || '—')}</b> at ${Math.round(best.medianPct)}%</div>` : ''}
+        </div>`;
+    }
+
+    // --- Decode health chart (radio nodes) -----------------------------------
+    // One line per site the node decodes, from the per-minute decode samples
+    // (kept 7 days, so 24h or 7 days). A gap is time nothing was measured.
+    let _decodeRange = '24h';
+    let _decodePoll = null;
+    let _decodeChart = null;
+    // Distinct and readable on the dark card, busiest site first.
+    const _DECODE_COLOURS = ['#38bdf8', '#4ade80', '#fbbf24', '#c084fc', '#f472b6', '#2dd4bf', '#fb923c', '#a3e635'];
+
+    function setDecodeRange(r) {
+      if (r === _decodeRange) return;
+      _decodeRange = r;
+      document.querySelectorAll('#node-modal .fs-win[data-kind="decode"]').forEach(b => b.classList.toggle('active', b.dataset.w === r));
+      loadNodeDecode();
+    }
+    window.setDecodeRange = setDecodeRange;
+
+    async function loadNodeDecode() {
+      const nodeId = _statsNodeId;
+      if (!nodeId) return;
+      const range = _decodeRange;
+      try {
+        const jwt = await getToken();
+        const res = await fetch(`${API_BASE_URL}/api/feeder/nodes/${nodeId}/decode?range=${encodeURIComponent(range)}`, {
+          headers: { 'Authorization': 'Bearer ' + jwt },
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const d = await res.json();
+        // Closed, or switched node or range, while the request was out.
+        if (_statsNodeId !== nodeId || _decodeRange !== range) return;
+        _renderNodeDecode(d);
+      } catch (e) {
+        if (_statsNodeId === nodeId) _decodeEmpty("Couldn't load decode history. Try again shortly.");
+      }
+    }
+
+    function _decodeEmpty(text) {
+      if (text && _decodeChart) { _decodeChart.destroy(); _decodeChart = null; }
+      const el = document.getElementById('decode-empty');
+      const canvas = document.getElementById('decode-chart');
+      if (el) { el.hidden = !text; el.textContent = text || ''; }
+      if (canvas) canvas.style.display = text ? 'none' : '';
+    }
+
+    function _renderNodeDecode(d) {
+      const canvas = document.getElementById('decode-chart');
+      if (!canvas || typeof Chart === 'undefined') return;
+      const sites = d.sites || [];
+      if (!sites.length) {
+        _decodeEmpty('No decode readings in this range yet. They appear once the node is decoding a site.');
+        return;
+      }
+      _decodeEmpty('');
+      // Category axis with pre-formatted labels: no date adapter is loaded.
+      const labels = (d.at || []).map(iso => {
+        const dt = new Date(iso);
+        return d.range === '24h'
+          ? dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : dt.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit' });
+      });
+      const datasets = sites.map((s, i) => {
+        const c = _DECODE_COLOURS[i % _DECODE_COLOURS.length];
+        const name = s.name || `Site ${s.rfss}-${s.site}`;
+        return {
+          label: s.latestPct != null ? `${name} · ${Math.round(s.latestPct)}%` : name,
+          siteName: name,
+          data: s.decodePct,
+          borderColor: c, backgroundColor: c,
+          borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, pointHitRadius: 10,
+          tension: 0.3, spanGaps: false,
+        };
+      });
+      // A poll redraws in place, so hover and tooltips do not flicker.
+      if (_decodeChart) {
+        _decodeChart.data.labels = labels;
+        _decodeChart.data.datasets = datasets;
+        _decodeChart.update('none');
+        return;
+      }
+      const font = { family: "'Space Grotesk', sans-serif", size: 10 };
+      _decodeChart = new Chart(canvas, {
+        type: 'line',
+        data: { labels, datasets },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { position: 'bottom', labels: { color: '#cbd5e1', boxWidth: 10, boxHeight: 10, font: { ...font, size: 11 } } },
+            tooltip: {
+              backgroundColor: '#121e33', borderColor: 'rgba(148,163,184,0.25)', borderWidth: 1,
+              titleColor: '#f1f5f9', bodyColor: '#cbd5e1', padding: 10,
+              callbacks: {
+                label: (ctx) => ctx.parsed.y == null
+                  ? `${ctx.dataset.siteName}: not measured`
+                  : `${ctx.dataset.siteName}: ${ctx.parsed.y.toFixed(1)}%`,
+              },
+            },
+          },
+          scales: {
+            x: { grid: { display: false }, border: { color: 'rgba(148,163,184,0.16)' },
+                 ticks: { color: '#64748b', maxTicksLimit: 8, maxRotation: 0, font } },
+            y: { min: 0, max: 100, grid: { color: 'rgba(148,163,184,0.07)' }, border: { display: false },
+                 ticks: { color: '#64748b', maxTicksLimit: 6, callback: v => v + '%', font } },
+          },
+        },
+      });
     }
 
     function _statsTimeAgo(iso) {
@@ -1792,26 +1903,7 @@
         ${listCol('Top sites', d.topSites, st)}
       </div>`;
 
-      const act = (d.activity || []).length
-        ? `<div class="fs-act">${d.activity.map(a => {
-            const tgTxt = a.talkgroupLabel || (a.talkgroup != null ? ('TG ' + a.talkgroup) : '—');
-            const unTxt = a.sourceAlias || (a.sourceUnit != null ? String(a.sourceUnit) : '—');
-            const site = a.siteName || (a.rfss != null && a.site != null ? (a.rfss + '-' + a.site) : '');
-            const enc = a.encrypted ? `<span class="fs-enc">ENC</span>` : '';
-            const rx = a.receptions > 1 ? `<span class="fs-rx" title="${a.receptions} receptions">×${a.receptions}</span>` : '';
-            return `<div class="fs-arow">
-              <span class="fs-atime">${escapeHtml(_statsTimeAgo(a.at))}</span>
-              <span class="fs-atg">${enc}${escapeHtml(tgTxt)}</span>
-              <span class="fs-aun"><i class="fas fa-user-astronaut"></i> ${escapeHtml(unTxt)}</span>
-              <span class="fs-asite">${site ? `<i class="fas fa-tower-broadcast"></i> ${escapeHtml(site)}` : ''}</span>
-              <span class="fs-arx">${rx}</span>
-            </div>`;
-          }).join('')}</div>`
-        : `<div class="msg-empty">No calls heard in this window yet.</div>`;
-
-      body.innerHTML = `${tiles}${cols}
-        <div class="fs-act-h">Recent calls</div>
-        ${act}`;
+      body.innerHTML = `${tiles}${cols}`;
     }
     // ---- ADS-B receiver activity ----------------------------------------
     //

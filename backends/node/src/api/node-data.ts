@@ -2950,8 +2950,9 @@ function systemSiteList(
 // Feeder-facing per-node summary — a LIGHT slice of the Data page, scoped to
 // one node the contributor owns. Backs GET /api/feeder/nodes/:id/stats so a
 // volunteer can see their own node's calls/receptions + top talkgroup / unit /
-// site + a short recent-activity feed, WITHOUT the staff Data page's full
-// drill-downs. Reads node_radio_events scoped to one node_id + window only.
+// site, WITHOUT the staff Data page's full drill-downs. (The recent-call feed
+// was dropped: the owner page no longer shows it, and it grouped the whole
+// window on every 15s poll.) Reads node_radio_events scoped to one node_id + window only.
 // ---------------------------------------------------------------------------
 export interface FeederRadioStats {
   window: DetailWindow;
@@ -2966,20 +2967,6 @@ export interface FeederRadioStats {
     receptions: number;
     lastSeen: string;
   }>;
-  activity: Array<{
-    id: number;
-    at: string;
-    talkgroup: number | null;
-    talkgroupLabel: string | null;
-    system: number | null;
-    sourceUnit: number | null;
-    sourceAlias: string | null;
-    rfss: number | null;
-    site: number | null;
-    siteName: string | null;
-    encrypted: boolean;
-    receptions: number;
-  }>;
 }
 
 export async function feederRadioStats(
@@ -2990,12 +2977,9 @@ export async function feederRadioStats(
   const params: unknown[] = [WINDOW_INTERVAL[window], nodeId];
   // $2 = node id, $1 = window interval. Shared by every query below.
   const where = () => `node_id = $2 AND received_at >= now() - $1::interval`;
-  const [detail, siteMap, labels, tgColorsFeeder, evRadioDisp, siteQ, actQ] = await Promise.all([
+  const [detail, siteMap, siteQ] = await Promise.all([
     scopedRadioDetail(pool, where, params),
     siteNames(pool),
-    talkgroupLabels(),
-    talkgroupColors(),
-    radioDisplay(),
     pool.query<{
       rfss: number;
       site: number;
@@ -3018,44 +3002,6 @@ export async function feederRadioStats(
         LIMIT 5`,
       params,
     ),
-    pool.query<{
-      id: string;
-      at: Date;
-      talkgroup: number | null;
-      system: number | null;
-      source_unit: number | null;
-      source_alias: string | null;
-      rfss: number | null;
-      site: number | null;
-      encrypted: boolean;
-      receptions: unknown;
-    }>(
-      // One row per logical call (deduped receptions), newest first — the
-      // per-field array_agg prefers the ACTION='CALL' reception for the
-      // identity fields, mirroring the Data page's events list.
-      `SELECT logical_call_id::text AS id,
-              MAX(received_at) AS at,
-              (array_agg(talkgroup ORDER BY (action = 'CALL') DESC, received_at DESC)
-                 FILTER (WHERE talkgroup IS NOT NULL))[1] AS talkgroup,
-              (array_agg(system ORDER BY received_at DESC)
-                 FILTER (WHERE system IS NOT NULL))[1] AS system,
-              (array_agg(source_unit ORDER BY (action = 'CALL') DESC, received_at DESC)
-                 FILTER (WHERE source_unit IS NOT NULL))[1] AS source_unit,
-              (array_agg(source_alias ORDER BY received_at DESC)
-                 FILTER (WHERE source_alias IS NOT NULL AND source_alias <> source_unit::text))[1] AS source_alias,
-              (array_agg(site_rfss ORDER BY received_at DESC)
-                 FILTER (WHERE site_rfss IS NOT NULL))[1] AS rfss,
-              (array_agg(site_id ORDER BY received_at DESC)
-                 FILTER (WHERE site_id IS NOT NULL))[1] AS site,
-              bool_or(encrypted) AS encrypted,
-              COUNT(*)::int AS receptions
-         FROM node_radio_events
-        WHERE ${where()} AND ${CALL_GROUP}
-        GROUP BY logical_call_id
-        ORDER BY at DESC
-        LIMIT 15`,
-      params,
-    ),
   ]);
   return {
     window,
@@ -3069,27 +3015,6 @@ export async function feederRadioStats(
       calls: num(r.calls),
       receptions: num(r.receptions),
       lastSeen: iso(r.last_seen),
-    })),
-    activity: actQ.rows.map((r) => ({
-      id: Number(r.id),
-      at: iso(r.at),
-      talkgroup: r.talkgroup,
-      talkgroupLabel: r.talkgroup != null ? labels.get(r.talkgroup) ?? null : null,
-      talkgroupColor: r.talkgroup != null ? tgColorsFeeder.get(r.talkgroup) ?? null : null,
-      system: r.system,
-      sourceUnit: r.source_unit,
-      // The OTA alias this event carried (what the radio transmitted), plus
-      // the radio's configured alias + agency colour, which are properties of
-      // the UID rather than of the event.
-      sourceAlias: r.source_alias,
-      sourceUnitAlias: r.source_unit != null ? evRadioDisp.labels.get(r.source_unit) ?? null : null,
-      sourceAgency: r.source_unit != null ? evRadioDisp.agencies.get(r.source_unit) ?? null : null,
-      sourceColor: r.source_unit != null ? evRadioDisp.colors.get(r.source_unit) ?? null : null,
-      rfss: r.rfss,
-      site: r.site,
-      siteName: siteNameFor(siteMap, r.system, r.rfss, r.site),
-      encrypted: r.encrypted === true,
-      receptions: num(r.receptions),
     })),
   };
 }
@@ -6374,6 +6299,106 @@ nodeDataRouter.get('/api/node-data/live', requireRole(canViewNodeData), async (c
     return c.json({ error: 'failed to load live state' }, 500);
   }
 });
+
+/**
+ * One node's decode health over time, one series per site it decodes: the
+ * owner's "is my node healthy" chart on feeder.html.
+ *
+ * Same samples and the same rules as the staff site chart (site-decode): a
+ * zero reading means "not measured", buckets are gap-filled so silence shows
+ * as a gap, and the range stops at the samples' 7-day retention. Sites are
+ * the ones this node actually reported in the range, busiest first, capped
+ * so the chart stays readable.
+ */
+export const FEEDER_DECODE_RANGES: Record<string, { interval: string; bucketMinutes: number }> = {
+  '24h': { interval: '24 hours', bucketMinutes: 10 },
+  '7d': { interval: '7 days', bucketMinutes: 60 },
+};
+const FEEDER_DECODE_MAX_SITES = 8;
+
+export interface FeederNodeDecode {
+  range: string;
+  bucketMinutes: number;
+  /** Bucket start times, shared by every series. */
+  at: string[];
+  sites: Array<{
+    system: number;
+    rfss: number;
+    site: number;
+    name: string | null;
+    /** Average decode % per bucket; null where nothing was measured. */
+    decodePct: Array<number | null>;
+    /** The latest bucket with a reading, for a one-glance figure. */
+    latestPct: number | null;
+  }>;
+}
+
+export async function feederNodeDecode(
+  pool: Pool,
+  nodeId: string,
+  rangeRaw: string,
+): Promise<FeederNodeDecode> {
+  const range = FEEDER_DECODE_RANGES[rangeRaw] ? rangeRaw : '24h';
+  const { interval, bucketMinutes } = FEEDER_DECODE_RANGES[range]!;
+  const [r, siteMap] = await Promise.all([
+    pool.query<{
+      system_id: number;
+      rfss: number;
+      site_id: number;
+      bucket: Date;
+      decode_pct: string | null;
+      samples: number;
+    }>(
+      `SELECT system_id, rfss, site_id,
+              to_timestamp(floor(extract(epoch FROM sampled_at) / ${bucketMinutes * 60})
+                           * ${bucketMinutes * 60}) AS bucket,
+              AVG(decode_pct) FILTER (WHERE decode_pct > 0) AS decode_pct,
+              COUNT(*) FILTER (WHERE decode_pct > 0)::int AS samples
+         FROM node_site_decode_samples
+        WHERE node_id = $1 AND sampled_at >= now() - $2::interval
+        GROUP BY system_id, rfss, site_id, bucket`,
+      [nodeId, interval],
+    ),
+    siteNames(pool),
+  ]);
+
+  const bucketMs = bucketMinutes * 60_000;
+  const nowMs = Date.now();
+  const startMs = Math.floor((nowMs - intervalMs(interval)) / bucketMs) * bucketMs;
+  const at: string[] = [];
+  for (let t = startMs; t <= nowMs; t += bucketMs) at.push(new Date(t).toISOString());
+
+  const bySite = new Map<string, { system: number; rfss: number; site: number; samples: number;
+    pct: Map<number, number> }>();
+  for (const x of r.rows) {
+    if (x.decode_pct === null) continue;
+    const key = `${x.system_id}:${x.rfss}:${x.site_id}`;
+    let e = bySite.get(key);
+    if (!e) {
+      e = { system: x.system_id, rfss: x.rfss, site: x.site_id, samples: 0, pct: new Map() };
+      bySite.set(key, e);
+    }
+    e.samples += num(x.samples);
+    e.pct.set(new Date(x.bucket).getTime(), Number(x.decode_pct));
+  }
+
+  const sites = [...bySite.values()]
+    .sort((a, b) => b.samples - a.samples)
+    .slice(0, FEEDER_DECODE_MAX_SITES)
+    .map((e) => {
+      const decodePct = at.map((iso) => e.pct.get(new Date(iso).getTime()) ?? null);
+      let latestPct: number | null = null;
+      for (let i = decodePct.length - 1; i >= 0; i--) {
+        if (decodePct[i] != null) { latestPct = decodePct[i]!; break; }
+      }
+      return {
+        system: e.system, rfss: e.rfss, site: e.site,
+        name: siteNameFor(siteMap, e.system, e.rfss, e.site),
+        decodePct, latestPct,
+      };
+    });
+  return { range, bucketMinutes, at, sites };
+}
 
 /** Millisecond length of the site-decode range intervals ('1 hour' etc.). */
 function intervalMs(interval: string): number {

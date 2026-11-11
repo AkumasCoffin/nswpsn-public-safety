@@ -53,7 +53,7 @@ import { AU_STATES } from '../lib/stateMask.js';
 import { pushConfigToNode } from '../services/nodes/configPush.js';
 import { listSurveys, runningSurveys, SURVEY_PASS_PCT } from '../services/siteSurvey.js';
 import { getPool } from '../db/pool.js';
-import { feederRadioStats, feederPagerOverview, feederPagerMessages, pagerPaging } from './node-data.js';
+import { feederRadioStats, feederPagerOverview, feederPagerMessages, pagerPaging, feederNodeDecode } from './node-data.js';
 
 export const feederRouter = new Hono();
 
@@ -962,8 +962,7 @@ feederRouter.post('/api/feeder/nodes/:id/rotate-token', async (c) => {
 
 // ---------------------------------------------------------------------------
 // GET /api/feeder/nodes/:id/stats?window=24h|7d|30d — a LIGHT per-node summary
-// (calls / receptions + top talkgroup / unit / site + a short recent-activity
-// feed) so a contributor can see what their OWN radio node is hearing, without
+// (calls / receptions + top talkgroup / unit / site) so a contributor can see what their OWN radio node is hearing, without
 // the staff Data page's full drill-downs. Owner-scoped (radio_contributor), NOT
 // gated on any staff/team role.
 // ---------------------------------------------------------------------------
@@ -1167,6 +1166,27 @@ feederRouter.put('/api/feeder/nodes/:id/location', async (c) => {
   } catch (err) {
     log.error({ err, id: node.id }, 'Error setting node location');
     return c.json({ error: 'Failed to set location' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/feeder/nodes/:id/decode?range=24h|7d — the owner's decode-health
+// chart: one series per site the node decodes, so they can see their node is
+// healthy (and which site is not). Radio only; samples are kept 7 days.
+// ---------------------------------------------------------------------------
+feederRouter.get('/api/feeder/nodes/:id/decode', async (c) => {
+  const node = await ownedNode(c);
+  if (!node) return c.json({ error: 'not your node' }, 404);
+  if (node.kind !== 'radio') return c.json({ error: 'decode history is radio-only' }, 400);
+  try {
+    const pool = await getPool();
+    if (!pool) return c.json({ error: 'database unavailable' }, 503);
+    const range = (new URL(c.req.url).searchParams.get('range') ?? '24h').toLowerCase();
+    c.header('Cache-Control', 'no-store');
+    return c.json(await feederNodeDecode(pool, node.id, range));
+  } catch (err) {
+    log.error({ err, id: node.id }, 'Error building feeder decode history');
+    return c.json({ error: 'Failed to load decode history' }, 500);
   }
 });
 
