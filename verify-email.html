@@ -203,7 +203,7 @@
     // Parse URL hash parameters
     function parseHashParams() {
       const hash = window.location.hash.substring(1);
-      const params = {};
+      const params = Object.create(null);
       
       if (hash) {
         hash.split('&').forEach(param => {
@@ -222,7 +222,7 @@
 
     // Parse URL search parameters
     function parseSearchParams() {
-      const params = {};
+      const params = Object.create(null);
       const urlParams = new URLSearchParams(window.location.search);
       for (const [key, value] of urlParams.entries()) {
         params[key] = value;
