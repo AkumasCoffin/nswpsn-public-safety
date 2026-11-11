@@ -66,7 +66,7 @@ beforeEach(() => {
           // The same tower, once before the system was identified (-1):
           // one site, named from the real system.
           { system_id: -1, rfss: 1, site_id: 7, bucket: bucketAgo(30), decode_pct: '96.5', samples: 20 },
-          { system_id: 1, rfss: 1, site_id: 7, bucket: bucketAgo(0), decode_pct: '94', samples: 15 },
+          { system_id: 1, rfss: 1, site_id: 7, bucket: bucketAgo(0), decode_pct: '94', decode_min: '71', samples: 15 },
           { system_id: 1, rfss: 1, site_id: 9, bucket: bucketAgo(20), decode_pct: '70', samples: 25 },
           { system_id: 1, rfss: 1, site_id: 9, bucket: bucketAgo(0), decode_pct: '61', samples: 10 },
           // A glimpse: too few readings to be a site the node decodes.
@@ -106,6 +106,10 @@ describe('GET /api/feeder/nodes/:id/decode', () => {
     expect(kh.decodePct).toHaveLength(d.at.length);
     expect(kh.latestPct).toBe(94);
     expect(kh.decodePct.filter((v) => v != null)).toEqual([96.5, 94]);
+    // The worst reading rides alongside, on the same axis.
+    const mins = (kh as unknown as { decodeMin: Array<number | null> }).decodeMin;
+    expect(mins).toHaveLength(d.at.length);
+    expect(mins.filter((v) => v != null)).toEqual([71]);
     expect((kh as unknown as { avgPct: number }).avgPct).toBeCloseTo(95.25);
 
     const sql = queryMock.mock.calls.find(([q]) => String(q).includes('node_site_decode_samples'))!;

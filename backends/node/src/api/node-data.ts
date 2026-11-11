@@ -6335,6 +6335,8 @@ export interface FeederNodeDecode {
     name: string | null;
     /** Average decode % per bucket; null where nothing was measured. */
     decodePct: Array<number | null>;
+    /** Worst reading in each bucket: an average hides a short drop. */
+    decodeMin: Array<number | null>;
     /** The latest bucket with a reading, for a one-glance figure. */
     latestPct: number | null;
     /** Mean over the buckets with a reading. */
@@ -6356,6 +6358,7 @@ export async function feederNodeDecode(
       site_id: number;
       bucket: Date;
       decode_pct: string | null;
+      decode_min: string | null;
       samples: number;
     }>(
       // MAX(system_id): the real system wins over the -1 placeholder.
@@ -6363,6 +6366,7 @@ export async function feederNodeDecode(
               to_timestamp(floor(extract(epoch FROM sampled_at) / ${bucketMinutes * 60})
                            * ${bucketMinutes * 60}) AS bucket,
               AVG(decode_pct) FILTER (WHERE decode_pct > 0) AS decode_pct,
+              MIN(decode_pct) FILTER (WHERE decode_pct > 0) AS decode_min,
               COUNT(*) FILTER (WHERE decode_pct > 0)::int AS samples
          FROM node_site_decode_samples
         WHERE node_id = $1 AND sampled_at >= now() - $2::interval
@@ -6379,18 +6383,20 @@ export async function feederNodeDecode(
   for (let t = startMs; t <= nowMs; t += bucketMs) at.push(new Date(t).toISOString());
 
   const bySite = new Map<string, { system: number; rfss: number; site: number; samples: number;
-    pct: Map<number, number> }>();
+    pct: Map<number, number>; min: Map<number, number> }>();
   for (const x of r.rows) {
     if (x.decode_pct === null) continue;
     const key = `${x.rfss}:${x.site_id}`;
     let e = bySite.get(key);
     if (!e) {
-      e = { system: x.system_id, rfss: x.rfss, site: x.site_id, samples: 0, pct: new Map() };
+      e = { system: x.system_id, rfss: x.rfss, site: x.site_id, samples: 0, pct: new Map(), min: new Map() };
       bySite.set(key, e);
     }
     if (x.system_id > e.system) e.system = x.system_id;
     e.samples += num(x.samples);
-    e.pct.set(new Date(x.bucket).getTime(), Number(x.decode_pct));
+    const t = new Date(x.bucket).getTime();
+    e.pct.set(t, Number(x.decode_pct));
+    if (x.decode_min !== null) e.min.set(t, Number(x.decode_min));
   }
 
   const sites = [...bySite.values()]
@@ -6399,6 +6405,7 @@ export async function feederNodeDecode(
     .slice(0, FEEDER_DECODE_MAX_SITES)
     .map((e) => {
       const decodePct = at.map((iso) => e.pct.get(new Date(iso).getTime()) ?? null);
+      const decodeMin = at.map((iso) => e.min.get(new Date(iso).getTime()) ?? null);
       let latestPct: number | null = null;
       for (let i = decodePct.length - 1; i >= 0; i--) {
         if (decodePct[i] != null) { latestPct = decodePct[i]!; break; }
@@ -6408,7 +6415,7 @@ export async function feederNodeDecode(
       return {
         system: e.system, rfss: e.rfss, site: e.site,
         name: siteNameFor(siteMap, e.system, e.rfss, e.site),
-        decodePct, latestPct, avgPct,
+        decodePct, decodeMin, latestPct, avgPct,
       };
     });
   return { range, bucketMinutes, at, sites };

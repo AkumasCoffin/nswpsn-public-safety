@@ -430,7 +430,21 @@
     .dc-name { color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .dc-head .dc-name { color: var(--text-soft); }
     .dc-strip { display: flex; gap: 1px; height: 20px; }
-    .dc-cell { flex: 1 1 0; min-width: 0; border-radius: 2px; }
+    .dc-cell { flex: 1 1 0; min-width: 0; border-radius: 2px; cursor: crosshair; }
+    /* The hovered block: lifted out of the strip so you can see which one
+       the tooltip is describing. */
+    .dc-cell.dc-hot { outline: 2px solid #f1f5f9; outline-offset: 1px; position: relative; z-index: 1; }
+    .dc-tip { position: fixed; z-index: 950; pointer-events: none; min-width: 12rem; max-width: 18rem;
+              background: #121e33; border: 1px solid rgba(148,163,184,0.25); border-radius: 8px;
+              padding: 0.55rem 0.7rem; box-shadow: 0 8px 24px rgba(0,0,0,0.45); font-size: 0.78rem; }
+    .dc-tip[hidden] { display: none; }
+    .dc-tip-site { color: var(--text-primary); font-weight: 600; margin-bottom: 0.1rem; }
+    .dc-tip-time { color: var(--text-soft); font-size: 0.72rem; margin-bottom: 0.45rem; }
+    .dc-tip-row { display: flex; justify-content: space-between; gap: 1rem; color: var(--text-soft); }
+    .dc-tip-row b { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+    .dc-tip-band { display: flex; align-items: center; gap: 0.35rem; margin-top: 0.45rem; padding-top: 0.4rem;
+                   border-top: 1px solid var(--border-subtle); color: var(--text-primary); }
+    .dc-tip-band span:last-child { color: var(--text-soft); }
     .dc-axis { display: flex; justify-content: space-between; text-transform: none; letter-spacing: 0; font-size: 0.68rem; }
     .dc-now { color: var(--text-primary); font-variant-numeric: tabular-nums; white-space: nowrap; display: inline-flex; align-items: center; gap: 0.35rem; }
     .dc-head .dc-now { color: var(--text-soft); }
@@ -1536,7 +1550,7 @@
               <span><span class="dc-dot dc-poor"></span>Poor, under 65%</span>
               <span><span class="dc-dot dc-none"></span>No reading</span>
             </div>
-            <div class="dc-note">How much of each site's control channel your node decodes cleanly. Steady green is healthy; amber or red means interference, a weak signal or the node being busy. Hover a strip for the time and figure.</div>
+            <div class="dc-note">How much of each site's control channel your node decodes cleanly. Steady green is healthy; amber or red means interference, a weak signal or the node being busy. Hover or tap a block for its details.</div>
           </div>
           <div id="survey-body"></div>`;
       }
@@ -1628,6 +1642,8 @@
       if (_statsPoll) { clearInterval(_statsPoll); _statsPoll = null; }
       if (_abPoll) { clearInterval(_abPoll); _abPoll = null; }
       if (_decodePoll) { clearInterval(_decodePoll); _decodePoll = null; }
+      _decodeTipHide();
+      _decodeData = null;
       // Bumping the sequence drops any response still in flight for this node.
       _pgSeq++; _pgBusy = false;
       _pgNodeId = null; _statsNodeId = null; _abNodeId = null; _nmNodeId = null;
@@ -1836,14 +1852,17 @@
           : dt.toLocaleString([], { weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
       };
       const pct = (v) => v == null ? '—' : `${Math.round(v)}%`;
-      const rows = sites.map((s) => {
+      // A minute's refresh replaces every block; the hovered one goes with it.
+      _decodeTipHide();
+      _decodeData = d;
+      const rows = sites.map((s, si) => {
         const name = s.name || `Site ${s.rfss}-${s.site}`;
         const cells = (s.decodePct || []).map((v, i) =>
-          `<span class="dc-cell dc-${_decodeBand(v)}" title="${escapeHtml(fmt(at[i]))} · ${v == null ? 'no reading' : v.toFixed(1) + '%'}"></span>`).join('');
+          `<span class="dc-cell dc-${_decodeBand(v)}" data-s="${si}" data-i="${i}"></span>`).join('');
         const band = _decodeBand(s.latestPct);
         return `<div class="dc-row">
           <div class="dc-name" title="${escapeHtml(name)}">${escapeHtml(name)}</div>
-          <div class="dc-strip">${cells}</div>
+          <div class="dc-strip" aria-label="${escapeHtml(name)} decode rate over time">${cells}</div>
           <div class="dc-now"><span class="dc-dot dc-${band}"></span>${pct(s.latestPct)} <span class="dc-word">${_DECODE_WORD[band]}</span></div>
           <div class="dc-avg">${pct(s.avgPct)}</div>
         </div>`;
@@ -1857,6 +1876,86 @@
           <div class="dc-avg">Average</div>
         </div>
         ${rows}`;
+      _decodeTipWire(el);
+    }
+
+    // One tooltip for every strip, driven by delegated pointer events: a 7-day
+    // view is over a thousand blocks, too many to give each its own listener.
+    // Pointer events, so a tap on a phone shows it as well as a hover.
+    let _decodeData = null;
+    let _decodeHot = null;
+    function _decodeTipEl() {
+      let tip = document.getElementById('dc-tip');
+      if (!tip) {
+        tip = document.createElement('div');
+        tip.id = 'dc-tip';
+        tip.className = 'dc-tip';
+        tip.hidden = true;
+        tip.setAttribute('role', 'tooltip');
+        document.body.appendChild(tip);
+      }
+      return tip;
+    }
+
+    function _decodeTipHide() {
+      const tip = document.getElementById('dc-tip');
+      if (tip) tip.hidden = true;
+      if (_decodeHot) { _decodeHot.classList.remove('dc-hot'); _decodeHot = null; }
+    }
+
+    function _decodeTipWire(el) {
+      if (el.dataset.tipWired) return;
+      el.dataset.tipWired = '1';
+      const show = (e) => {
+        const cell = e.target.closest && e.target.closest('.dc-cell');
+        if (!cell || !_decodeData) { _decodeTipHide(); return; }
+        const site = (_decodeData.sites || [])[Number(cell.dataset.s)];
+        const i = Number(cell.dataset.i);
+        const startIso = (_decodeData.at || [])[i];
+        if (!site || !startIso) { _decodeTipHide(); return; }
+        const avg = site.decodePct[i];
+        const worst = (site.decodeMin || [])[i];
+        const band = _decodeBand(avg);
+        const start = new Date(startIso);
+        const end = new Date(start.getTime() + (_decodeData.bucketMinutes || 10) * 60000);
+        const t = (dt) => dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const day = start.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+        const name = site.name || `Site ${site.rfss}-${site.site}`;
+        const tip = _decodeTipEl();
+        tip.innerHTML = `
+          <div class="dc-tip-site">${escapeHtml(name)}</div>
+          <div class="dc-tip-time">${escapeHtml(day)}, ${escapeHtml(t(start))}–${escapeHtml(t(end))}</div>
+          ${avg == null
+            ? `<div class="dc-tip-row">Nothing was measured in this period.</div>`
+            : `<div class="dc-tip-row"><span>Average</span><b>${avg.toFixed(1)}%</b></div>
+               ${worst != null && Math.round(worst) < Math.round(avg)
+                 ? `<div class="dc-tip-row"><span>Lowest</span><b>${worst.toFixed(1)}%</b></div>` : ''}`}
+          <div class="dc-tip-band"><span class="dc-dot dc-${band}"></span><span>${_DECODE_WORD[band]}</span>${avg == null ? '' : `<span>${
+            band === 'good' ? 'decoding cleanly' : band === 'fair' ? 'some errors' : 'struggling to decode'}</span>`}</div>`;
+        if (_decodeHot !== cell) {
+          if (_decodeHot) _decodeHot.classList.remove('dc-hot');
+          cell.classList.add('dc-hot');
+          _decodeHot = cell;
+        }
+        tip.hidden = false;
+        // Above the block, flipping below near the top edge and kept inside
+        // the window at both sides.
+        const r = cell.getBoundingClientRect();
+        const w = tip.offsetWidth, h = tip.offsetHeight;
+        let x = r.left + r.width / 2 - w / 2;
+        x = Math.max(8, Math.min(x, window.innerWidth - w - 8));
+        let y = r.top - h - 10;
+        if (y < 8) y = r.bottom + 10;
+        tip.style.left = x + 'px';
+        tip.style.top = y + 'px';
+      };
+      el.addEventListener('pointermove', show);
+      el.addEventListener('pointerdown', show);
+      el.addEventListener('pointerleave', _decodeTipHide);
+      // The page body scrolls under a fixed tooltip; drop it rather than let
+      // it float away from its block.
+      const scroller = el.closest('.nm-body');
+      if (scroller) scroller.addEventListener('scroll', _decodeTipHide, { passive: true });
     }
 
     function _statsTimeAgo(iso) {
