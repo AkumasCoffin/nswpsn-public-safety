@@ -1553,6 +1553,13 @@
       box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
     }
     .floating-filter-panel.open { display: block; }
+    /* The detail card (aircraft, repeaters, aerodromes...) sits top-left and
+       runs down past where this panel opens, so with both open they stacked.
+       Step this panel out beside the card instead. Desktop only: below
+       900px the card is a bottom sheet and this panel is not used. */
+    @media (min-width: 901px) {
+      body:has(#adsb-detail-card.open) .floating-filter-panel { left: 304px; }
+    }
     .floating-filter-panel h4 {
       margin: 0 0 10px 0;
       font-size: 13px;
@@ -15438,11 +15445,30 @@ function initPagerHoursFromStorage() {
         // Pill off → only the clicked aircraft's trail shows.
         if (!adsbTrailsEnabled && hex !== focusHex) continue;
         const focused = hex === focusHex;
-        const pts = _adsbTrails[hex];
+        let pts = _adsbTrails[hex];
         if (!pts || pts.length < 2) continue;
         const a = _adsbAircraft.find((x) => x.hex === hex);
         // Trail points + the marker's live position as the head.
         const m = entry.marker.getLatLng();
+        // Never run past the aircraft. The trails and the aircraft list are
+        // fetched separately, so the trail can hold fixes newer than the one
+        // the marker shows; drawn as-is, the line overshot the aircraft and
+        // doubled back to it. Points at the END lying ahead of the marker
+        // along its track go; an older loop (a holding pattern) stays,
+        // because trimming stops at the first point behind.
+        if (a && Number.isFinite(a.trackDeg)) {
+          const tr = a.trackDeg * Math.PI / 180;
+          const ux = Math.sin(tr), uy = Math.cos(tr);
+          const kx = Math.cos(m.lat * Math.PI / 180);
+          let end = pts.length;
+          while (end > 1) {
+            const p = pts[end - 1];
+            const ahead = ((p[1] - m.lng) * kx * ux + (p[0] - m.lat) * uy) * 111.32; // km
+            if (ahead <= 0.05) break;
+            end -= 1;
+          }
+          if (end < pts.length) pts = pts.slice(0, end);
+        }
         const latlngs = pts.map((p) => [p[0], p[1]]);
         latlngs.push([m.lat, m.lng]);
         const alts = pts.map((p) => p[2]);

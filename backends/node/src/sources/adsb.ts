@@ -1127,7 +1127,15 @@ function updateTrails(aircraft: AdsbAircraft[], nowMs: number): void {
     const last = buf[buf.length - 1];
     // Parked/stationary aircraft don't accumulate duplicate points.
     if (last && last[1] === a.lat && last[2] === a.lon) continue;
-    buf.push([nowMs, a.lat, a.lon, a.altFt]);
+    // Stamped with when the fix was MADE, not when the poll saw it. A
+    // receiver's own uploads land here between polls with their real times,
+    // so an aggregator fix a few seconds old stamped "now" went on the end
+    // of a trail that already ran past it: the line overshot the aircraft
+    // and doubled back to it. A fix no newer than what the trail already
+    // holds adds nothing.
+    const fixMs = nowMs - Math.max(0, Number.isFinite(a.ageSec) ? a.ageSec : 0) * 1000;
+    if (last && fixMs <= last[0] + TRAIL_SAME_FIX_MS) continue;
+    buf.push([fixMs, a.lat, a.lon, a.altFt]);
     trimTrail(buf, nowMs);
   }
   // Landed / out-of-coverage: absent hexes keep their trail for a

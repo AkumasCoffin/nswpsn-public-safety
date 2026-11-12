@@ -305,6 +305,34 @@ describe('adsb.trails', () => {
     vi.useRealTimers();
   });
 
+  it('never puts an older aggregator fix after newer receiver points', async () => {
+    vi.useFakeTimers();
+    const t0 = 1_800_000_000_000;
+    vi.setSystemTime(t0);
+    const { fetchAdsbAircraft, adsbTrailsSnapshot, ingestNodeTrailPoints } = await import('../../../src/sources/adsb.js');
+    fetchJsonMock.mockResolvedValue({ ac: [raw({ hex: 'ahead1', lat: -33.0, lon: 151.0 })] });
+    let p = fetchAdsbAircraft();
+    await vi.runAllTimersAsync();
+    await p;
+    // A receiver reports the aircraft further south, up to 2 s ago.
+    vi.setSystemTime(t0 + 20_000);
+    ingestNodeTrailPoints('ahead1', [
+      [t0 + 10_000, -33.1, 151.0, 5000],
+      [t0 + 18_000, -33.2, 151.0, 5000],
+    ], t0 + 20_000);
+    // The next poll carries an aggregator fix older than the newest receiver
+    // point (the poll itself moves the fake clock ~7 s, hence 25 s).
+    vi.setSystemTime(t0 + 30_000);
+    fetchJsonMock.mockResolvedValue({ ac: [raw({ hex: 'ahead1', lat: -33.12, lon: 151.0, seen_pos: 25 })] });
+    p = fetchAdsbAircraft();
+    await vi.runAllTimersAsync();
+    await p;
+    const trail = adsbTrailsSnapshot().trails['ahead1']!;
+    // Still heading south at the end: no doubling back to -33.12.
+    expect(trail[trail.length - 1]![0]).toBe(-33.2);
+    vi.useRealTimers();
+  });
+
   it('keeps absent hexes for the dropout grace then deletes them', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_800_000_000_000);
