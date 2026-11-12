@@ -4173,7 +4173,11 @@
     // ~4 km per 15 s tick, so clustering would rebuild the whole tree
     // every refresh. Markers are diff-updated in place instead (see
     // _rebuildAdsb).
-    const adsbLayer = L.layerGroup();
+    // FlyItalyADSB's data is CC BY-SA 4.0 and must be credited where it is
+    // shown: Leaflet puts a layer's attribution in the corner while it is on.
+    const adsbLayer = L.layerGroup([], {
+      attribution: 'Flight data: <a href="https://flyitalyadsb.com/" target="_blank" rel="noopener">FlyItalyADSB</a> (flyitalyadsb.com), <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener">CC BY-SA 4.0</a>',
+    });
     // Aircraft position trails: all trails share ONE canvas renderer so
     // hundreds of gradient polylines cost zero DOM nodes. Nested in
     // adsbLayer; canvas vectors land in overlayPane (400), always under

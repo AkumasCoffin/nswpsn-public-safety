@@ -4,7 +4,7 @@
  * bbox filter, circle-shard rotation, rotation holdover, and the
  * all-upstreams-down failure path.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const fetchJsonMock = vi.fn();
 const configMock: Record<string, unknown> = {
@@ -582,5 +582,97 @@ describe('adsb upstream health', () => {
     const snap = await poll();
     expect(fetchJsonMock.mock.calls).toHaveLength(28);
     expect(snap.count).toBe(1);
+  });
+});
+
+describe('adsb FlyItalyADSB supplement', () => {
+  beforeEach(async () => {
+    fetchJsonMock.mockReset();
+    vi.useFakeTimers();
+    vi.setSystemTime(1_800_000_000_000);
+    const { _resetAdsbHoldoverForTests, _resetAdsbTrailsForTests } = await import('../../../src/sources/adsb.js');
+    _resetAdsbHoldoverForTests();
+    _resetAdsbTrailsForTests();
+  });
+  afterEach(() => {
+    delete configMock.FLYITALY_ADSB_KEY;
+    vi.useRealTimers();
+  });
+
+  async function poll() {
+    const { fetchAdsbAircraft } = await import('../../../src/sources/adsb.js');
+    const p = fetchAdsbAircraft();
+    await vi.runAllTimersAsync();
+    return p;
+  }
+  const flyCalls = () =>
+    fetchJsonMock.mock.calls.filter(([url]) => String(url).includes('flyitalyadsb.com'));
+
+  it('is not polled or reported without a key', async () => {
+    fetchJsonMock.mockResolvedValue({ ac: [] });
+    const snap = await poll();
+    expect(flyCalls()).toHaveLength(0);
+    expect(snap.upstreams.map((u) => u.id)).not.toContain('flyitaly');
+    // The rotation is untouched: every circle still goes to the four.
+    expect(fetchJsonMock.mock.calls).toHaveLength(28);
+  });
+
+  it('sends one keyed NSW request beside the rotation and merges what it hears', async () => {
+    configMock.FLYITALY_ADSB_KEY = ' fly-key ';
+    fetchJsonMock.mockImplementation((url: string) =>
+      Promise.resolve(url.includes('flyitalyadsb.com')
+        ? { now: 0, count: 1, total: 1, ac: [raw({ hex: 'f1f1f1', flight: 'RSCU201' })] }
+        : { ac: [] }));
+    const snap = await poll();
+    const calls = flyCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]![0]).toBe('https://api.flyitalyadsb.com/v2/lat/-30.4/lon/144.1/dist/463');
+    expect(calls[0]![1]).toMatchObject({ headers: { 'X-Api-Key': 'fly-key' } });
+    // The four still cover every circle themselves.
+    expect(fetchJsonMock.mock.calls).toHaveLength(29);
+    const a = snap.aircraft.find((x) => x.hex === 'f1f1f1');
+    expect(a?.sources).toEqual(['flyitaly']);
+    expect(snap.upstreams.find((u) => u.id === 'flyitaly')).toMatchObject({ ok: true, circles_ok: 1, count: 1 });
+  });
+
+  it('keeps to one request per interval and cycles the NSW quadrants', async () => {
+    configMock.FLYITALY_ADSB_KEY = 'fly-key';
+    fetchJsonMock.mockResolvedValue({ ac: [] });
+    await poll();
+    vi.setSystemTime(1_800_000_005_000); // 5 s later: inside the interval
+    const quiet = await poll();
+    expect(flyCalls()).toHaveLength(1);
+    // Reported with the last request's outcome, not as down.
+    expect(quiet.upstreams.find((u) => u.id === 'flyitaly')).toMatchObject({ ok: true, circles_total: 0 });
+    for (let k = 1; k <= 4; k++) {
+      vi.setSystemTime(1_800_000_000_000 + k * 12_000 + 5_000);
+      await poll();
+    }
+    const urls = flyCalls().map(([u]) => String(u));
+    expect(urls).toHaveLength(5);
+    expect(urls.map((u) => u.split('/v2/')[1])).toEqual([
+      'lat/-30.4/lon/144.1/dist/463',
+      'lat/-30.4/lon/150.5/dist/463',
+      'lat/-35.2/lon/144.1/dist/463',
+      'lat/-35.2/lon/150.5/dist/463',
+      'lat/-30.4/lon/144.1/dist/463',
+    ]);
+  });
+
+  it('pauses on a 429 without touching the rotation', async () => {
+    configMock.FLYITALY_ADSB_KEY = 'fly-key';
+    fetchJsonMock.mockImplementation((url: string) => {
+      if (url.includes('flyitalyadsb.com')) {
+        return Promise.reject(Object.assign(new Error('HTTP 429'), { status: 429, retryAfterMs: 60_000 }));
+      }
+      return Promise.resolve({ ac: [raw({ hex: 'aaa111' })] });
+    });
+    const snap = await poll();
+    expect(snap.count).toBe(1);
+    expect(snap.upstreams.find((u) => u.id === 'flyitaly')).toMatchObject({ ok: false });
+    vi.setSystemTime(1_800_000_030_000); // past the interval, inside Retry-After
+    const paused = await poll();
+    expect(flyCalls()).toHaveLength(1);
+    expect(paused.upstreams.find((u) => u.id === 'flyitaly')?.error).toContain('rate_limited');
   });
 });

@@ -533,7 +533,10 @@ to be mid-transmission at the instant of a poll.
 ## Path 4 — ADS-B, which is two different things
 
 1. **Public aggregators.** `src/sources/adsb.ts` fans out across adsb.lol,
-   adsb.fi and airplanes.live every 8s — the fastest source in the registry.
+   adsb.fi, airplanes.live and adsb.one every 8s — the fastest source in the
+   registry. With `FLYITALY_ADSB_KEY` set, FlyItalyADSB is polled beside them
+   over NSW only, one request every 12 s at most (free plan budget; its data
+   is CC BY-SA 4.0 and credited on data-sources.html and the map).
    Serves `/api/adsb/aircraft` and prebuilt `/api/adsb/trails`. Kill switch:
    `ADSB_DISABLED`.
 2. **AusAware's own aircraft nodes.** The aircraft agent supervises

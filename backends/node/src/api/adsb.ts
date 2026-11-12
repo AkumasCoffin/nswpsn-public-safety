@@ -207,7 +207,7 @@ adsbRouter.get(
     tags: ['Aircraft'],
     summary: 'Aircraft over Australia',
     description:
-      "Aircraft over Australia now, merged from four public ADS-B aggregators (adsb.lol, adsb.fi, airplanes.live, ADSB One) and AusAware's own receivers, one record per ICAO address. Polled about every 15 seconds. An aircraft that stops reporting is held at its last position for a while; one in flight with a known heading and speed is then projected forward, marked `estimated`, until its last real fix is three minutes old.",
+      "Aircraft over Australia now, merged from public ADS-B aggregators (adsb.lol, adsb.fi, airplanes.live, ADSB One, and FlyItalyADSB over NSW) and AusAware's own receivers, one record per ICAO address. Records whose `sources` include `flyitaly` carry flight data from FlyItalyADSB (flyitalyadsb.com), CC BY-SA 4.0, which must be credited where you show them. Polled about every 15 seconds. An aircraft that stops reporting is held at its last position for a while; one in flight with a known heading and speed is then projected forward, marked `estimated`, until its last real fix is three minutes old.",
     responses: {
       ...okJson(envelope(AdsbAircraft), 'Every aircraft, with how each source fared and the history window'),
       ...GATED_ERRORS,

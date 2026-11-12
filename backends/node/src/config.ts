@@ -404,6 +404,11 @@ const Schema = z.object({
     .default('true')
     .transform((s) => s === 'true'),
 
+  // FlyItalyADSB API key (free plan: https://flyitalyadsb.com/data/api/).
+  // Adds FlyItalyADSB as a fifth, rate-budgeted ADS-B upstream over NSW
+  // (sources/adsb.ts). Unset: the source is simply not polled.
+  FLYITALY_ADSB_KEY: z.string().optional(),
+
   // Kill switch for the Dorsal Watch shark-report feed. When true the source
   // still registers but serves an empty snapshot, so /api/dorsal/reports and
   // the beaches map layer go quiet without a redeploy.

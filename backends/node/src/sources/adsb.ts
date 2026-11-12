@@ -33,6 +33,17 @@
  * only one aggregator can see would otherwise blink during rotation,
  * so a short holdover keeps an aircraft's last position for up to 90 s
  * — see applyHoldover.
+ *
+ * FlyItalyADSB is a fifth upstream, used only when FLYITALY_ADSB_KEY is set.
+ * It is NOT dealt circles from the rotation: its free plan allows 300,000
+ * requests a month (~7 a minute), a fraction of what the shared rotation
+ * would ask of it. So it sits beside the rotation as a supplement — one
+ * request at most every FLYITALY_MIN_INTERVAL_MS, cycling over the four NSW
+ * quadrants only. The other four still cover the whole country; FlyItaly adds
+ * whatever its own receivers hear over NSW, with each quadrant revisited
+ * about once a minute, inside the 90 s holdover, so an aircraft only it sees
+ * stays on the map. Its data is CC BY-SA 4.0 and is credited on
+ * data-sources.html and on the map's aircraft layer.
  */
 import { simplifyTrail } from '../lib/simplifyTrail.js';
 import { fetchJson } from './shared/http.js';
@@ -103,6 +114,8 @@ export const CIRCLES: readonly Circle[] = [
 interface Upstream {
   id: string;
   url: (c: Circle) => string;
+  /** Extra request headers (an API key). */
+  headers?: () => Record<string, string>;
 }
 const UPSTREAMS: readonly Upstream[] = [
   {
@@ -127,6 +140,29 @@ const UPSTREAMS: readonly Upstream[] = [
     url: (c) => `https://api.adsb.one/v2/point/${c.lat}/${c.lon}/${RADIUS_NM}`,
   },
 ] as const;
+
+// --- FlyItalyADSB (supplementary, key-gated) ------------------------------
+// The same 250 nm circles, asked for in kilometres (the free plan caps a
+// radius at 500 km).
+const FLYITALY_RADIUS_KM = Math.round(RADIUS_NM * 1.852);
+const FLYITALY: Upstream = {
+  id: 'flyitaly',
+  url: (c) =>
+    `https://api.flyitalyadsb.com/v2/lat/${c.lat}/lon/${c.lon}/dist/${FLYITALY_RADIUS_KM}`,
+  headers: () => ({ 'X-Api-Key': (config.FLYITALY_ADSB_KEY ?? '').trim() }),
+};
+/**
+ * At most one request this often. The free plan is 300,000 requests a month
+ * and 30 a minute per key; one every 12 s is 5 a minute, ~216,000 a month,
+ * which leaves room for restarts and the odd probe after a pause.
+ */
+const FLYITALY_MIN_INTERVAL_MS = 12_000;
+/** The circles it cycles over: the four NSW quadrants, which also cover the
+ *  ACT. Four keeps each one revisited inside the holdover. */
+const FLYITALY_FOCUS: readonly Circle[] = CIRCLES.filter((c) => c.id.startsWith('nsw_'));
+let _flyLastAt = -Infinity;
+let _flyNext = 0;
+let _flyLastOk = false;
 
 // Drop positions older than this — point queries can include aircraft
 // whose last known position is minutes stale.
@@ -883,6 +919,9 @@ export function _resetAdsbHoldoverForTests(): void {
   _pollTick = 0;
   _health.clear();
   _circleDealtTick.length = 0;
+  _flyLastAt = -Infinity;
+  _flyNext = 0;
+  _flyLastOk = false;
 }
 
 /**
@@ -902,6 +941,7 @@ async function fetchUpstream(up: Upstream, circles: readonly Circle[]): Promise<
       try {
         const body = await fetchJson<ReadsbPointResponse>(up.url(c), {
           timeoutMs: 8_000,
+          ...(up.headers ? { headers: up.headers() } : {}),
         });
         const ac = Array.isArray(body.ac)
           ? body.ac
@@ -1148,6 +1188,33 @@ export function _resetAdsbTrailsForTests(): void {
   _trailsSnapshot = { trails: {}, fetched_at: new Date(0).toISOString() };
 }
 
+/**
+ * This poll's FlyItalyADSB request, if it has one. Null when no key is set,
+ * so the source leaves no trace in the snapshot.
+ *
+ * A poll inside the request interval sends nothing and reports the last
+ * request's outcome, so the status page does not flicker between polls.
+ */
+async function pollFlyItaly(nowMs: number): Promise<UpstreamResult | null> {
+  if (!(config.FLYITALY_ADSB_KEY ?? '').trim()) return null;
+  const h = healthOf(FLYITALY.id);
+  const idle = (ok: boolean, error?: string): UpstreamResult => {
+    const r: UpstreamResult = { id: FLYITALY.id, ok, circlesOk: 0, circlesTotal: 0, records: [] };
+    if (error !== undefined) r.error = error;
+    return r;
+  };
+  if (h.pausedUntil > nowMs) {
+    return idle(false, `paused (${h.reason ?? 'unknown'}) until ${new Date(h.pausedUntil).toISOString()}: ${h.error ?? ''}`.trim());
+  }
+  if (nowMs - _flyLastAt < FLYITALY_MIN_INTERVAL_MS) return idle(_flyLastOk);
+  _flyLastAt = nowMs;
+  const circle = FLYITALY_FOCUS[_flyNext++ % FLYITALY_FOCUS.length]!;
+  const r = await fetchUpstream(FLYITALY, [circle]);
+  recordUpstreamHealth(FLYITALY, r, Date.now());
+  _flyLastOk = r.ok;
+  return r;
+}
+
 export async function fetchAdsbAircraft(): Promise<AdsbSnapshot> {
   // Upstreams in parallel — different hosts, no shared rate limit.
   // Each answering one gets this poll's shard of the circle rotation; a
@@ -1157,9 +1224,9 @@ export async function fetchAdsbAircraft(): Promise<AdsbSnapshot> {
   const tick = _pollTick++;
   const planNow = Date.now();
   const shards = planShards(tick, planNow);
-  const results = config.ADSB_DISABLED
-    ? []
-    : await Promise.all(
+  const [rotation, fly] = config.ADSB_DISABLED
+    ? [[] as UpstreamResult[], null]
+    : await Promise.all([Promise.all(
         UPSTREAMS.map(async (u, i): Promise<UpstreamResult> => {
           const circles = shards[i] ?? [];
           if (circles.length > 0) return fetchUpstream(u, circles);
@@ -1173,9 +1240,12 @@ export async function fetchAdsbAircraft(): Promise<AdsbSnapshot> {
             error: `paused (${h.reason ?? 'no circles'}) until ${new Date(h.pausedUntil).toISOString()}: ${h.error ?? ''}`.trim(),
           };
         }),
-      );
+      ), pollFlyItaly(planNow)]);
   const doneNow = Date.now();
-  results.forEach((r, i) => recordUpstreamHealth(UPSTREAMS[i]!, r, doneNow));
+  rotation.forEach((r, i) => recordUpstreamHealth(UPSTREAMS[i]!, r, doneNow));
+  // FlyItaly records its own health (pollFlyItaly); from here on it is just
+  // another upstream.
+  const results = fly ? [...rotation, fly] : rotation;
 
   // Our own ADS-B feeder nodes are just another source: a ~5s cadence against
   // the aggregators' ~15s, covering whatever the circle rotation misses.
