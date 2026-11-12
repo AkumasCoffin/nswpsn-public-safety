@@ -41,6 +41,9 @@
     spoke: 'rgba(148,163,184,0.08)',
     label: '#94a3b8',
   };
+  // Measured reach and obstructions are judged per 20-degree sector: the 72
+  // five-degree bearings are too thin to hold a fair share of traffic each.
+  const SECTORS = 18;
   const COMPASS = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
 
   let styleDone = false;
@@ -133,50 +136,84 @@
     const missed = decode(lc.missed || [], null);
     const limits = lc.terrain && Array.isArray(lc.terrain.limits) ? lc.terrain.limits : null;
 
-    // Per band: measured reach per bearing, missed presence per bearing ring,
-    // and the obstruction verdict.
+    // Per band, in SECTORS of 20 degrees (four bearings each): the measured
+    // reach, the terrain limit, and the obstruction verdict.
+    //
+    // Reach is where this receiver still gets at least half of what passes,
+    // not where its single furthest dot is: per sector, the furthest ring
+    // whose neighbourhood (that ring and the one either side) has at least as
+    // many heard cells as missed ones. Cells rather than counts, because the
+    // two are counted differently (heard per position report, missed per
+    // public-feed poll) and only "was anything heard here" compares fairly.
+    const S = SECTORS, perS = B / S;
     const bands = {};
     for (const band of BANDS) {
-      const reach = new Float32Array(B);
-      const cellsIn = { heard: 0 };
+      const hc = new Uint16Array(S * R), mc = new Uint16Array(S * R);
+      let heardCells = 0;
       for (let i = 0; i < heard.n; i += 1) {
         const s = heard.slice[i];
         if (s < band.s0 || s > band.s1) continue;
-        cellsIn.heard += 1;
-        const far = (heard.ring[i] + 1) * ringKm;
-        if (far > reach[heard.b[i]]) reach[heard.b[i]] = far;
+        heardCells += 1;
+        hc[Math.floor(heard.b[i] / perS) * R + heard.ring[i]] += 1;
       }
-      const terr = limits ? limits[band.s1] : null;
-      // Missed cells per bearing, beyond the reach.
-      const missedBeyond = new Uint16Array(B);
       for (let i = 0; i < missed.n; i += 1) {
         const s = missed.slice[i];
         if (s < band.s0 || s > band.s1) continue;
-        const b = missed.b[i];
-        if (missed.ring[i] * ringKm >= reach[b] - ringKm) missedBeyond[b] += 1;
+        mc[Math.floor(missed.b[i] / perS) * R + missed.ring[i]] += 1;
       }
-      const obs = new Uint8Array(B);
-      // Per band only: across all altitudes a short reach is just low traffic.
-      if (terr && band.id !== 'all' && cellsIn.heard >= 30) {
-        for (let b = 0; b < B; b += 1) {
-          const L = terr[b], M = reach[b];
-          if (L > 40 && M < L * 0.6 && L - M > 40 && missedBeyond[b] >= 2) obs[b] = 1;
+      const reach = new Float32Array(S);
+      for (let sec = 0; sec < S; sec += 1) {
+        const o = sec * R;
+        for (let ring = R - 1; ring >= 0; ring -= 1) {
+          if (!hc[o + ring]) continue;
+          let H = 0, M = 0;
+          for (let k = Math.max(0, ring - 1); k <= Math.min(R - 1, ring + 1); k += 1) { H += hc[o + k]; M += mc[o + k]; }
+          if (H >= M) { reach[sec] = (ring + 1) * ringKm; break; }
         }
       }
-      let maxReach = 0, maxB = 0;
-      for (let b = 0; b < B; b += 1) if (reach[b] > maxReach) { maxReach = reach[b]; maxB = b; }
-      let pct = null;
+      const terr = limits ? limits[band.s1] : null;
+      // A sector's terrain limit is the mean of its four bearings.
+      let terrS = null;
       if (terr) {
+        terrS = new Float32Array(S);
+        for (let sec = 0; sec < S; sec += 1) {
+          let t = 0;
+          for (let k = 0; k < perS; k += 1) t += terr[sec * perS + k];
+          terrS[sec] = t / perS;
+        }
+      }
+      const obs = new Uint8Array(S);
+      // Per band only: across all altitudes a short reach is just low traffic.
+      if (terrS && band.id !== 'all' && heardCells >= 30) {
+        for (let sec = 0; sec < S; sec += 1) {
+          const L = terrS[sec], M = reach[sec];
+          if (!(L > 40 && M < L * 0.6 && L - M > 40)) continue;
+          // And short against its NEIGHBOURS (two sectors either side): a
+          // receiver that is short everywhere has a setup problem, not
+          // something in the way in one direction.
+          const nb = [-2, -1, 1, 2].map((d) => reach[(sec + d + S) % S]).sort((x, y) => x - y);
+          const nbMid = (nb[1] + nb[2]) / 2;
+          if (!(M < nbMid * 0.6 && nbMid - M > 40)) continue;
+          // Aircraft were there to be heard past the reach, and weren't.
+          let beyond = 0;
+          for (let ring = Math.floor(M / ringKm); ring < R; ring += 1) beyond += mc[sec * R + ring];
+          if (beyond >= 2) obs[sec] = 1;
+        }
+      }
+      let maxReach = 0, maxS = 0;
+      for (let sec = 0; sec < S; sec += 1) if (reach[sec] > maxReach) { maxReach = reach[sec]; maxS = sec; }
+      let pct = null;
+      if (terrS) {
         let a = 0, t = 0;
-        for (let b = 0; b < B; b += 1) {
-          const L = terr[b];
+        for (let sec = 0; sec < S; sec += 1) {
+          const L = terrS[sec];
           t += L * L;
-          const M = Math.min(reach[b], L);
+          const M = Math.min(reach[sec], L);
           a += M * M;
         }
         pct = t > 0 ? Math.round((a / t) * 100) : null;
       }
-      bands[band.id] = { reach, terr, obs, maxReach, maxDeg: (maxB + 0.5) * (360 / B), heard: cellsIn.heard, pct };
+      bands[band.id] = { reach, terr, terrS, obs, maxReach, maxDeg: (maxS + 0.5) * (360 / S), heard: heardCells, pct };
     }
 
     let maxR = 100;
@@ -184,7 +221,7 @@
     if (limits) for (const row of limits) for (const v of row) maxR = Math.max(maxR, v);
     maxR = Math.min(600, Math.ceil(maxR / 100) * 100);
 
-    return { lc, heard, missed, limits, bands, maxR, B, ringKm, sliceKm };
+    return { lc, heard, missed, limits, bands, maxR, B, S, ringKm, sliceKm };
   }
 
   function mount(el, data, opts) {
@@ -313,6 +350,21 @@
       return pts;
     }
 
+    /** A per-sector value as a stepped outline: an arc across each sector at
+     *  its value, joined radially to the next. Zero sectors close to the
+     *  centre, which is what "nothing heard that way" looks like. */
+    function sectorLine(values, zKm) {
+      const S = values.length, step = 360 / S, pts = [];
+      for (let sec = 0; sec < S; sec += 1) {
+        const r = values[sec];
+        for (let k = 0; k <= 4; k += 1) {
+          const a = (sec * step + (k / 4) * step) * Math.PI / 180;
+          pts.push([r * Math.sin(a), r * Math.cos(a), zKm]);
+        }
+      }
+      return pts;
+    }
+
     function draw() {
       if (!st.w) return;
       const P = st.P;
@@ -374,18 +426,22 @@
       // Obstructions: wedges on the ground from measured reach out to the
       // terrain limit, on flagged bearings.
       if (st.layers.obs && bd.terr) {
-        const step = 360 / P.B;
+        const step = 360 / P.S;
         let labelled = false;
-        for (let b = 0; b < P.B; b += 1) {
+        for (let b = 0; b < P.S; b += 1) {
           if (!bd.obs[b]) continue;
-          const a0 = b * step * Math.PI / 180, a1 = (b + 1) * step * Math.PI / 180;
-          const m = bd.reach[b], L = bd.terr[b];
+          const m = bd.reach[b], L = bd.terrS[b];
           // Drawn at the band's own altitude, where the gap actually is.
           const z = (band.s1 + 1) * P.sliceKm;
-          const pts = [
-            [m * Math.sin(a0), m * Math.cos(a0), z], [L * Math.sin(a0), L * Math.cos(a0), z],
-            [L * Math.sin(a1), L * Math.cos(a1), z], [m * Math.sin(a1), m * Math.cos(a1), z],
-          ];
+          const pts = [];
+          for (let k = 0; k <= 4; k += 1) {
+            const a = (b + k / 4) * step * Math.PI / 180;
+            pts.push([L * Math.sin(a), L * Math.cos(a), z]);
+          }
+          for (let k = 4; k >= 0; k -= 1) {
+            const a = (b + k / 4) * step * Math.PI / 180;
+            pts.push([m * Math.sin(a), m * Math.cos(a), z]);
+          }
           polyline(pr, pts, true);
           ctx.fillStyle = 'rgba(245,158,11,0.16)';
           ctx.fill();
@@ -444,21 +500,26 @@
           const c = w > 0.5 ? COL.heard : COL.heardDim;
           // Big enough to read at a glance: the old 1-3 px squares at low
           // alpha all but vanished on a sparse receiver.
-          ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${(0.45 + 0.45 * w).toFixed(2)})`;
-          const r = (1.8 + w * 1.6) * dotScale;
+          ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${(0.4 + 0.45 * w).toFixed(2)})`;
+          const r = (1.4 + w * 1.1) * dotScale;
           ctx.beginPath(); ctx.arc(s[0], s[1], r, 0, Math.PI * 2); ctx.fill();
           proj.x.push(s[0]); proj.y.push(s[1]); proj.i.push(i); proj.kind.push(0);
         }
         ctx.globalCompositeOperation = 'source-over';
-        // Measured reach for the band, as a white line at its top altitude.
-        if (band.id !== 'all' && bd.heard > 0) {
-          ctx.strokeStyle = COL.measured;
-          ctx.globalAlpha = 0.85;
-          ctx.lineWidth = 1.4;
-          polyline(pr, bandLine(bd.reach, (band.s1 + 1) * P.sliceKm), true);
+        // Measured reach as a white stepped outline at each band's top
+        // altitude. In All every band is drawn, stacked, which is what makes
+        // the cone; a single band gets its own outline, stronger.
+        const list = band.id === 'all' ? BANDS.slice(1) : [band];
+        ctx.strokeStyle = COL.measured;
+        for (const b of list) {
+          const bb = P.bands[b.id];
+          if (!bb.heard) continue;
+          ctx.globalAlpha = band.id === 'all' ? 0.7 : 0.95;
+          ctx.lineWidth = band.id === 'all' ? 1.1 : 1.6;
+          polyline(pr, sectorLine(bb.reach, (b.s1 + 1) * P.sliceKm), true);
           ctx.stroke();
-          ctx.globalAlpha = 1;
         }
+        ctx.globalAlpha = 1;
       }
       st.proj = proj;
     }
@@ -494,8 +555,8 @@
       if (t.status === 'building') statusLines.push('Terrain limit is being worked out — check back in a few minutes.');
       else if (t.status === 'waiting') statusLines.push('Terrain limit is queued behind the daily elevation-data allowance.');
       let obsCount = 0;
-      for (let b = 0; b < P.B; b += 1) obsCount += bd.obs[b];
-      if (st.layers.obs && obsCount > 0) statusLines.push(`${obsCount * 5}° of bearings look blocked at this altitude.`);
+      for (let b = 0; b < P.S; b += 1) obsCount += bd.obs[b];
+      if (st.layers.obs && obsCount > 0) statusLines.push(`${obsCount * (360 / P.S)}° of bearings look blocked at this altitude.`);
       statusEl.innerHTML = statusLines.map(esc).join('<br>');
 
       emptyEl.hidden = P.heard.n > 0;
@@ -506,7 +567,7 @@
       foot.innerHTML = `<div class="alc-legend">`
         + `<span><i class="alc-k-dot" style="background:#67e8f9"></i>aircraft heard</span>`
         + `<span><i class="alc-k-dot" style="background:#ef4444"></i>passed in range and not heard</span>`
-        + `<span><i class="alc-k-line" style="border-color:#f8fafc"></i>measured reach</span>`
+        + `<span><i class="alc-k-line" style="border-color:#f8fafc"></i>measured reach (half or more of passing aircraft heard)</span>`
         + `<span><i class="alc-k-box" style="border-color:#a78bfa"></i>terrain line-of-sight limit</span>`
         + `<span><i class="alc-k-box" style="border-color:#f59e0b"></i>possible obstruction</span></div>`
         + `Altitude exaggerated ×${EXAG} · rings every 100 km · drag to rotate, pinch or Ctrl+wheel to zoom, arrow keys work too. `
