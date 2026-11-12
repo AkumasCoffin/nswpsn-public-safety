@@ -403,15 +403,18 @@
         }
       }
 
+      // Dots grow gently with zoom so a zoomed-in view doesn't look emptier.
+      const dotScale = Math.sqrt(st.zoom);
       // Missed: small, dim, under the heard dots.
       const proj = { x: [], y: [], i: [], kind: [] };
       if (st.layers.missed) {
         const m = P.missed;
-        ctx.fillStyle = 'rgba(100,116,139,0.55)';
+        ctx.fillStyle = 'rgba(100,116,139,0.6)';
+        const mr = 1.5 * dotScale;
         for (let i = 0; i < m.n; i += 1) {
           if (!inBand(m.slice[i])) continue;
           const s = pr(m.x[i], m.y[i], m.z[i]);
-          ctx.fillRect(s[0] - 1.1, s[1] - 1.1, 2.2, 2.2);
+          ctx.fillRect(s[0] - mr, s[1] - mr, mr * 2, mr * 2);
           proj.x.push(s[0]); proj.y.push(s[1]); proj.i.push(i); proj.kind.push(1);
         }
       }
@@ -439,9 +442,11 @@
           const s = pr(h.x[i], h.y[i], h.z[i]);
           const w = h.w[i];
           const c = w > 0.5 ? COL.heard : COL.heardDim;
-          ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${(0.18 + 0.5 * w).toFixed(2)})`;
-          const r = 0.6 + w * 1.0;
-          ctx.fillRect(s[0] - r, s[1] - r, r * 2, r * 2);
+          // Big enough to read at a glance: the old 1-3 px squares at low
+          // alpha all but vanished on a sparse receiver.
+          ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${(0.45 + 0.45 * w).toFixed(2)})`;
+          const r = (1.8 + w * 1.6) * dotScale;
+          ctx.beginPath(); ctx.arc(s[0], s[1], r, 0, Math.PI * 2); ctx.fill();
           proj.x.push(s[0]); proj.y.push(s[1]); proj.i.push(i); proj.kind.push(0);
         }
         ctx.globalCompositeOperation = 'source-over';
