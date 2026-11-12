@@ -16146,6 +16146,34 @@ function initPagerHoursFromStorage() {
     // card's job now, and having both meant one click opened three surfaces —
     // card, tooltip and row. The row just highlights.
 
+    // The airframe (maker, type, operator) and the callsign's usual route,
+    // from adsbdb via the backend (/api/adsb/info, site-only). Asked for the
+    // pinned aircraft only, once per address and callsign: a callsign change
+    // mid-session is a new flight and gets its own route.
+    const _adsbInfoCache = new Map();
+    function _adsbInfoKey(a) { return a.hex + '|' + (a.callsign || '').trim().toUpperCase(); }
+    async function adsbFetchInfo(a) {
+      const key = _adsbInfoKey(a);
+      if (_adsbInfoCache.has(key)) return;
+      _adsbInfoCache.set(key, '__loading__');
+      if (_adsbInfoCache.size > 300) _adsbInfoCache.delete(_adsbInfoCache.keys().next().value);
+      let info = { aircraft: null, route: null };
+      try {
+        const cs = (a.callsign || '').trim().toUpperCase();
+        const url = `${PROXY_BASE}/api/adsb/info/${encodeURIComponent(a.hex)}`
+          + (/^[A-Z0-9]{2,8}$/.test(cs) ? `?callsign=${encodeURIComponent(cs)}` : '');
+        const res = await apiFetch(url);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        info = { aircraft: data.aircraft || null, route: data.route || null };
+      } catch (e) {
+        // The card just shows what the feed has; not retried this session.
+        console.warn('[adsb] info fetch failed', e);
+      }
+      _adsbInfoCache.set(key, info);
+      if (_adsbPinnedHex === a.hex) adsbRenderDetailCard();
+    }
+
     async function adsbFetchPhoto(a) {
       const existing = _adsbPhotoCache.get(a.hex);
       if (existing !== undefined) return; // cached, loading, or known-none
@@ -16495,7 +16523,8 @@ function initPagerHoursFromStorage() {
       const photoHtml = (cached && cached !== '__loading__' && cached !== '__none__')
         ? '<img class="adsb-dc-photo" src="' + escapeHtml(cached.src) + '" alt="" referrerpolicy="no-referrer" onerror="this.style.display=\'none\';">'
           + '<div class="adsb-dc-credit">Photo © ' + escapeHtml(cached.photographer || 'unknown')
-          + (cached.link ? ' · <a href="' + escapeHtml(cached.link) + '" target="_blank" rel="noopener" style="color:#7dd3fc;">Planespotters.net</a>' : '')
+          + (cached.link ? ' · <a href="' + escapeHtml(cached.link) + '" target="_blank" rel="noopener" style="color:#7dd3fc;">'
+            + (cached.source === 'airport-data' ? 'airport-data.com' : 'Planespotters.net') + '</a>' : '')
           + '</div>'
         : '';
 
@@ -16506,6 +16535,25 @@ function initPagerHoursFromStorage() {
         ? '<div class="adsb-dc-est"><i class="fa-solid fa-triangle-exclamation"></i> '
           + 'Estimated position — no signal for ' + Math.round(a.estimatedSec || a.ageSec) + 's. '
           + 'Projected along its last known heading and speed.</div>'
+        : '';
+
+      // Airframe and usual route (adsbdb), fetched once on first render.
+      const infoRaw = _adsbInfoCache.get(_adsbInfoKey(a));
+      if (infoRaw === undefined) adsbFetchInfo(a);
+      const info = (infoRaw && infoRaw !== '__loading__') ? infoRaw : null;
+      const af = info && info.aircraft;
+      const rt = info && info.route;
+      const afTxt = af ? [af.manufacturer, af.type].filter(Boolean).join(' ') : '';
+      const apCode = (p) => p.iata || p.icao || p.name || '?';
+      const apName = (p) => [p.name || p.municipality, p.icao].filter(Boolean).join(' · ');
+      const routeStops = rt ? [rt.origin, rt.midpoint, rt.destination].filter(Boolean) : [];
+      const routeTxt = rt
+        ? '<span title="' + escapeHtml(routeStops.map(apName).join('\n→ ')) + '">'
+          + routeStops.map((p) => escapeHtml(apCode(p))).join(' → ') + '</span>'
+        : null;
+      const infoCredit = (afTxt || (af && af.owner) || rt)
+        ? '<div class="adsb-dc-credit">Aircraft &amp; route details: <a href="https://www.adsbdb.com/" target="_blank" rel="noopener" style="color:#7dd3fc;">adsbdb.com</a>'
+          + (rt ? ' · route is the callsign\'s usual one, not a flight plan' : '') + '</div>'
         : '';
 
       const summary = adsbTrackSummary(a.hex);
@@ -16528,6 +16576,10 @@ function initPagerHoursFromStorage() {
         + '<div class="adsb-dc-rows">'
         +   row('Registration', a.reg ? escapeHtml(a.reg) : null)
         +   row('Type', a.type ? escapeHtml(a.type) : null)
+        +   row('Aircraft', afTxt ? escapeHtml(afTxt) : null)
+        +   row('Operator', af && af.owner ? escapeHtml(af.owner) : null)
+        +   row('Airline', rt && rt.airline && !(af && af.owner && af.owner.toLowerCase() === rt.airline.toLowerCase()) ? escapeHtml(rt.airline) : null)
+        +   row('Usual route', routeTxt)
         +   row('Altitude', altTxt)
         +   row('Speed', a.gsKt != null ? Math.round(a.gsKt) + ' kt' : null)
         +   row('Track', Number.isFinite(a.trackDeg) ? Math.round(a.trackDeg) + '°' : null)
@@ -16538,6 +16590,7 @@ function initPagerHoursFromStorage() {
         +   row('Position age', Math.round(a.ageSec) + 's')
         +   row('ICAO', escapeHtml(a.hex.toUpperCase()), 'mono')
         + '</div>'
+        + infoCredit
         + noteHtml
         + '<div class="adsb-dc-acts">'
         +   '<button class="adsb-dc-btn' + (_adsbFollowActive ? ' on' : '') + '" onclick="adsbToggleFollow()">'

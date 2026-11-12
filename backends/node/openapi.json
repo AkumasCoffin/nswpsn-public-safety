@@ -2952,10 +2952,10 @@
                 "properties": {
                   "src": {
                     "type": "string",
-                    "description": "The image's URL, as Planespotters gives it (their large thumbnail where there is one)"
+                    "description": "The image's URL, as the source gives it (Planespotters' large thumbnail where there is one)"
                   },
                   "link": {
-                    "description": "The photo's page on Planespotters",
+                    "description": "The photo's page on the source's site",
                     "type": [
                       "string",
                       "null"
@@ -2966,12 +2966,21 @@
                       "string",
                       "null"
                     ]
+                  },
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "planespotters",
+                      "airport-data"
+                    ],
+                    "description": "Whose photo it is: Planespotters.net, or airport-data.com when Planespotters has none. Credit the photographer and the source."
                   }
                 },
                 "required": [
                   "src",
                   "link",
-                  "photographer"
+                  "photographer",
+                  "source"
                 ],
                 "additionalProperties": false
               },
@@ -2979,7 +2988,7 @@
                 "type": "null"
               }
             ],
-            "description": "null when Planespotters has none, or could not be reached"
+            "description": "null when neither source has one, or neither could be reached"
           }
         },
         "required": [
@@ -8523,7 +8532,7 @@
           "Aircraft"
         ],
         "summary": "A photo of an aircraft",
-        "description": "A photo of the aircraft from Planespotters.net, looked up by its ICAO address and then, failing that, by `reg`. A TIS-B id (one starting with ~) is looked up by `reg` alone. Answers are kept for a day.",
+        "description": "A photo of the aircraft from Planespotters.net, looked up by its ICAO address and then, failing that, by `reg`; airport-data.com is asked when Planespotters has none or cannot be reached. A TIS-B id (one starting with ~) is looked up on Planespotters by `reg` alone. Answers are kept for a day.",
         "parameters": [
           {
             "in": "path",

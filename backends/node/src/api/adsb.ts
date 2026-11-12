@@ -18,6 +18,15 @@
  *                            to the registration. Cached 24 h — photos
  *                            for a given airframe essentially never
  *                            change and Planespotters rate-limits.
+ *                            airport-data.com is the backup when
+ *                            Planespotters has none or is down.
+ *
+ *   GET /api/adsb/info/:hex?callsign=QFA1
+ *                          — the airframe (maker, type, operator) and the
+ *                            callsign's usual route, from adsbdb.com.
+ *                            Site-only: no scope and no /api/v1 mirror,
+ *                            because adsbdb's route data may not be
+ *                            republished without its compiler's permission.
  *
  * These two, /api/adsb/history and /api/adsb/trails are also served at
  * /api/v1/ (server.ts mirrors them), wrapped in `data` there
@@ -385,6 +394,8 @@ export interface AdsbPhoto {
   src: string;
   link: string | null;
   photographer: string | null;
+  /** Whose photo it is, for the credit. */
+  source: 'planespotters' | 'airport-data';
 }
 
 const PLANESPOTTERS_BASE = 'https://api.planespotters.net/pub/photos';
@@ -407,10 +418,81 @@ function firstPhoto(body: PlanespottersResponse): AdsbPhoto | null {
     src,
     link: p?.link ?? null,
     photographer: p?.photographer ?? null,
+    source: 'planespotters',
   };
 }
 
+// airport-data.com: the backup when Planespotters has no photo or can't be
+// reached. Its API documents a 429 but no figure, so a 429 stands it down for
+// a while rather than retrying on every miss.
+const AIRPORT_DATA_THUMB = 'https://airport-data.com/api/ac_thumb.json';
+const AIRPORT_DATA_COOLDOWN_MS = 10 * 60_000;
+let _airportDataRestUntil = 0;
+
+interface AirportDataThumbResponse {
+  status?: number;
+  data?: Array<{ image?: string; link?: string; photographer?: string }>;
+}
+
+async function airportDataPhoto(hex: string, reg: string): Promise<AdsbPhoto | null> {
+  // Its lookup is by Mode-S address; a TIS-B id is not one.
+  if (hex.startsWith('~')) return null;
+  if (Date.now() < _airportDataRestUntil) throw new Error('airport-data: resting after a 429');
+  let body: AirportDataThumbResponse;
+  try {
+    body = await fetchJson<AirportDataThumbResponse>(
+      `${AIRPORT_DATA_THUMB}?m=${encodeURIComponent(hex.toUpperCase())}&n=1`
+        + (reg ? `&r=${encodeURIComponent(reg)}` : ''),
+      { timeoutMs: 8_000 },
+    );
+  } catch (err) {
+    const status = (err as { status?: number | null }).status;
+    if (status === 404) return null; // it knows no photo of this aircraft
+    if (status === 429) _airportDataRestUntil = Date.now() + AIRPORT_DATA_COOLDOWN_MS;
+    throw err;
+  }
+  const p = body.data?.[0];
+  if (!p?.image) return null;
+  return {
+    src: p.image,
+    link: p.link ?? null,
+    photographer: p.photographer ?? null,
+    source: 'airport-data',
+  };
+}
+
+/** TEST-ONLY. */
+export function _resetAdsbPhotoForTests(): void {
+  _airportDataRestUntil = 0;
+  photoCache.clear();
+}
+
+/**
+ * Planespotters first, airport-data.com second.
+ *
+ * "No photo" is only an answer when Planespotters actually answered: if it
+ * failed and the backup found nothing, that is thrown rather than returned, so
+ * a 24-hour "none" is never cached on the strength of a lookup that didn't run.
+ */
 async function lookupPhoto(hex: string, reg: string): Promise<AdsbPhoto | null> {
+  let primaryErr: unknown = null;
+  try {
+    const p = await planespottersPhoto(hex, reg);
+    if (p) return p;
+  } catch (err) {
+    primaryErr = err;
+  }
+  try {
+    const p = await airportDataPhoto(hex, reg);
+    if (p) return p;
+  } catch (err) {
+    if (primaryErr === null) throw err;
+  }
+  if (primaryErr !== null) throw primaryErr;
+  return null;
+}
+
+async function planespottersPhoto(hex: string, reg: string): Promise<AdsbPhoto | null> {
   // TIS-B targets ('~'-prefixed) have synthetic ids Planespotters can't
   // know — go straight to the registration for those.
   if (!hex.startsWith('~')) {
@@ -432,15 +514,16 @@ async function lookupPhoto(hex: string, reg: string): Promise<AdsbPhoto | null> 
 }
 
 const AdsbPhotoRecord = z.object({
-  src: z.string().describe("The image's URL, as Planespotters gives it (their large thumbnail where there is one)"),
-  link: z.string().nullable().describe("The photo's page on Planespotters"),
+  src: z.string().describe("The image's URL, as the source gives it (Planespotters' large thumbnail where there is one)"),
+  link: z.string().nullable().describe("The photo's page on the source's site"),
   photographer: z.string().nullable(),
+  source: z.enum(['planespotters', 'airport-data']).describe('Whose photo it is: Planespotters.net, or airport-data.com when Planespotters has none. Credit the photographer and the source.'),
 });
 assertShape<SameShape<z.infer<typeof AdsbPhotoRecord>, AdsbPhoto>>();
 
 const AdsbPhotoAnswer = z
   .object({
-    photo: AdsbPhotoRecord.nullable().describe('null when Planespotters has none, or could not be reached'),
+    photo: AdsbPhotoRecord.nullable().describe('null when neither source has one, or neither could be reached'),
   })
   .meta({ id: 'AdsbPhoto' });
 
@@ -461,7 +544,7 @@ adsbRouter.get(
     tags: ['Aircraft'],
     summary: 'A photo of an aircraft',
     description:
-      'A photo of the aircraft from Planespotters.net, looked up by its ICAO address and then, failing that, by `reg`. A TIS-B id (one starting with ~) is looked up by `reg` alone. Answers are kept for a day.',
+      'A photo of the aircraft from Planespotters.net, looked up by its ICAO address and then, failing that, by `reg`; airport-data.com is asked when Planespotters has none or cannot be reached. A TIS-B id (one starting with ~) is looked up on Planespotters by `reg` alone. Answers are kept for a day.',
     parameters: [
       {
         in: 'path',
@@ -520,3 +603,179 @@ adsbRouter.get(
     }
   },
 );
+
+// ---------------------------------------------------------------------------
+// Aircraft and route details (adsbdb.com) — site-only
+// ---------------------------------------------------------------------------
+//
+// adsbdb answers by Mode-S address (the airframe: maker, type, operator) and
+// by callsign (the airline and the route that callsign usually flies). The
+// route is the usual one for the callsign, not a flight plan, and the card
+// says so.
+//
+// No scoped() and no /api/v1 mirror on purpose: adsbdb's route data is
+// compiled by David Taylor and Jim Mason and "may not be copied, published,
+// or incorporated into other databases without the explicit permission" of
+// David J Taylor. Looking it up for the person viewing the map is what adsbdb
+// offers; handing it on to API key holders as a feed is not ours to do.
+
+const ADSBDB_BASE = 'https://api.adsbdb.com/v0';
+
+interface AdsbdbAirport {
+  icao_code?: string;
+  iata_code?: string;
+  name?: string;
+  municipality?: string;
+  country_iso_name?: string;
+}
+interface AdsbdbAircraftResponse {
+  response?: {
+    aircraft?: {
+      type?: string;
+      icao_type?: string;
+      manufacturer?: string;
+      registration?: string;
+      registered_owner?: string;
+      registered_owner_country_name?: string;
+    };
+  };
+}
+interface AdsbdbCallsignResponse {
+  response?: {
+    flightroute?: {
+      callsign?: string;
+      airline?: { name?: string; icao?: string; iata?: string } | null;
+      origin?: AdsbdbAirport;
+      destination?: AdsbdbAirport;
+      midpoint?: AdsbdbAirport | null;
+    };
+  };
+}
+
+export interface AdsbAirframe {
+  manufacturer: string | null;
+  type: string | null;
+  icaoType: string | null;
+  registration: string | null;
+  owner: string | null;
+  ownerCountry: string | null;
+}
+export interface AdsbRouteAirport {
+  icao: string | null;
+  iata: string | null;
+  name: string | null;
+  municipality: string | null;
+  country: string | null;
+}
+export interface AdsbRoute {
+  callsign: string;
+  airline: string | null;
+  origin: AdsbRouteAirport;
+  destination: AdsbRouteAirport;
+  midpoint: AdsbRouteAirport | null;
+}
+
+const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
+
+function airport(a: AdsbdbAirport | null | undefined): AdsbRouteAirport | null {
+  if (!a) return null;
+  const out = {
+    icao: str(a.icao_code),
+    iata: str(a.iata_code),
+    name: str(a.name),
+    municipality: str(a.municipality),
+    country: str(a.country_iso_name),
+  };
+  return out.icao || out.iata || out.name ? out : null;
+}
+
+// An airframe's maker and operator change rarely; a callsign's usual route
+// more often. Unknowns are cached too, so a miss isn't asked again each click.
+const airframeCache = new SwrCache<AdsbAirframe | null>(4000);
+const routeCache = new SwrCache<AdsbRoute | null>(4000);
+const AIRFRAME_FRESH_MS = 7 * 24 * 3600_000;
+const AIRFRAME_STALE_MS = 30 * 24 * 3600_000;
+const ROUTE_FRESH_MS = 12 * 3600_000;
+const ROUTE_STALE_MS = 3 * 24 * 3600_000;
+
+/** fetchJson, with adsbdb's 404 ("unknown aircraft" / "unknown callsign") as null. */
+async function adsbdbGet<T>(path: string): Promise<T | null> {
+  try {
+    return await fetchJson<T>(`${ADSBDB_BASE}${path}`, { timeoutMs: 8_000 });
+  } catch (err) {
+    if ((err as { status?: number | null }).status === 404) return null;
+    throw err;
+  }
+}
+
+export async function lookupAirframe(hex: string): Promise<AdsbAirframe | null> {
+  const body = await adsbdbGet<AdsbdbAircraftResponse>(`/aircraft/${encodeURIComponent(hex.toUpperCase())}`);
+  const a = body?.response?.aircraft;
+  if (!a) return null;
+  return {
+    manufacturer: str(a.manufacturer),
+    type: str(a.type),
+    icaoType: str(a.icao_type),
+    registration: str(a.registration),
+    owner: str(a.registered_owner),
+    ownerCountry: str(a.registered_owner_country_name),
+  };
+}
+
+export async function lookupRoute(callsign: string): Promise<AdsbRoute | null> {
+  const body = await adsbdbGet<AdsbdbCallsignResponse>(`/callsign/${encodeURIComponent(callsign)}`);
+  const r = body?.response?.flightroute;
+  if (!r) return null;
+  const origin = airport(r.origin);
+  const destination = airport(r.destination);
+  if (!origin || !destination) return null;
+  return {
+    callsign: str(r.callsign) ?? callsign,
+    airline: str(r.airline?.name),
+    origin,
+    destination,
+    midpoint: airport(r.midpoint),
+  };
+}
+
+/** TEST-ONLY. */
+export function _resetAdsbInfoForTests(): void {
+  airframeCache.clear();
+  routeCache.clear();
+}
+
+adsbRouter.get('/api/adsb/info/:hex', async (c) => {
+  const hex = c.req.param('hex').trim().toLowerCase();
+  const callsign = (c.req.query('callsign') ?? '').trim().toUpperCase();
+  if (!/^~?[0-9a-f]{4,8}$/.test(hex)) return c.json({ error: 'invalid hex' }, 400);
+  if (callsign && !/^[A-Z0-9]{2,8}$/.test(callsign)) return c.json({ error: 'invalid callsign' }, 400);
+
+  // Each half fails on its own: a route that can't be looked up still leaves
+  // the airframe, and the card just shows less. Nothing here is worth a 5xx.
+  const safe = async <T>(p: Promise<{ value: T }>, what: string): Promise<T | null> => {
+    try {
+      return (await p).value;
+    } catch (err) {
+      log.warn({ err, hex, callsign }, `adsb: ${what} lookup failed`);
+      return null;
+    }
+  };
+  const [aircraft, route] = await Promise.all([
+    // A TIS-B id is not a Mode-S address adsbdb could know.
+    hex.startsWith('~')
+      ? Promise.resolve(null)
+      : safe(airframeCache.get(hex, () => lookupAirframe(hex), {
+          fresh: AIRFRAME_FRESH_MS,
+          stale: AIRFRAME_STALE_MS,
+          onError: (err) => log.warn({ err, hex }, 'adsb: airframe refresh failed'),
+        }), 'airframe'),
+    callsign
+      ? safe(routeCache.get(callsign, () => lookupRoute(callsign), {
+          fresh: ROUTE_FRESH_MS,
+          stale: ROUTE_STALE_MS,
+          onError: (err) => log.warn({ err, callsign }, 'adsb: route refresh failed'),
+        }), 'route')
+      : Promise.resolve(null),
+  ]);
+  return c.json({ aircraft, route });
+});

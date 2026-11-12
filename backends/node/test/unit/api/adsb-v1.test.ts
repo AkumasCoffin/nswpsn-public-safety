@@ -271,7 +271,7 @@ describe('GET /api/adsb/photo/:hex and /api/v1/adsb/photo/:hex', () => {
     link: 'https://www.planespotters.net/photo/1234',
     photographer: 'A. Spotter',
   };
-  const SERVED = { src: PHOTO.thumbnail_large.src, link: PHOTO.link, photographer: PHOTO.photographer };
+  const SERVED = { src: PHOTO.thumbnail_large.src, link: PHOTO.link, photographer: PHOTO.photographer, source: 'planespotters' };
 
   it('by hex: the photo, bare on the old path and in data on v1', async () => {
     m.fetchJson.mockResolvedValue({ photos: [PHOTO] });
@@ -295,6 +295,44 @@ describe('GET /api/adsb/photo/:hex and /api/v1/adsb/photo/:hex', () => {
       'https://api.planespotters.net/pub/photos/hex/7c0002',
       'https://api.planespotters.net/pub/photos/reg/VH-ABC',
     ]);
+  });
+
+  it('airport-data.com is the backup when Planespotters has none', async () => {
+    m.fetchJson.mockImplementation(async (url: string) =>
+      url.includes('airport-data.com')
+        ? { status: 200, count: 1, data: [{ image: 'https://airport-data.com/images/aircraft/thumbnails/001/939/001939643.jpg', link: 'https://airport-data.com/aircraft/photo/001939643', photographer: 'PhilR' }] }
+        : { photos: [] });
+    const a = await app();
+    const v1 = await a.request('/api/v1/adsb/photo/7c4925?reg=vh-oqf');
+    expect(await v1.json()).toEqual({
+      data: {
+        photo: {
+          src: 'https://airport-data.com/images/aircraft/thumbnails/001/939/001939643.jpg',
+          link: 'https://airport-data.com/aircraft/photo/001939643',
+          photographer: 'PhilR',
+          source: 'airport-data',
+        },
+      },
+    });
+    expect(m.fetchJson.mock.calls.map((c) => c[0])).toEqual([
+      'https://api.planespotters.net/pub/photos/hex/7c4925',
+      'https://api.planespotters.net/pub/photos/reg/VH-OQF',
+      'https://airport-data.com/api/ac_thumb.json?m=7C4925&n=1&r=VH-OQF',
+    ]);
+  });
+
+  it('the backup is used when Planespotters is down, and "none" is not cached off a failed lookup', async () => {
+    const { HttpError } = await import('../../../src/sources/shared/http.js');
+    m.fetchJson.mockImplementation(async (url: string) => {
+      if (url.includes('planespotters')) throw new HttpError('HTTP 503', 503, url);
+      throw new HttpError('HTTP 404', 404, url); // airport-data knows none
+    });
+    const a = await app();
+    expect(await (await a.request('/api/adsb/photo/7c0aa1')).text()).toBe('{"photo":null}');
+    const before = m.fetchJson.mock.calls.length;
+    // Asked again: nothing was cached, so both are tried again.
+    await a.request('/api/adsb/photo/7c0aa1');
+    expect(m.fetchJson.mock.calls.length).toBeGreaterThan(before);
   });
 
   it('a lookup that fails is no photo, on both paths', async () => {
@@ -357,5 +395,90 @@ describe('what is not mirrored', () => {
     await app();
     const adsb = mirroredRoutes().filter((r) => r.path.startsWith('/api/v1/adsb/'));
     expect(adsb.map((r) => `${r.method} ${r.legacyPath}`).sort()).toEqual(IN_SCOPE.map((p) => `GET ${p}`).sort());
+  });
+});
+
+describe('GET /api/adsb/info/:hex (adsbdb, site-only)', () => {
+  const AIRCRAFT = {
+    response: {
+      aircraft: {
+        type: 'A380 842', icao_type: 'A388', manufacturer: 'Airbus', mode_s: '7C4925',
+        registration: 'VH-OQF', registered_owner_country_iso_name: 'AU',
+        registered_owner_country_name: 'Australia', registered_owner_operator_flag_code: 'QFA',
+        registered_owner: 'Qantas', url_photo: null, url_photo_thumbnail: null,
+      },
+    },
+  };
+  const ROUTE = {
+    response: {
+      flightroute: {
+        callsign: 'QFA1', callsign_icao: 'QFA1', callsign_iata: 'QF1',
+        airline: { name: 'Qantas', icao: 'QFA', iata: 'QF', country: 'Australia', country_iso: 'AU', callsign: 'QANTAS' },
+        origin: { country_iso_name: 'AU', country_name: 'Australia', elevation: 21, iata_code: 'SYD', icao_code: 'YSSY', latitude: -33.9461, longitude: 151.177, municipality: 'Sydney', name: 'Sydney Kingsford Smith International Airport' },
+        destination: { country_iso_name: 'SG', country_name: 'Singapore', elevation: 22, iata_code: 'SIN', icao_code: 'WSSS', latitude: 1.35, longitude: 103.99, municipality: 'Singapore', name: 'Singapore Changi Airport' },
+      },
+    },
+  };
+  beforeEach(async () => {
+    const { _resetAdsbInfoForTests } = await import('../../../src/api/adsb.js');
+    _resetAdsbInfoForTests();
+  });
+
+  it('the airframe and the usual route, compacted', async () => {
+    m.fetchJson.mockImplementation(async (url: string) => (url.includes('/callsign/') ? ROUTE : AIRCRAFT));
+    const a = await app();
+    const res = await a.request('/api/adsb/info/7c4925?callsign=qfa1');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      aircraft: {
+        manufacturer: 'Airbus', type: 'A380 842', icaoType: 'A388', registration: 'VH-OQF',
+        owner: 'Qantas', ownerCountry: 'Australia',
+      },
+      route: {
+        callsign: 'QFA1',
+        airline: 'Qantas',
+        origin: { icao: 'YSSY', iata: 'SYD', name: 'Sydney Kingsford Smith International Airport', municipality: 'Sydney', country: 'AU' },
+        destination: { icao: 'WSSS', iata: 'SIN', name: 'Singapore Changi Airport', municipality: 'Singapore', country: 'SG' },
+        midpoint: null,
+      },
+    });
+    expect(m.fetchJson.mock.calls.map((c) => c[0]).sort()).toEqual([
+      'https://api.adsbdb.com/v0/aircraft/7C4925',
+      'https://api.adsbdb.com/v0/callsign/QFA1',
+    ]);
+    // Cached: a second ask goes nowhere.
+    await a.request('/api/adsb/info/7c4925?callsign=QFA1');
+    expect(m.fetchJson).toHaveBeenCalledTimes(2);
+  });
+
+  it('unknown to adsbdb (404) is null, and one half failing leaves the other', async () => {
+    const { HttpError } = await import('../../../src/sources/shared/http.js');
+    m.fetchJson.mockImplementation(async (url: string) => {
+      if (url.includes('/callsign/')) throw new HttpError('HTTP 503', 503, url);
+      throw new HttpError('HTTP 404', 404, url);
+    });
+    const a = await app();
+    const res = await a.request('/api/adsb/info/7c0bb1?callsign=JST501');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ aircraft: null, route: null });
+  });
+
+  it('a TIS-B id skips the airframe lookup; no callsign skips the route', async () => {
+    m.fetchJson.mockResolvedValue(ROUTE);
+    const a = await app();
+    expect(await (await a.request('/api/adsb/info/~7c0cc1?callsign=QFA1')).json()).toMatchObject({ aircraft: null });
+    expect(m.fetchJson.mock.calls.map((c) => c[0])).toEqual(['https://api.adsbdb.com/v0/callsign/QFA1']);
+    m.fetchJson.mockClear();
+    m.fetchJson.mockResolvedValue(AIRCRAFT);
+    expect(await (await a.request('/api/adsb/info/7c0cc2')).json()).toMatchObject({ route: null });
+    expect(m.fetchJson.mock.calls.map((c) => c[0])).toEqual(['https://api.adsbdb.com/v0/aircraft/7C0CC2']);
+  });
+
+  it('bad input is a 400, and it is not on /api/v1', async () => {
+    const a = await app();
+    expect((await a.request('/api/adsb/info/zz')).status).toBe(400);
+    expect((await a.request('/api/adsb/info/7c0dd1?callsign=QF%201!')).status).toBe(400);
+    expect((await a.request('/api/v1/adsb/info/7c0dd1')).status).toBe(404);
+    expect(m.fetchJson).not.toHaveBeenCalled();
   });
 });
