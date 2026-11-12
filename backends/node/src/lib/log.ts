@@ -70,11 +70,18 @@ function formatMessage(rec: Record<string, unknown>, key: string): string {
  * In-process rather than as a worker transport: a transport's options cross a
  * thread boundary and cannot carry the formatMessage function. Colour stays
  * forced on, which is what makes it show through `pm2 logs`.
+ *
+ * Synchronous writes. The worker transport flushed itself on exit; an
+ * in-process async stream does not, and the crash handlers in index.ts log
+ * fatal and call process.exit() on the next line — the one line that
+ * matters most would be the one lost. At this log volume a sync write costs
+ * a few microseconds a line.
  */
 const stream = config.NODE_ENV === 'production'
   ? undefined
   : pretty({
       colorize: true,
+      sync: true,
       translateTime: 'HH:MM:ss',
       // svc/pid/hostname are constant per-process noise; client is already
       // the coloured tag in the message.
