@@ -31,9 +31,9 @@
     { id: 'b4', label: '9–13 km', s0: 18, s1: 25 },
   ];
   const COL = {
-    heard: [224, 242, 254],     // near-white sky
-    heardDim: [56, 189, 248],
-    missed: [71, 85, 105],
+    heard: [103, 232, 249],     // cyan: heard
+    heardDim: [6, 182, 212],
+    missed: [239, 68, 68],      // red: in range, not heard
     terrain: '#a78bfa',
     measured: '#f8fafc',
     obstruction: '#f59e0b',
@@ -72,7 +72,7 @@
 .alc-b.on { background: rgba(56,189,248,0.14); border-color: rgba(56,189,248,0.55); color: #e0f2fe; }
 .alc-b.lay-terrain.on { background: rgba(167,139,250,0.14); border-color: rgba(167,139,250,0.6); color: #ede9fe; }
 .alc-b.lay-obs.on { background: rgba(245,158,11,0.12); border-color: rgba(245,158,11,0.6); color: #fef3c7; }
-.alc-b.lay-missed.on { background: rgba(100,116,139,0.18); border-color: rgba(148,163,184,0.5); }
+.alc-b.lay-missed.on { background: rgba(239,68,68,0.14); border-color: rgba(239,68,68,0.55); color: #fecaca; }
 .alc-b:disabled { opacity: 0.4; cursor: default; }
 .alc-foot { padding: 8px 12px 10px; font-size: 10.5px; color: #64748b; line-height: 1.55; border-top: 1px solid rgba(148,163,184,0.08); }
 .alc-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; color: #94a3b8; margin-bottom: 3px; }
@@ -409,7 +409,7 @@
       const proj = { x: [], y: [], i: [], kind: [] };
       if (st.layers.missed) {
         const m = P.missed;
-        ctx.fillStyle = 'rgba(100,116,139,0.6)';
+        ctx.fillStyle = `rgba(${COL.missed[0]},${COL.missed[1]},${COL.missed[2]},0.6)`;
         const mr = 1.5 * dotScale;
         for (let i = 0; i < m.n; i += 1) {
           if (!inBand(m.slice[i])) continue;
@@ -504,8 +504,8 @@
       const days = P.lc.daysCovered || 0;
       const hNote = !P.lc.antennaHeightSet && opts.heightHint ? ' ' + opts.heightHint : '';
       foot.innerHTML = `<div class="alc-legend">`
-        + `<span><i class="alc-k-dot" style="background:#e0f2fe"></i>aircraft heard</span>`
-        + `<span><i class="alc-k-dot" style="background:#64748b"></i>passed in range and not heard</span>`
+        + `<span><i class="alc-k-dot" style="background:#67e8f9"></i>aircraft heard</span>`
+        + `<span><i class="alc-k-dot" style="background:#ef4444"></i>passed in range and not heard</span>`
         + `<span><i class="alc-k-line" style="border-color:#f8fafc"></i>measured reach</span>`
         + `<span><i class="alc-k-box" style="border-color:#a78bfa"></i>terrain line-of-sight limit</span>`
         + `<span><i class="alc-k-box" style="border-color:#f59e0b"></i>possible obstruction</span></div>`
