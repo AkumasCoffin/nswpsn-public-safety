@@ -3108,6 +3108,18 @@
                           "string",
                           "null"
                         ]
+                      },
+                      "lat": {
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      },
+                      "lon": {
+                        "type": [
+                          "number",
+                          "null"
+                        ]
                       }
                     },
                     "required": [
@@ -3115,7 +3127,9 @@
                       "iata",
                       "name",
                       "municipality",
-                      "country"
+                      "country",
+                      "lat",
+                      "lon"
                     ],
                     "additionalProperties": false
                   },
@@ -3152,6 +3166,18 @@
                           "string",
                           "null"
                         ]
+                      },
+                      "lat": {
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      },
+                      "lon": {
+                        "type": [
+                          "number",
+                          "null"
+                        ]
                       }
                     },
                     "required": [
@@ -3159,7 +3185,9 @@
                       "iata",
                       "name",
                       "municipality",
-                      "country"
+                      "country",
+                      "lat",
+                      "lon"
                     ],
                     "additionalProperties": false
                   },
@@ -3198,6 +3226,18 @@
                               "string",
                               "null"
                             ]
+                          },
+                          "lat": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "lon": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
                           }
                         },
                         "required": [
@@ -3205,7 +3245,9 @@
                           "iata",
                           "name",
                           "municipality",
-                          "country"
+                          "country",
+                          "lat",
+                          "lon"
                         ],
                         "additionalProperties": false
                       },

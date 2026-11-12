@@ -437,8 +437,8 @@ describe('GET /api/adsb/info/:hex and /api/v1/adsb/info/:hex (adsbdb)', () => {
       route: {
         callsign: 'QFA1',
         airline: 'Qantas',
-        origin: { icao: 'YSSY', iata: 'SYD', name: 'Sydney Kingsford Smith International Airport', municipality: 'Sydney', country: 'AU' },
-        destination: { icao: 'WSSS', iata: 'SIN', name: 'Singapore Changi Airport', municipality: 'Singapore', country: 'SG' },
+        origin: { icao: 'YSSY', iata: 'SYD', name: 'Sydney Kingsford Smith International Airport', municipality: 'Sydney', country: 'AU', lat: -33.9461, lon: 151.177 },
+        destination: { icao: 'WSSS', iata: 'SIN', name: 'Singapore Changi Airport', municipality: 'Singapore', country: 'SG', lat: 1.35, lon: 103.99 },
         midpoint: null,
       },
     });

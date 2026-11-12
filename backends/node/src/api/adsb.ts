@@ -624,6 +624,8 @@ interface AdsbdbAirport {
   name?: string;
   municipality?: string;
   country_iso_name?: string;
+  latitude?: number;
+  longitude?: number;
 }
 interface AdsbdbAircraftResponse {
   response?: {
@@ -663,6 +665,8 @@ export interface AdsbRouteAirport {
   name: string | null;
   municipality: string | null;
   country: string | null;
+  lat: number | null;
+  lon: number | null;
 }
 export interface AdsbRoute {
   callsign: string;
@@ -673,6 +677,8 @@ export interface AdsbRoute {
 }
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
+const num = (v: unknown, lim: number): number | null =>
+  typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= lim ? v : null;
 
 function airport(a: AdsbdbAirport | null | undefined): AdsbRouteAirport | null {
   if (!a) return null;
@@ -682,6 +688,8 @@ function airport(a: AdsbdbAirport | null | undefined): AdsbRouteAirport | null {
     name: str(a.name),
     municipality: str(a.municipality),
     country: str(a.country_iso_name),
+    lat: num(a.latitude, 90),
+    lon: num(a.longitude, 180),
   };
   return out.icao || out.iata || out.name ? out : null;
 }
@@ -757,6 +765,8 @@ const AdsbRouteAirportRecord = z.object({
   name: z.string().nullable(),
   municipality: z.string().nullable(),
   country: z.string().nullable().describe('ISO country code'),
+  lat: z.number().nullable(),
+  lon: z.number().nullable(),
 });
 assertShape<SameShape<z.infer<typeof AdsbRouteAirportRecord>, AdsbRouteAirport>>();
 

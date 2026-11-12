@@ -1360,6 +1360,28 @@
     .adsb-dc-photo { width: 100%; max-height: 120px; object-fit: cover; border-radius: 6px;
       background: rgba(0,0,0,0.3); display: block; }
     .adsb-dc-credit { font-size: 9px; color: #64748b; margin: 3px 0 8px; }
+    /* The usual route, as its own panel: both ends named, and how far along
+       the aircraft is when it sits on that route. */
+    .adsb-dc-route { margin: 0 0 9px; padding: 8px 10px 7px; border-radius: 8px;
+                     background: rgba(148,163,184,0.06); border: 1px solid rgba(148,163,184,0.16); }
+    .adsb-dc-route-k { font-size: 9.5px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.06em;
+                       display: flex; justify-content: space-between; gap: 6px; margin-bottom: 4px; }
+    .adsb-dc-route-k span:last-child { text-transform: none; letter-spacing: 0; color: #cbd5e1; font-weight: 600;
+                                       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .adsb-dc-route-ends { display: grid; grid-template-columns: 1fr auto 1fr; align-items: start; gap: 6px; }
+    .adsb-dc-ap { min-width: 0; }
+    .adsb-dc-ap.to { text-align: right; }
+    .adsb-dc-ap-code { font-size: 19px; font-weight: 700; color: #f1f5f9; letter-spacing: 0.03em; line-height: 1.1; }
+    .adsb-dc-ap-city { font-size: 11px; color: #cbd5e1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .adsb-dc-ap-name { font-size: 9.5px; color: #64748b; line-height: 1.3; overflow: hidden;
+                       display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+    .adsb-dc-route-mid { color: #64748b; font-size: 11px; padding-top: 5px; text-align: center; white-space: nowrap; }
+    .adsb-dc-route-bar { position: relative; height: 4px; border-radius: 2px; background: rgba(148,163,184,0.2); margin: 9px 6px 5px; }
+    .adsb-dc-route-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 2px; background: #38bdf8; }
+    .adsb-dc-route-plane { position: absolute; top: 50%; transform: translate(-50%, -50%) rotate(45deg); font-size: 11px; color: #f1f5f9; }
+    .adsb-dc-route-meta { display: flex; justify-content: space-between; gap: 8px; font-size: 10px; color: #94a3b8;
+                          font-variant-numeric: tabular-nums; }
+    .adsb-dc-route-warn { font-size: 10px; line-height: 1.35; color: #fbbf24; margin-top: 5px; }
     .adsb-dc-rows { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px;
       font-size: 11.5px; line-height: 1.5; }
     .adsb-dc-k { color: #94a3b8; white-space: nowrap; }
@@ -16472,6 +16494,79 @@ function initPagerHoursFromStorage() {
       if (el) { el.classList.remove('open'); el.innerHTML = ''; }
     }
 
+    /**
+     * The callsign's usual route as a panel: each end's code, city and airport,
+     * then — when the aircraft is plausibly flying it — how far along it is.
+     *
+     * "Usual" is the point: adsbdb knows what the callsign normally flies, not
+     * this flight's plan. So progress is only shown when the aircraft sits near
+     * the line between the two airports; when it clearly doesn't, the panel says
+     * the route may not match rather than drawing a bar that means nothing.
+     */
+    function adsbRoutePanel(a, rt) {
+      const code = (p) => p.iata || p.icao || '?';
+      const city = (p) => p.municipality || p.name || '';
+      const end = (p, cls) => '<div class="adsb-dc-ap ' + cls + '">'
+        + '<div class="adsb-dc-ap-code">' + escapeHtml(code(p)) + '</div>'
+        + '<div class="adsb-dc-ap-city">' + escapeHtml(city(p)) + '</div>'
+        + (p.name && p.name !== city(p)
+          ? '<div class="adsb-dc-ap-name" title="' + escapeHtml(p.name + (p.icao ? ' (' + p.icao + ')' : '')) + '">' + escapeHtml(p.name) + '</div>'
+          : '')
+        + '</div>';
+      const mid = rt.midpoint
+        ? '<div class="adsb-dc-route-mid" title="' + escapeHtml(rt.midpoint.name || '') + '">via ' + escapeHtml(code(rt.midpoint)) + '</div>'
+        : '<div class="adsb-dc-route-mid"><i class="fa-solid fa-plane"></i></div>';
+
+      // Progress along the leg the aircraft is on (with a stop, whichever half
+      // it is nearer to lying on).
+      let progress = '';
+      const has = (p) => p && Number.isFinite(p.lat) && Number.isFinite(p.lon);
+      const legs = rt.midpoint && has(rt.midpoint)
+        ? [[rt.origin, rt.midpoint], [rt.midpoint, rt.destination]]
+        : [[rt.origin, rt.destination]];
+      let best = null;
+      for (const [from, to] of legs) {
+        if (!has(from) || !has(to)) continue;
+        const total = haversineMeters(from.lat, from.lon, to.lat, to.lon);
+        const done = haversineMeters(from.lat, from.lon, a.lat, a.lon);
+        const left = haversineMeters(a.lat, a.lon, to.lat, to.lon);
+        // How far out of the way the aircraft is: 0 on the straight line.
+        const detour = done + left - total;
+        if (!best || detour < best.detour) best = { from, to, total, done, left, detour };
+      }
+      if (best && best.total > 0) {
+        // On the route if the detour is small for the leg's length.
+        const onRoute = best.detour <= Math.max(60_000, best.total * 0.15);
+        if (onRoute && !a.onGround) {
+          const frac = Math.max(0, Math.min(1, best.done / (best.done + best.left)));
+          const km = (m) => Math.round(m / 1000).toLocaleString() + ' km';
+          let eta = '';
+          if (a.gsKt != null && a.gsKt > 60) {
+            const mins = Math.round(best.left / (a.gsKt * 1852) * 60);
+            eta = mins >= 60 ? Math.floor(mins / 60) + ' h ' + (mins % 60) + ' min' : mins + ' min';
+          }
+          progress = '<div class="adsb-dc-route-bar">'
+            + '<div class="adsb-dc-route-fill" style="width:' + (frac * 100).toFixed(1) + '%;"></div>'
+            + '<i class="fa-solid fa-plane adsb-dc-route-plane" style="left:' + (frac * 100).toFixed(1) + '%;"></i>'
+            + '</div>'
+            + '<div class="adsb-dc-route-meta">'
+            + '<span>' + km(best.done) + ' flown</span>'
+            + '<span>' + km(best.left) + ' to ' + escapeHtml(code(best.to)) + (eta ? ' · ~' + eta : '') + '</span>'
+            + '</div>';
+        } else if (!onRoute) {
+          progress = '<div class="adsb-dc-route-warn"><i class="fa-solid fa-triangle-exclamation"></i> '
+            + 'This aircraft is well off that route, so this flight may not be flying it today.</div>';
+        }
+      }
+
+      return '<div class="adsb-dc-route">'
+        + '<div class="adsb-dc-route-k"><span>Usual route</span>'
+        + (rt.airline ? '<span>' + escapeHtml(rt.airline) + '</span>' : '<span></span>') + '</div>'
+        + '<div class="adsb-dc-route-ends">' + end(rt.origin, 'from') + mid + end(rt.destination, 'to') + '</div>'
+        + progress
+        + '</div>';
+    }
+
     function adsbRenderDetailCard() {
       const el = document.getElementById('adsb-detail-card');
       if (!el) return;
@@ -16544,13 +16639,7 @@ function initPagerHoursFromStorage() {
       const af = info && info.aircraft;
       const rt = info && info.route;
       const afTxt = af ? [af.manufacturer, af.type].filter(Boolean).join(' ') : '';
-      const apCode = (p) => p.iata || p.icao || p.name || '?';
-      const apName = (p) => [p.name || p.municipality, p.icao].filter(Boolean).join(' · ');
-      const routeStops = rt ? [rt.origin, rt.midpoint, rt.destination].filter(Boolean) : [];
-      const routeTxt = rt
-        ? '<span title="' + escapeHtml(routeStops.map(apName).join('\n→ ')) + '">'
-          + routeStops.map((p) => escapeHtml(apCode(p))).join(' → ') + '</span>'
-        : null;
+      const routeHtml = rt ? adsbRoutePanel(a, rt) : '';
       const infoCredit = (afTxt || (af && af.owner) || rt)
         ? '<div class="adsb-dc-credit">Aircraft &amp; route details: <a href="https://www.adsbdb.com/" target="_blank" rel="noopener" style="color:#7dd3fc;">adsbdb.com</a>'
           + (rt ? ' · route is the callsign\'s usual one, not a flight plan' : '') + '</div>'
@@ -16573,13 +16662,12 @@ function initPagerHoursFromStorage() {
         + '</div>'
         + estHtml
         + photoHtml
+        + routeHtml
         + '<div class="adsb-dc-rows">'
         +   row('Registration', a.reg ? escapeHtml(a.reg) : null)
         +   row('Type', a.type ? escapeHtml(a.type) : null)
         +   row('Aircraft', afTxt ? escapeHtml(afTxt) : null)
         +   row('Operator', af && af.owner ? escapeHtml(af.owner) : null)
-        +   row('Airline', rt && rt.airline && !(af && af.owner && af.owner.toLowerCase() === rt.airline.toLowerCase()) ? escapeHtml(rt.airline) : null)
-        +   row('Usual route', routeTxt)
         +   row('Altitude', altTxt)
         +   row('Speed', a.gsKt != null ? Math.round(a.gsKt) + ' kt' : null)
         +   row('Track', Number.isFinite(a.trackDeg) ? Math.round(a.trackDeg) + '°' : null)
