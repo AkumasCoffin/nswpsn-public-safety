@@ -206,7 +206,7 @@ func TestEmptyFileIsNotReady(t *testing.T) {
 // aircraft count all reported the dead receiver as a healthy one.
 func TestFrozenFilesAreStaleNotLiveTraffic(t *testing.T) {
 	dir := writeFixtures(t)
-	old := time.Now().Add(-2 * MaxStaleness)
+	old := time.Now().Add(-2 * StatsMaxStaleness)
 	for _, name := range []string{"aircraft.json", "stats.json"} {
 		if err := os.Chtimes(filepath.Join(dir, name), old, old); err != nil {
 			t.Fatal(err)
@@ -243,5 +243,25 @@ func TestFreshFilesAreNotStale(t *testing.T) {
 	}
 	if _, err := r.Stats(); err != nil {
 		t.Fatalf("a just-written stats.json must read cleanly: %v", err)
+	}
+}
+
+// dump1090 rewrites stats.json once a minute, so a stats.json 30 s old is the
+// normal state between rollovers, while an aircraft.json that old is a dead
+// decoder. Held to one bound, the message rate vanished most of the time.
+func TestStatsToleratesOneMinuteRewrites(t *testing.T) {
+	dir := writeFixtures(t)
+	half := time.Now().Add(-30 * time.Second)
+	for _, name := range []string{"aircraft.json", "stats.json"} {
+		if err := os.Chtimes(filepath.Join(dir, name), half, half); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := NewReader(dir)
+	if _, err := r.Stats(); err != nil {
+		t.Fatalf("a stats.json from 30 s ago is current: %v", err)
+	}
+	if _, err := r.Aircraft(); !errors.Is(err, ErrStale) {
+		t.Fatalf("an aircraft.json from 30 s ago is stale: got %v", err)
 	}
 }

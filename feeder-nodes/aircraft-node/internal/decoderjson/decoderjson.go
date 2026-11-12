@@ -220,7 +220,16 @@ var ErrStale = fmt.Errorf("decoder json is stale: %w", ErrNotReady)
 // decoder stops producing map pins almost immediately.
 const MaxStaleness = 10 * time.Second
 
-func (r *Reader) read(name string, into any) error {
+// StatsMaxStaleness is the same bound for stats.json, which dump1090 rewrites
+// only when its one-minute statistics period rolls over, not with every
+// aircraft.json. Held to the aircraft bound it read as stale for fifty
+// seconds of every minute, so most heartbeats carried no message rate and the
+// node page showed a dash while the decoder was running normally. Three
+// periods of slack still catches a stopped decoder within a few minutes; the
+// aircraft bound above is what keeps a dead receiver off the map.
+const StatsMaxStaleness = 3 * time.Minute
+
+func (r *Reader) read(name string, maxAge time.Duration, into any) error {
 	path := filepath.Join(r.dir, name)
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -238,7 +247,7 @@ func (r *Reader) read(name string, into any) error {
 	// file rather than read out of it because it holds for both supported
 	// decoders and for whatever a future one chooses to put in its JSON.
 	if fi, serr := os.Stat(path); serr == nil {
-		if age := time.Since(fi.ModTime()); age > MaxStaleness {
+		if age := time.Since(fi.ModTime()); age > maxAge {
 			return fmt.Errorf("%s last written %s ago: %w", name, age.Round(time.Second), ErrStale)
 		}
 	}
@@ -248,7 +257,7 @@ func (r *Reader) read(name string, into any) error {
 // Aircraft reads and parses aircraft.json.
 func (r *Reader) Aircraft() (*AircraftFile, error) {
 	var f AircraftFile
-	if err := r.read("aircraft.json", &f); err != nil {
+	if err := r.read("aircraft.json", MaxStaleness, &f); err != nil {
 		return nil, err
 	}
 	return &f, nil
@@ -257,7 +266,7 @@ func (r *Reader) Aircraft() (*AircraftFile, error) {
 // Stats reads and parses stats.json.
 func (r *Reader) Stats() (*StatsFile, error) {
 	var f StatsFile
-	if err := r.read("stats.json", &f); err != nil {
+	if err := r.read("stats.json", StatsMaxStaleness, &f); err != nil {
 		return nil, err
 	}
 	return &f, nil
