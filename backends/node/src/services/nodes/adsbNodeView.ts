@@ -354,6 +354,14 @@ export interface AdsbNodeTracks {
 export const ADSB_TRACKS_MAX_MINUTES = 480;
 
 /**
+ * The 3D coverage view's window. A week, not the whole retention: a month of
+ * cells keeps drawing a lobe that stopped working weeks ago, which is the
+ * fault the view exists to show. Seven rather than fewer so it always spans a
+ * full weekday + weekend traffic cycle.
+ */
+export const ADSB_LIGHTCONE_DAYS = 7;
+
+/**
  * The paths aircraft took through one receiver's coverage — tar1090's pTracks
  * view, and the most direct answer to "is this antenna hearing in every
  * direction, and how far".
@@ -506,7 +514,7 @@ export async function adsbNodeTracks(
       const heightM = heightSet ? row.antenna_height_m as number : DEFAULT_ANTENNA_HEIGHT_M;
       try {
         const [cells, t] = await Promise.all([
-          adsbLightconeFor(nodeId, DATA_RETENTION_DAYS),
+          adsbLightconeFor(nodeId, ADSB_LIGHTCONE_DAYS),
           terrainFor(nodeId, row.lat, row.lon, heightM),
         ]);
         if (cells) {

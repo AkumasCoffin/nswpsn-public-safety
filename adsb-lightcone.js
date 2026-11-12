@@ -505,7 +505,7 @@
         + `<span><i class="alc-k-box" style="border-color:#a78bfa"></i>terrain line-of-sight limit</span>`
         + `<span><i class="alc-k-box" style="border-color:#f59e0b"></i>possible obstruction</span></div>`
         + `Altitude exaggerated ×${EXAG} · rings every 100 km · drag to rotate, pinch or Ctrl+wheel to zoom, arrow keys work too. `
-        + `Built from ${days} ${days === 1 ? 'day' : 'days'}${days < 2 ? ' — too little history yet to judge this' : ''}. `
+        + `Built from the last ${days} ${days === 1 ? 'day' : 'days'}${days < 2 ? ' — too little history yet to judge this' : ''} (up to 7). `
         + `Terrain limit assumes the antenna is ${esc(P.lc.antennaHeightM)} m above the ground${P.lc.antennaHeightSet ? '' : ' (not set)'}`
         + (typeof t.groundM === 'number'
           ? `, on ground ${esc(t.groundM)} m above sea level — ${esc(Math.round(t.groundM + P.lc.antennaHeightM))} m in all.`
