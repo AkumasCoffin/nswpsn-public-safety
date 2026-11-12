@@ -163,12 +163,17 @@ function classifyClient(ua: string, xClient: string, path: string): ClientKind {
 /**
  * One colour per client kind, so a busy tail separates into streams by eye.
  *
- * Gated on the same condition as pretty-printing: with NODE_ENV=production
- * the logger emits raw ndjson for a shipper, and ANSI inside msg would
- * pollute it. (The live box runs mode=dev, where pino-pretty already
- * colourises every line, so embedded colour matches the existing output.)
+ * Off with NODE_ENV=production (raw ndjson for a shipper, where ANSI inside
+ * msg would pollute it) AND off when stdout is not a terminal. The second is
+ * the live box: it runs mode=dev under pm2, which writes to log files, and
+ * pino-pretty's own colours switch themselves off there — but these were
+ * written by hand and did not, so every tag came out of `pm2 logs` as
+ * literal "[93mwhisper-node[0m" junk. FORCE_COLOR turns them back on, the
+ * same switch pino-pretty's colours obey.
  */
-const COLOUR_TAGS = process.env['NODE_ENV'] !== 'production';
+const COLOUR_TAGS = process.env['NODE_ENV'] !== 'production'
+  && (process.stdout.isTTY === true
+    || (!!process.env['FORCE_COLOR'] && process.env['FORCE_COLOR'] !== '0'));
 const CLIENT_COLOUR: Record<ClientKind, string> = {
   browser: '\x1b[94m', // bright blue: people
   'discord-bot': '\x1b[95m', // magenta: the bot's pollers
