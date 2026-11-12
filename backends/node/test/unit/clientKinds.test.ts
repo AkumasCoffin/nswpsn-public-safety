@@ -24,8 +24,13 @@ import { log } from '../../src/lib/log.js';
 function lastLine(): string {
   const calls = (log.info as ReturnType<typeof vi.fn>).mock.calls;
   for (let i = calls.length - 1; i >= 0; i--) {
-    const m = calls[i]![0];
-    if (typeof m === 'string' && m.includes('→')) return strip(m);
+    // (fields, message): the client also rides as a field, which the
+    // pretty-printer colours. It must agree with the tag in the text.
+    const [f, m] = calls[i]! as [{ client?: string }, unknown];
+    if (typeof m === 'string' && m.includes('→')) {
+      expect(m).toContain(`[${f.client}]`);
+      return strip(m);
+    }
   }
   return '';
 }

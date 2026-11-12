@@ -161,35 +161,14 @@ function classifyClient(ua: string, xClient: string, path: string): ClientKind {
 }
 
 /**
- * One colour per client kind, so a busy tail separates into streams by eye.
- *
- * Off with NODE_ENV=production (raw ndjson for a shipper, where ANSI inside
- * msg would pollute it) AND off when stdout is not a terminal. The second is
- * the live box: it runs mode=dev under pm2, which writes to log files, and
- * pino-pretty's own colours switch themselves off there — but these were
- * written by hand and did not, so every tag came out of `pm2 logs` as
- * literal "[93mwhisper-node[0m" junk. FORCE_COLOR turns them back on, the
- * same switch pino-pretty's colours obey.
+ * The client tag is plain text in the message, plus a `client` field. The
+ * colour is added by the pretty-printer (lib/log.ts), not here: pino-pretty
+ * strips control characters out of every message, so colour codes written
+ * into the text reached `pm2 logs` with their ESC removed, as literal
+ * "[93mwhisper-node[0m".
  */
-const COLOUR_TAGS = process.env['NODE_ENV'] !== 'production'
-  && (process.stdout.isTTY === true
-    || (!!process.env['FORCE_COLOR'] && process.env['FORCE_COLOR'] !== '0'));
-const CLIENT_COLOUR: Record<ClientKind, string> = {
-  browser: '\x1b[94m', // bright blue: people
-  'discord-bot': '\x1b[95m', // magenta: the bot's pollers
-  node: '\x1b[92m', // green: feeder agents
-  rdio: '\x1b[38;5;208m', // orange: rdio's call/transcript pushes
-  // Bold white, NOT cyan: pino-pretty renders the message body cyan, so a
-  // cyan tag vanished into its own line — and this is the most frequent tag.
-  whisper: '\x1b[1;97m', // bold white: transcription traffic
-  'whisper-node': '\x1b[93m', // yellow: the PC watcher
-  other: '\x1b[90m', // grey: unidentified
-};
-const COLOUR_OFF = '\x1b[0m';
-
 function clientTag(client: ClientKind): string {
-  if (!COLOUR_TAGS) return `[${client}]`;
-  return `[${CLIENT_COLOUR[client]}${client}${COLOUR_OFF}]`;
+  return `[${client}]`;
 }
 
 /**
@@ -236,24 +215,25 @@ const requestLogger: MiddlewareHandler = async (c, next) => {
       : ` auth=${authClass}`;
   const line = `${method} ${path} → ${status} ${ms}ms ${clientTag(client)}${authTag}`;
 
+  const f = { client };
   if (status >= 500) {
-    log.warn(`5xx ${line}`);
+    log.warn(f, `5xx ${line}`);
     return;
   }
   if (status >= 400) {
-    log.info(`4xx ${line}`);
+    log.info(f, `4xx ${line}`);
     return;
   }
   if (QUIET_PATHS_RE.test(path)) return;
   if (ms >= SLOW_REQUEST_MS) {
-    log.info(`slow ${line}`);
+    log.info(f, `slow ${line}`);
     return;
   }
   if (VERBOSE_REQUEST_LOG) {
-    log.info(line);
+    log.info(f, line);
     return;
   }
-  log.debug(line);
+  log.debug(f, line);
 };
 
 export function createApp() {
