@@ -336,7 +336,7 @@ func buildAircraft(air *decoderjson.AircraftFile) []snapshotAircraft {
 			Flight:   trimSpace(a.Flag),
 			Lat:      *a.Lat,
 			Lon:      *a.Lon,
-			GS:       a.GS,
+			GS:       a.GroundSpeed(),
 			Track:    a.Track,
 			Squawk:   a.Squawk,
 			Emerg:    a.Emerg,

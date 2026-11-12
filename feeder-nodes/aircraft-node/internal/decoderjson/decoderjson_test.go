@@ -1,6 +1,7 @@
 package decoderjson
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -94,6 +95,37 @@ func TestAltBaroHandlesGround(t *testing.T) {
 	// Absent altitude is not an error, just unknown.
 	if _, _, ok := f.Aircraft[2].AltBaroValue(); ok {
 		t.Error("missing alt_baro should report ok=false")
+	}
+}
+
+// dump1090-mutability and dump1090-fa before 3.7 write "altitude" and
+// "speed", never alt_baro and gs. A receiver on one of those reported no
+// altitude at all, which left its 3D coverage view permanently empty.
+func TestLegacyAltitudeAndSpeed(t *testing.T) {
+	var f AircraftFile
+	err := json.Unmarshal([]byte(`{"aircraft":[
+		{"hex":"7c1234","lat":-33.9,"lon":151.2,"seen_pos":1,"altitude":35000,"speed":450},
+		{"hex":"7c5678","lat":-33.9,"lon":151.2,"seen_pos":1,"altitude":"ground","speed":12},
+		{"hex":"7c9abc","lat":-33.9,"lon":151.2,"seen_pos":1,"alt_baro":1200,"altitude":9999,"gs":200,"speed":1}
+	]}`), &f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if alt, ground, ok := f.Aircraft[0].AltBaroValue(); !ok || ground || alt != 35000 {
+		t.Fatalf("legacy airborne: alt=%v ground=%v ok=%v", alt, ground, ok)
+	}
+	if gs := f.Aircraft[0].GroundSpeed(); gs == nil || *gs != 450 {
+		t.Fatalf("legacy speed: %v", gs)
+	}
+	if _, ground, ok := f.Aircraft[1].AltBaroValue(); !ok || !ground {
+		t.Fatalf("legacy surface: ground=%v ok=%v", ground, ok)
+	}
+	// The newer field wins when both are present.
+	if alt, _, _ := f.Aircraft[2].AltBaroValue(); alt != 1200 {
+		t.Fatalf("alt_baro should win, got %v", alt)
+	}
+	if gs := f.Aircraft[2].GroundSpeed(); gs == nil || *gs != 200 {
+		t.Fatalf("gs should win, got %v", gs)
 	}
 }
 

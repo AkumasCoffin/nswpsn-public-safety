@@ -44,7 +44,13 @@ type Aircraft struct {
 	Lon  *float64 `json:"lon"`
 	// AltBaro is a number OR the string "ground" for a surface position, so it
 	// has to be decoded as a raw message and interpreted (see AltBaroValue).
-	AltBaro  json.RawMessage `json:"alt_baro"`
+	AltBaro json.RawMessage `json:"alt_baro"`
+	// Altitude and Speed are the same two values under the names older
+	// decoders write: dump1090-mutability and dump1090-fa before 3.7 never
+	// emit alt_baro or gs. Read only when the newer field is absent — a
+	// receiver on one of those reported no altitude at all.
+	Altitude json.RawMessage `json:"altitude"`
+	Speed    *float64        `json:"speed"`
 	GS       *float64        `json:"gs"`
 	Track    *float64        `json:"track"`
 	Squawk   string          `json:"squawk"`
@@ -74,18 +80,31 @@ func (a *Aircraft) HasPosition() bool {
 // AltBaroValue interprets the number-or-"ground" altitude field. Returns the
 // altitude in feet, or onGround=true for a surface position.
 func (a *Aircraft) AltBaroValue() (alt float64, onGround bool, ok bool) {
-	if len(a.AltBaro) == 0 {
+	raw := a.AltBaro
+	if len(raw) == 0 || string(raw) == "null" {
+		// Older decoders: the same number-or-"ground" under "altitude".
+		raw = a.Altitude
+	}
+	if len(raw) == 0 {
 		return 0, false, false
 	}
 	var s string
-	if err := json.Unmarshal(a.AltBaro, &s); err == nil {
+	if err := json.Unmarshal(raw, &s); err == nil {
 		return 0, s == "ground", s == "ground"
 	}
 	var f float64
-	if err := json.Unmarshal(a.AltBaro, &f); err == nil {
+	if err := json.Unmarshal(raw, &f); err == nil {
 		return f, false, true
 	}
 	return 0, false, false
+}
+
+// GroundSpeed is gs, or the older decoders' "speed" when gs is absent.
+func (a *Aircraft) GroundSpeed() *float64 {
+	if a.GS != nil {
+		return a.GS
+	}
+	return a.Speed
 }
 
 // StatsWindow is one time window's counters inside stats.json.
