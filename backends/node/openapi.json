@@ -2996,6 +2996,248 @@
         ],
         "additionalProperties": false
       },
+      "AdsbInfo": {
+        "type": "object",
+        "properties": {
+          "aircraft": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "manufacturer": {
+                    "description": "e.g. Airbus",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "type": {
+                    "description": "The model as registered, e.g. A380 842",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "icaoType": {
+                    "description": "ICAO type designator, e.g. A388",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "registration": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "owner": {
+                    "description": "Registered owner or operator",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "ownerCountry": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "manufacturer",
+                  "type",
+                  "icaoType",
+                  "registration",
+                  "owner",
+                  "ownerCountry"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "null when adsbdb does not know the address, could not be reached, or the id is TIS-B"
+          },
+          "route": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "callsign": {
+                    "type": "string"
+                  },
+                  "airline": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "origin": {
+                    "type": "object",
+                    "properties": {
+                      "icao": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "iata": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "name": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "municipality": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "country": {
+                        "description": "ISO country code",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "icao",
+                      "iata",
+                      "name",
+                      "municipality",
+                      "country"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "destination": {
+                    "type": "object",
+                    "properties": {
+                      "icao": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "iata": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "name": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "municipality": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "country": {
+                        "description": "ISO country code",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "icao",
+                      "iata",
+                      "name",
+                      "municipality",
+                      "country"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "midpoint": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "icao": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "iata": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "name": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "municipality": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "country": {
+                            "description": "ISO country code",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "icao",
+                          "iata",
+                          "name",
+                          "municipality",
+                          "country"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "A stop between, on the few routes that have one"
+                  }
+                },
+                "required": [
+                  "callsign",
+                  "airline",
+                  "origin",
+                  "destination",
+                  "midpoint"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "null without a callsign, or when adsbdb knows no route for it"
+          }
+        },
+        "required": [
+          "aircraft",
+          "route"
+        ],
+        "additionalProperties": false
+      },
       "Outages": {
         "type": "object",
         "properties": {
@@ -8574,6 +8816,114 @@
           },
           "400": {
             "description": "The hex or reg is not valid (validation_failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or a session token that is not valid here (unauthorized, token_*)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key is not valid, is used from a web page, or its scopes do not cover this endpoint (invalid_api_key, api_key_browser_use, api_key_scope_forbidden, api_key_path_forbidden)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The key is over its per-minute limit (rate_limited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key could not be checked just now; try again shortly (auth_unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": []
+          }
+        ],
+        "x-scopes": [
+          "aircraft:live"
+        ]
+      }
+    },
+    "/api/v1/adsb/info/{hex}": {
+      "get": {
+        "operationId": "getAdsbInfo",
+        "tags": [
+          "Aircraft"
+        ],
+        "summary": "An aircraft and its usual route",
+        "description": "The airframe behind an ICAO address (maker, type, registration, operator) and, given a `callsign`, the airline and the route that callsign usually flies, from adsbdb.com. The route is the callsign's usual one, not a flight plan. Airframes are kept for a week and routes for 12 hours. Credit: aircraft and route details from adsbdb.com (aircraft data from PlaneBase; route data compiled by David Taylor and Jim Mason).",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "hex",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "ICAO 24-bit address as the live aircraft give it: 4 to 8 hex digits, optionally after a ~"
+          },
+          {
+            "in": "query",
+            "name": "callsign",
+            "schema": {
+              "type": "string"
+            },
+            "description": "The flight's callsign, e.g. QFA1, for its usual route: 2 to 8 letters or digits, in any case"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The aircraft and route, either of which may be null",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AdsbInfo"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The hex or callsign is not valid (validation_failed)",
             "content": {
               "application/json": {
                 "schema": {

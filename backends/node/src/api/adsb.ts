@@ -24,11 +24,9 @@
  *   GET /api/adsb/info/:hex?callsign=QFA1
  *                          — the airframe (maker, type, operator) and the
  *                            callsign's usual route, from adsbdb.com.
- *                            Site-only: no scope and no /api/v1 mirror,
- *                            because adsbdb's route data may not be
- *                            republished without its compiler's permission.
+ *                            Public (aircraft:live), credited in its docs.
  *
- * These two, /api/adsb/history and /api/adsb/trails are also served at
+ * These, /api/adsb/history, /api/adsb/trails and /api/adsb/info are also served at
  * /api/v1/ (server.ts mirrors them), wrapped in `data` there
  * (api/v1/respond.ts). /api/adsb/receivers is not: it is node status, for
  * the site's own map.
@@ -605,7 +603,7 @@ adsbRouter.get(
 );
 
 // ---------------------------------------------------------------------------
-// Aircraft and route details (adsbdb.com) — site-only
+// Aircraft and route details (adsbdb.com)
 // ---------------------------------------------------------------------------
 //
 // adsbdb answers by Mode-S address (the airframe: maker, type, operator) and
@@ -613,11 +611,10 @@ adsbRouter.get(
 // route is the usual one for the callsign, not a flight plan, and the card
 // says so.
 //
-// No scoped() and no /api/v1 mirror on purpose: adsbdb's route data is
-// compiled by David Taylor and Jim Mason and "may not be copied, published,
-// or incorporated into other databases without the explicit permission" of
-// David J Taylor. Looking it up for the person viewing the map is what adsbdb
-// offers; handing it on to API key holders as a feed is not ours to do.
+// Public on the owner's decision (aircraft:live, mirrored on /api/v1). The
+// route data is compiled by David Taylor and Jim Mason, whose terms ask for
+// permission before it is republished; the endpoint's description credits
+// them and adsbdb.com.
 
 const ADSBDB_BASE = 'https://api.adsbdb.com/v0';
 
@@ -744,11 +741,96 @@ export function _resetAdsbInfoForTests(): void {
   routeCache.clear();
 }
 
-adsbRouter.get('/api/adsb/info/:hex', async (c) => {
+const AdsbAirframeRecord = z.object({
+  manufacturer: z.string().nullable().describe('e.g. Airbus'),
+  type: z.string().nullable().describe('The model as registered, e.g. A380 842'),
+  icaoType: z.string().nullable().describe('ICAO type designator, e.g. A388'),
+  registration: z.string().nullable(),
+  owner: z.string().nullable().describe('Registered owner or operator'),
+  ownerCountry: z.string().nullable(),
+});
+assertShape<SameShape<z.infer<typeof AdsbAirframeRecord>, AdsbAirframe>>();
+
+const AdsbRouteAirportRecord = z.object({
+  icao: z.string().nullable(),
+  iata: z.string().nullable(),
+  name: z.string().nullable(),
+  municipality: z.string().nullable(),
+  country: z.string().nullable().describe('ISO country code'),
+});
+assertShape<SameShape<z.infer<typeof AdsbRouteAirportRecord>, AdsbRouteAirport>>();
+
+const AdsbRouteRecord = z.object({
+  callsign: z.string(),
+  airline: z.string().nullable(),
+  origin: AdsbRouteAirportRecord,
+  destination: AdsbRouteAirportRecord,
+  midpoint: AdsbRouteAirportRecord.nullable().describe('A stop between, on the few routes that have one'),
+});
+assertShape<SameShape<z.infer<typeof AdsbRouteRecord>, AdsbRoute>>();
+
+const AdsbInfoAnswer = z
+  .object({
+    aircraft: AdsbAirframeRecord.nullable().describe('null when adsbdb does not know the address, could not be reached, or the id is TIS-B'),
+    route: AdsbRouteRecord.nullable().describe('null without a callsign, or when adsbdb knows no route for it'),
+  })
+  .meta({ id: 'AdsbInfo' });
+
+const AdsbInfoQuery = z.object({
+  callsign: z
+    .string()
+    .optional()
+    .describe("The flight's callsign, e.g. QFA1, for its usual route: 2 to 8 letters or digits, in any case"),
+});
+
+adsbRouter.get(
+  '/api/adsb/info/:hex',
+  SCOPE_AIRCRAFT,
+  describeRoute({
+    operationId: 'getAdsbInfo',
+    tags: ['Aircraft'],
+    summary: 'An aircraft and its usual route',
+    description:
+      "The airframe behind an ICAO address (maker, type, registration, operator) and, given a `callsign`, the airline and the route that callsign usually flies, from adsbdb.com. The route is the callsign's usual one, not a flight plan. Airframes are kept for a week and routes for 12 hours. Credit: aircraft and route details from adsbdb.com (aircraft data from PlaneBase; route data compiled by David Taylor and Jim Mason).",
+    parameters: [
+      {
+        in: 'path',
+        name: 'hex',
+        required: true,
+        schema: { type: 'string' },
+        description: 'ICAO 24-bit address as the live aircraft give it: 4 to 8 hex digits, optionally after a ~',
+      },
+    ],
+    responses: {
+      ...okJson(envelope(AdsbInfoAnswer), 'The aircraft and route, either of which may be null'),
+      ...GATED_ERRORS,
+      400: errorJson('The hex or callsign is not valid (validation_failed)'),
+    },
+  }),
+  queryValidator(AdsbInfoQuery),
+  async (c) => {
   const hex = c.req.param('hex').trim().toLowerCase();
   const callsign = (c.req.query('callsign') ?? '').trim().toUpperCase();
-  if (!/^~?[0-9a-f]{4,8}$/.test(hex)) return c.json({ error: 'invalid hex' }, 400);
-  if (callsign && !/^[A-Z0-9]{2,8}$/.test(callsign)) return c.json({ error: 'invalid callsign' }, 400);
+  if (!/^~?[0-9a-f]{4,8}$/.test(hex)) {
+    return fail(
+      c,
+      400,
+      'validation_failed',
+      'hex: not an ICAO address (4 to 8 hex digits, optionally after a ~)',
+      { error: 'invalid hex' },
+      { issues: [{ path: 'hex', message: 'not an ICAO address (4 to 8 hex digits, optionally after a ~)' }] },
+    );
+  }
+  if (callsign && !/^[A-Z0-9]{2,8}$/.test(callsign)) {
+    return fail(
+      c,
+      400,
+      'validation_failed',
+      'callsign: not a callsign (2 to 8 letters or digits)',
+      { error: 'invalid callsign' },
+      { issues: [{ path: 'callsign', message: 'not a callsign (2 to 8 letters or digits)' }] },
+    );
+  }
 
   // Each half fails on its own: a route that can't be looked up still leaves
   // the airframe, and the card just shows less. Nothing here is worth a 5xx.
@@ -777,5 +859,6 @@ adsbRouter.get('/api/adsb/info/:hex', async (c) => {
         }), 'route')
       : Promise.resolve(null),
   ]);
-  return c.json({ aircraft, route });
-});
+  return ok(c, { aircraft, route } satisfies z.infer<typeof AdsbInfoAnswer>);
+  },
+);

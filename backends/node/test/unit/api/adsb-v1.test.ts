@@ -46,7 +46,7 @@ vi.mock('../../../src/sources/adsb.js', async (orig) => ({
   adsbTrailsSnapshot: () => m.trails,
 }));
 
-const IN_SCOPE = ['/api/adsb/aircraft', '/api/adsb/history', '/api/adsb/trails', '/api/adsb/photo/:hex'];
+const IN_SCOPE = ['/api/adsb/aircraft', '/api/adsb/history', '/api/adsb/trails', '/api/adsb/photo/:hex', '/api/adsb/info/:hex'];
 
 async function app() {
   const { adsbRouter } = await import('../../../src/api/adsb.js');
@@ -398,7 +398,7 @@ describe('what is not mirrored', () => {
   });
 });
 
-describe('GET /api/adsb/info/:hex (adsbdb, site-only)', () => {
+describe('GET /api/adsb/info/:hex and /api/v1/adsb/info/:hex (adsbdb)', () => {
   const AIRCRAFT = {
     response: {
       aircraft: {
@@ -446,8 +446,10 @@ describe('GET /api/adsb/info/:hex (adsbdb, site-only)', () => {
       'https://api.adsbdb.com/v0/aircraft/7C4925',
       'https://api.adsbdb.com/v0/callsign/QFA1',
     ]);
-    // Cached: a second ask goes nowhere.
-    await a.request('/api/adsb/info/7c4925?callsign=QFA1');
+    // Cached: a second ask goes nowhere. On v1 the same answer, in data.
+    const v1 = await a.request('/api/v1/adsb/info/7c4925?callsign=QFA1');
+    expect(v1.status).toBe(200);
+    expect(((await v1.json()) as { data: { route: { callsign: string } } }).data.route.callsign).toBe('QFA1');
     expect(m.fetchJson).toHaveBeenCalledTimes(2);
   });
 
@@ -474,11 +476,22 @@ describe('GET /api/adsb/info/:hex (adsbdb, site-only)', () => {
     expect(m.fetchJson.mock.calls.map((c) => c[0])).toEqual(['https://api.adsbdb.com/v0/aircraft/7C0CC2']);
   });
 
-  it('bad input is a 400, and it is not on /api/v1', async () => {
+  it('bad input: the old bodies, validation_failed on v1', async () => {
     const a = await app();
-    expect((await a.request('/api/adsb/info/zz')).status).toBe(400);
-    expect((await a.request('/api/adsb/info/7c0dd1?callsign=QF%201!')).status).toBe(400);
-    expect((await a.request('/api/v1/adsb/info/7c0dd1')).status).toBe(404);
+    const cases: Array<[string, string, string]> = [
+      ['zz', '{"error":"invalid hex"}', 'hex'],
+      ['7c0dd1?callsign=QF%201!', '{"error":"invalid callsign"}', 'callsign'],
+    ];
+    for (const [tail, oldBody, field] of cases) {
+      const old = await a.request(`/api/adsb/info/${tail}`);
+      expect(old.status, tail).toBe(400);
+      expect(await old.text(), tail).toBe(oldBody);
+      const v1 = await a.request(`/api/v1/adsb/info/${tail}`);
+      expect(v1.status, tail).toBe(400);
+      const body = (await v1.json()) as { error: { code: string; details: { issues: Array<{ path: string }> } } };
+      expect(body.error.code, tail).toBe('validation_failed');
+      expect(body.error.details.issues[0]!.path, tail).toBe(field);
+    }
     expect(m.fetchJson).not.toHaveBeenCalled();
   });
 });

@@ -434,7 +434,7 @@ export function createApp() {
   mirror(app, firmsRouter, ['/api/firms/hotspots']);
   app.route('/', adsbRouter);
   // Not /api/adsb/receivers: node status, never part of the public API.
-  mirror(app, adsbRouter, ['/api/adsb/aircraft', '/api/adsb/history', '/api/adsb/trails', '/api/adsb/photo/:hex']);
+  mirror(app, adsbRouter, ['/api/adsb/aircraft', '/api/adsb/history', '/api/adsb/trails', '/api/adsb/photo/:hex', '/api/adsb/info/:hex']);
   app.route('/', radioPublicRouter);
   // Not on /api/v1/: the site list is this site's own reference data, and
   // monitored-sites is node status.
