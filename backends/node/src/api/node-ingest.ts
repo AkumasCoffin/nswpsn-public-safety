@@ -43,6 +43,7 @@ import {
   recordAdsbAuthFailure,
 } from '../services/nodes/adsbNodeStore.js';
 import { foldCoverage } from '../services/nodes/adsbCoverage.js';
+import { foldLightcone } from '../services/nodes/adsbLightcone.js';
 import { maybeFlushNodeTracks } from '../services/nodes/nodeTrackArchive.js';
 import { normalizeNodeUploadWithTrails, ingestNodeTrailPoints } from '../sources/adsb.js';
 import {
@@ -1302,6 +1303,9 @@ nodeIngestRouter.post('/api/node-ingest/adsb-upload', async (c) => {
   const { records, trails } = normalizeNodeUploadWithTrails(
     parsed, adsbNodeSourceId(r.nodeId, nodeRow?.name ?? null));
   recordNodeAdsbReception(r.nodeId, records, range);
+  //    The 3D coverage cells: every airborne position, by altitude, plus the
+  //    "reported recently" set the missed-aircraft count compares against.
+  foldLightcone(r.nodeId, nodeRow?.lat, nodeRow?.lon, nodeRow?.antenna_height_m, records, trails);
   // Persist the traces so the eight-hour map survives a restart. Rate-limits
   // itself to a minute, and is driven from here so it can only ever read
   // traces this upload has finished writing.

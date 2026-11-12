@@ -754,6 +754,7 @@
   <div id="toast-stack"></div>
 
   <script src="config.js"></script>
+  <script src="adsb-lightcone.js?v=1"></script>
   <script>
     const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -1661,6 +1662,8 @@
       // leaves Leaflet's listeners and tile requests alive.
       if (_abLayer) { _abLayer.remove(); _abLayer = null; }
       if (_abMap) { _abMap.remove(); _abMap = null; }
+      const lcHost = document.getElementById('adsb-polar');
+      if (lcHost && lcHost._alc) lcHost._alc.destroy();
       // Coverage toggle state used to leak across opens — reset it all.
       _abCoverageOn = false;
       if (_abCoverageLayer) { try { _abCoverageLayer.remove(); } catch (e) { /* map already gone */ } _abCoverageLayer = null; }
@@ -2570,8 +2573,16 @@
       }
 
       // Same response carries the envelope, so the plot is filled from here.
+      // The 3D view when the backend sent one (it needs the pin); the flat
+      // polar plot otherwise.
       const polar = document.getElementById('adsb-polar');
-      if (polar) polar.innerHTML = _abPolarBody(d.coverage);
+      if (polar && window.AdsbLightcone && d.lightcone && d.site) {
+        window.AdsbLightcone.mount(polar, d, {
+          heightHint: 'Set the real height under Location for a truer limit.',
+        });
+      } else if (polar) {
+        polar.innerHTML = _abPolarBody(d.coverage);
+      }
     }
 
     /** The polar coverage plot — how far this receiver hears on every bearing,
@@ -2796,6 +2807,12 @@
             <span>Set an exact antenna pin (optional)</span>
           </label>`}
           <div id="loc-map" style="display:${(hasPin || isAdsb) ? 'block' : 'none'};"></div>
+          ${isAdsb ? `
+          <label class="loc-field" style="margin-top:10px;">
+            <span>Antenna height above the ground, in metres <span style="opacity:0.6">(optional)</span></span>
+            <input id="loc-height" type="number" min="0" max="500" step="0.5" inputmode="decimal"
+              value="${typeof node.antennaHeightM === 'number' ? node.antennaHeightM : ''}" placeholder="e.g. 6 for a mast on the roof">
+          </label>` : ''}
           <div class="modal-actions">
             <button class="dl-btn" onclick="saveLocation(this)"><i class="fas fa-check"></i> ${createMode ? 'Create node' : 'Save'}</button>
             ${(!createMode && hasPin && !isAdsb) ? `<button class="mini-btn danger" onclick="clearLocation(this)">Remove pin</button>` : ''}
@@ -2909,6 +2926,19 @@
         }
         const c = _loc.marker.getLatLng();
         lat = c.lat; lon = c.lng;
+        // Used for the terrain line-of-sight limit in the coverage view. Blank
+        // clears it back to the assumed default.
+        const hRaw = (document.getElementById('loc-height')?.value || '').trim();
+        if (hRaw !== '') {
+          const h = Number(hRaw);
+          if (!Number.isFinite(h) || h < 0 || h > 500) {
+            showToast('Antenna height should be between 0 and 500 metres.', 'error');
+            return;
+          }
+          area = { antennaHeightM: h };
+        } else {
+          area = { antennaHeightM: null };
+        }
       } else if (pinOn && pinOn.checked) {
         // Guard against saving the untouched default marker (Sydney CBD) as a real
         // antenna location — require the user to actually place it, or untick the pin.
@@ -2940,6 +2970,8 @@
           // ADS-B already sent its pin in the create body above; a follow-up
           // PUT would only trigger a second, identical config push.
           if (lat !== null && !isAdsb) await putLocation(data.node.id, { ...area, lat, lon });
+          // The create body has no height field; set it straight after.
+          if (isAdsb && typeof area.antennaHeightM === 'number') await putLocation(data.node.id, { ...area, lat, lon });
           closeLocationPicker();
           await refreshNodes();
           showInstallModal(data.node);

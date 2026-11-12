@@ -5234,6 +5234,7 @@
   <div id="toast-stack"></div>
 
   <script src="config.js"></script>
+  <script src="adsb-lightcone.js?v=1"></script>
   <script src="api-session.js"></script>
   <script src="ui-dialogs.js"></script>
   <script>
@@ -9447,6 +9448,24 @@
       const el = document.getElementById('nd2-anode-coverage');
       if (!el) return;
       const name = nd2.anodes.name || 'Receiver';
+      // The 3D view, when the backend sent one. Mounted once per receiver and
+      // then updated in place, so a refresh keeps the camera where it was.
+      if (window.AdsbLightcone && d.lightcone && d.site) {
+        let host = document.getElementById('nd2-aov-lc');
+        if (!host || el.dataset.lcNode !== String(d.nodeId)) {
+          if (host && host._alc) host._alc.destroy();
+          el.innerHTML = '<div class="nd2-card">'
+            + '<div class="nd2-card-h"><span>' + escapeHtml(name) + ' — coverage</span>'
+            +   '<span class="nd2-note">where it hears, by bearing, distance and altitude</span></div>'
+            + '<div id="nd2-aov-lc"></div>'
+            + '</div>';
+          el.dataset.lcNode = String(d.nodeId);
+          host = document.getElementById('nd2-aov-lc');
+        }
+        window.AdsbLightcone.mount(host, d, { heightHint: 'The operator has not set it yet.' });
+        return;
+      }
+      el.dataset.lcNode = '';
       el.innerHTML = '<div class="nd2-card nd2-polar-card">'
         + '<div class="nd2-card-h"><span>' + escapeHtml(name) + ' — coverage</span>'
         +   '<span class="nd2-note">how far it hears, per bearing</span></div>'

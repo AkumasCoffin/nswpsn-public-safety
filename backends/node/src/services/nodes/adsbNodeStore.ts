@@ -24,6 +24,7 @@
 import { getPool } from '../../db/pool.js';
 import { log } from '../../lib/log.js';
 import { flushAdsbCoverage, clearAdsbCoverage } from './adsbCoverage.js';
+import { flushAdsbLightcone, clearAdsbLightcone } from './adsbLightcone.js';
 import { formatSydneyNaive } from '../../lib/sydneyTime.js';
 // TYPE-ONLY, deliberately: sources/adsb.ts imports this module at runtime to
 // read node records, so a runtime import back the other way would be a cycle
@@ -727,6 +728,7 @@ export function clearAdsbNodeState(nodeId: string): void {
   observedRangeKm.delete(nodeId);
   traces.delete(nodeId);
   clearAdsbCoverage(nodeId);
+  clearAdsbLightcone(nodeId);
 }
 
 /** How many nodes currently have a live snapshot (for the upstreams summary). */
@@ -986,6 +988,7 @@ export function startAdsbDailyFlush(): void {
     // Same cadence, same reason: both are running aggregates that nothing
     // reads between passes.
     void flushAdsbCoverage().catch(() => {});
+    void flushAdsbLightcone().catch(() => {});
   }, FLUSH_INTERVAL_MS);
   flushTimer.unref?.();
 }
@@ -998,4 +1001,5 @@ export async function stopAdsbDailyFlush(): Promise<void> {
   }
   await flushAdsbDaily();
   await flushAdsbCoverage();
+  await flushAdsbLightcone();
 }

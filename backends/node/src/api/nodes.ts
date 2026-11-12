@@ -147,6 +147,7 @@ function toApi(node: NodeRow, usernames?: Map<string, string>, surveying?: Map<s
     tokenPrefix: node.token_prefix,
     lat: node.lat,
     lon: node.lon,
+    antennaHeightM: node.antenna_height_m,
     zone: node.zone,
     state: node.state,
     lga: node.lga,
@@ -472,6 +473,7 @@ const StaffAreaLocationSchema = z.object({
 const StaffAdsbLocationSchema = z.object({
   lat: z.number().min(-90).max(90),
   lon: z.number().min(-180).max(180),
+  antennaHeightM: z.number().min(0).max(500).nullable().optional(),
 });
 nodesRouter.put('/api/nodes/:id/location', requireRole(canManageNodes), async (c) => {
   const id = c.req.param('id');

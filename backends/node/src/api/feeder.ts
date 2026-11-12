@@ -169,6 +169,7 @@ function feederNodeView(n: NodeRow, surveying?: Map<string, number>) {
     tokenPrefix: n.token_prefix,
     lat: n.lat,
     lon: n.lon,
+    antennaHeightM: n.antenna_height_m,
     zone: n.zone,
     state: n.state,
     lga: n.lga,
@@ -1129,6 +1130,9 @@ const PagerLocationSchema = z.object({
 const AdsbLocationSchema = z.object({
   lat: z.number().min(-90).max(90),
   lon: z.number().min(-180).max(180),
+  // Antenna height above the ground, metres. Optional: absent leaves it as it
+  // was, null clears it back to the assumed default.
+  antennaHeightM: z.number().min(0).max(500).nullable().optional(),
 });
 feederRouter.put('/api/feeder/nodes/:id/location', async (c) => {
   const node = await ownedNode(c);

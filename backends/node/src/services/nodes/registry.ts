@@ -98,6 +98,9 @@ export interface NodeRow {
   // LAN address self-reported by the agent on hello (display only). Kept in
   // the row so the last known address survives the node going offline.
   local_ip: string | null;
+  // Antenna height above the ground, metres (ADS-B line of sight). Null = not
+  // set; the coverage view assumes DEFAULT_ANTENNA_HEIGHT_M.
+  antenna_height_m: number | null;
 }
 
 export interface HelloMeta {
@@ -112,7 +115,7 @@ export interface HelloMeta {
 
 const NODE_COLS = `id, kind, user_id, install_id, name, enabled, feed_enabled, config_override,
   config_version, agent_version, sdrtrunk_version, rdio_version, os, arch,
-  last_seen_at, notes, created_at, token_prefix, lat, lon, zone, state, lga, suburb, local_ip`;
+  last_seen_at, notes, created_at, token_prefix, lat, lon, zone, state, lga, suburb, local_ip, antenna_height_m`;
 
 /** Max distinct installs (nodes) one contributor may register. `install_id` is
  *  an attacker-chosen header, so without a cap a single token could create
@@ -399,12 +402,14 @@ export async function setNodeLocation(
     suburb?: string | null;
     lat?: number | null;
     lon?: number | null;
+    antennaHeightM?: number | null;
   },
 ): Promise<NodeRow | null> {
   const pool = await getPool();
   if (!pool) return null;
   const res = await pool.query<NodeRow>(
     `UPDATE nodes SET
+       antenna_height_m = CASE WHEN $14::boolean THEN $15::real ELSE antenna_height_m END,
        zone   = CASE WHEN $2::boolean  THEN $3  ELSE zone   END,
        state  = CASE WHEN $4::boolean  THEN $5  ELSE state  END,
        lga    = CASE WHEN $6::boolean  THEN $7  ELSE lga    END,
@@ -420,6 +425,7 @@ export async function setNodeLocation(
       loc.suburb !== undefined, loc.suburb ?? null,
       loc.lat !== undefined, loc.lat ?? null,
       loc.lon !== undefined, loc.lon ?? null,
+      loc.antennaHeightM !== undefined, loc.antennaHeightM ?? null,
     ],
   );
   return res.rows[0] ?? null;

@@ -17,6 +17,8 @@ import { getPool } from '../../db/pool.js';
 import { log } from '../../lib/log.js';
 import { hub } from './hub.js';
 import { adsbCoverageFor, type CoverageView } from './adsbCoverage.js';
+import { adsbLightconeFor, type LightconeView } from './adsbLightcone.js';
+import { DEFAULT_ANTENNA_HEIGHT_M, terrainFor, type TerrainStatus } from './adsbTerrain.js';
 import { storedNodeTracks } from './nodeTrackArchive.js';
 
 /** The trace window, in minutes — the span both the map and "Recently heard"
@@ -336,6 +338,15 @@ export interface AdsbNodeTracks {
    * this is the accumulated one. Null only when there is no database.
    */
   coverage: CoverageView | null;
+  /**
+   * The 3D coverage view: heard and missed cells by altitude, and the terrain
+   * line-of-sight limit. Null when there is no pin or no database.
+   */
+  lightcone: (LightconeView & {
+    antennaHeightM: number;
+    antennaHeightSet: boolean;
+    terrain: { status: TerrainStatus; groundM: number | null; limits: number[][] | null };
+  }) | null;
 }
 
 /** The store retains 8 hours; asking for more gets the full window rather than
@@ -479,13 +490,40 @@ export async function adsbNodeTracks(
 
   const pool = await getPool();
   let site: AdsbNodeTracks['site'] = null;
+  let lightcone: AdsbNodeTracks['lightcone'] = null;
   if (pool) {
-    const r = await pool.query<{ name: string | null; lat: unknown; lon: unknown }>(
-      'SELECT name, lat, lon FROM nodes WHERE id = $1',
+    const r = await pool.query<{
+      name: string | null; lat: unknown; lon: unknown; antenna_height_m: unknown;
+    }>(
+      'SELECT name, lat, lon, antenna_height_m FROM nodes WHERE id = $1',
       [nodeId],
     );
     const row = r.rows[0];
     if (row && typeof row.lat === 'number' && typeof row.lon === 'number') {
+      // The terrain is built from the EXACT pin, but only distances in km and
+      // a ground height leave this function — nothing that locates the antenna.
+      const heightSet = typeof row.antenna_height_m === 'number';
+      const heightM = heightSet ? row.antenna_height_m as number : DEFAULT_ANTENNA_HEIGHT_M;
+      try {
+        const [cells, t] = await Promise.all([
+          adsbLightconeFor(nodeId, DATA_RETENTION_DAYS),
+          terrainFor(nodeId, row.lat, row.lon, heightM),
+        ]);
+        if (cells) {
+          lightcone = {
+            ...cells,
+            antennaHeightM: heightM,
+            antennaHeightSet: heightSet,
+            terrain: {
+              status: t.status,
+              groundM: t.terrain ? Math.round(t.terrain.groundM) : null,
+              limits: t.terrain ? t.terrain.limits : null,
+            },
+          };
+        }
+      } catch (err) {
+        log.debug({ err, nodeId }, 'adsb lightcone unavailable');
+      }
       // ~1 km — far finer than the tens of kilometres a coverage plot is read
       // at, and far coarser than a street.
       site = {
@@ -511,5 +549,6 @@ export async function adsbNodeTracks(
     points,
     traces: merged,
     coverage,
+    lightcone,
   };
 }

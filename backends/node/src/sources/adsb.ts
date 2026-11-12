@@ -52,6 +52,7 @@ import { liveStore } from '../store/live.js';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
 import { nodeAdsbRecords, nodeAdsbFeedCount } from '../services/nodes/adsbNodeStore.js';
+import { noteNetworkAircraft } from '../services/nodes/adsbLightcone.js';
 // One-way, like the node store above: this module hands the archive the
 // positions it observed, the archive never reaches back for them.
 import {
@@ -1281,6 +1282,9 @@ export async function fetchAdsbAircraft(): Promise<AdsbSnapshot> {
   // fabricated positions indistinguishable from real ones.
   const observed = merged.filter((a) => !a.estimated);
   updateTrails(observed, Date.now());
+  // What each of our receivers should have heard and did not: the coverage
+  // view's dark dots. Observed positions only — a dead-reckoned one is a guess.
+  noteNetworkAircraft(observed, Date.now());
   // Persist for the historical view: the observed positions go into the
   // archive's current minute, and any minute that has closed is written.
   // Driven from here rather than its own timer so a write can only ever
