@@ -34,11 +34,19 @@
 /* The state filter stays in reach however far down the page is read. */
 .lv-bar {
   display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: center;
-  position: sticky; top: 0; z-index: 20;
-  margin: 1.1rem -0.75rem 1.1rem; padding: 0.6rem 0.75rem;
-  background: rgba(5, 7, 11, 0.96); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
-  border-bottom: 1px solid var(--lv-line); border-radius: 0 0 10px 10px;
+  /* .main is the scroller and has 2.5rem of padding at the top; a sticky
+     offset is measured from inside that padding, so it is taken back off.
+     Without this the bar hung 40px down with rows passing above it. */
+  position: sticky; top: calc(0.6rem - 2.5rem); z-index: 20;
+  margin: 1.1rem 0; padding: 0.5rem 0.6rem;
+  /* A floating bar, rounded on every corner and lifted off the page: a
+     square slab pinned to the top edge showed hard corners over the cards
+     scrolling beneath it. */
+  background: rgba(16, 19, 27, 0.86); backdrop-filter: blur(14px) saturate(1.2); -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  border: 1px solid var(--lv-line); border-radius: 14px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
 }
+.lv-bar .lv-seg { background: transparent; border-color: transparent; padding: 0; }
 /* One joined control, not a row of loose buttons. */
 .lv-seg { display: flex; flex-wrap: wrap; gap: 2px; padding: 3px; background: var(--lv-card); border: 1px solid var(--lv-line); border-radius: 10px; }
 .lv-seg button { border-color: transparent; background: transparent; border-radius: 7px; min-width: 2.9rem; }
@@ -229,8 +237,13 @@
 @media (max-width: 1100px) {
   .lv-grid { grid-template-columns: minmax(0, 1fr); }
 }
+/* Below the sidebar breakpoint .main's padding changes and a fixed header
+   takes the top of the screen, so the bar scrolls with the page. */
+@media (max-width: 900px) {
+  .lv-bar { position: static; }
+}
 @media (max-width: 600px) {
-  .lv-bar { position: static; margin: 1rem 0; padding: 0; background: none; backdrop-filter: none; border: 0; }
+  .lv-bar { position: static; margin: 1rem 0; padding: 0; background: none; backdrop-filter: none; -webkit-backdrop-filter: none; border: 0; box-shadow: none; }
   .lv-seg { width: 100%; }
   .lv-seg button { flex: 1 0 auto; }
   .lv-figs > span { flex: 1 1 6rem; }
