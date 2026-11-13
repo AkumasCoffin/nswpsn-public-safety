@@ -40,6 +40,7 @@ import {
   snapshotRangeKm,
   accumulateAdsbDaily,
   adsbNodeSourceId,
+  distanceKm,
   recordAdsbAuthFailure,
 } from '../services/nodes/adsbNodeStore.js';
 import { foldCoverage } from '../services/nodes/adsbCoverage.js';
@@ -1167,6 +1168,33 @@ const AdsbAircraftSchema = z.object({
   category: z.string().max(3).nullish(),
   // Seconds since this position was received, relative to the snapshot's `at`.
   seen_pos: z.number().min(0).max(3600),
+  // Detail, from agent 0.1.17 on (see AdsbDetail in sources/adsb.ts). All
+  // optional and only loosely typed here: detailOf range-checks each one and
+  // drops what is out of range, so a decoder quirk costs a field, not the
+  // whole upload.
+  alt_geom: z.number().nullish(),
+  baro_rate: z.number().nullish(),
+  geom_rate: z.number().nullish(),
+  ias: z.number().nullish(),
+  tas: z.number().nullish(),
+  mach: z.number().nullish(),
+  true_heading: z.number().nullish(),
+  mag_heading: z.number().nullish(),
+  roll: z.number().nullish(),
+  nav_altitude_mcp: z.number().nullish(),
+  nav_altitude_fms: z.number().nullish(),
+  nav_heading: z.number().nullish(),
+  nav_qnh: z.number().nullish(),
+  nav_modes: z.array(z.string().max(12)).max(8).nullish(),
+  // How the position was obtained, in readsb's words (adsb_icao, mlat, tisb_icao…).
+  type: z.string().max(16).nullish(),
+  nic: z.number().nullish(),
+  nac_p: z.number().nullish(),
+  sil: z.number().nullish(),
+  rc: z.number().nullish(),
+  version: z.number().nullish(),
+  rssi: z.number().nullish(),
+  messages: z.number().nullish(),
   // Positions seen between uploads, oldest first, as
   // [secondsBeforeAt, lat, lon, altFt]. Sent from agent 0.1.8 on: the decoder
   // has them at about 2 Hz, but aircraft.json only holds the current one, so
@@ -1184,9 +1212,64 @@ const AdsbAircraftSchema = z.object({
     .nullish(),
 });
 
+/**
+ * No receiver hears this far. Line of sight to an airliner at cruise is about
+ * 450 km; ducting stretches it now and then, which is what the slack is for.
+ * A position beyond it is a bad decode or an invented one, and either way it
+ * must not reach a public map under a real aircraft's address.
+ */
+const ADSB_MAX_KM_FROM_PIN = 800;
+
+/** Values outside what an aircraft can report become "not reported". */
+function inRange(v: number | null | undefined, min: number, max: number): number | null {
+  return typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max ? v : null;
+}
+
+/**
+ * The aircraft worth keeping from one upload, and how many were not.
+ *
+ * Each is checked on its own. Validating the array as a whole meant one
+ * malformed aircraft rejected all five hundred, and the agent then retried
+ * the same snapshot, with the same aircraft in it, until it expired.
+ */
+export function acceptAdsbAircraft(
+  raw: readonly unknown[],
+  pin: { lat: number; lon: number } | null,
+): { aircraft: Array<z.infer<typeof AdsbAircraftSchema>>; invalid: number; tooFar: number } {
+  const aircraft: Array<z.infer<typeof AdsbAircraftSchema>> = [];
+  let invalid = 0;
+  let tooFar = 0;
+  for (const item of raw) {
+    const r = AdsbAircraftSchema.safeParse(item);
+    if (!r.success) {
+      invalid += 1;
+      continue;
+    }
+    const a = r.data;
+    if (pin && distanceKm(pin.lat, pin.lon, a.lat, a.lon) > ADSB_MAX_KM_FROM_PIN) {
+      tooFar += 1;
+      continue;
+    }
+    if (typeof a.alt_baro === 'number') a.alt_baro = inRange(a.alt_baro, -2_000, 100_000);
+    a.gs = inRange(a.gs, 0, 1_500);
+    a.track = inRange(a.track, 0, 360);
+    if (a.positions) {
+      a.positions = a.positions
+        .filter((p) => !pin || distanceKm(pin.lat, pin.lon, p[1], p[2]) <= ADSB_MAX_KM_FROM_PIN)
+        .map((p) => [p[0], p[1], p[2], inRange(p[3], -2_000, 100_000)]);
+    }
+    aircraft.push(a);
+  }
+  return { aircraft, invalid, tooFar };
+}
+
+/** nodeId -> when a dropped-aircraft warning was last logged. */
+const _adsbDropLoggedAt = new Map<string, number>();
+
 const AdsbUploadSchema = z.object({
   at: z.string().max(40),
-  aircraft: z.array(AdsbAircraftSchema).max(500),
+  // Checked one by one in acceptAdsbAircraft, not here.
+  aircraft: z.array(z.unknown()).max(500),
   stats: z
     .object({
       msgRate: z.number().nullish(),
@@ -1257,9 +1340,9 @@ nodeIngestRouter.post('/api/node-ingest/adsb-upload', async (c) => {
   }
 
   // 4. Parse + validate.
-  let parsed: z.infer<typeof AdsbUploadSchema>;
+  let envelope: z.infer<typeof AdsbUploadSchema>;
   try {
-    parsed = AdsbUploadSchema.parse(await c.req.json());
+    envelope = AdsbUploadSchema.parse(await c.req.json());
   } catch (err) {
     log.warn(
       { err, node: r.nodeId.slice(0, 8) },
@@ -1276,10 +1359,20 @@ nodeIngestRouter.post('/api/node-ingest/adsb-upload', async (c) => {
   //    antenna pin is what the range is measured FROM, and range belongs to
   //    that same performance record.
   const nodeRow = await getNode(r.nodeId).catch(() => null);
-  const positioned = parsed.aircraft.filter(
-    (a): a is typeof a & { lat: number; lon: number } =>
-      typeof a.lat === 'number' && typeof a.lon === 'number',
-  );
+  const pin = typeof nodeRow?.lat === 'number' && typeof nodeRow?.lon === 'number'
+    ? { lat: nodeRow.lat, lon: nodeRow.lon }
+    : null;
+  const kept = acceptAdsbAircraft(envelope.aircraft, pin);
+  if (kept.invalid + kept.tooFar > 0
+      && Date.now() - (_adsbDropLoggedAt.get(r.nodeId) ?? 0) > 60_000) {
+    _adsbDropLoggedAt.set(r.nodeId, Date.now());
+    log.warn(
+      { node: r.nodeId.slice(0, 8), invalid: kept.invalid, tooFar: kept.tooFar, kept: kept.aircraft.length },
+      'adsb ingest: aircraft dropped from an upload',
+    );
+  }
+  const parsed = { ...envelope, aircraft: kept.aircraft };
+  const positioned = parsed.aircraft;
   //    One walk over the aircraft does both jobs: the furthest one (the range
   //    figure) and its bearing (the coverage envelope). Neither costs more
   //    than the trig on a loop that has to run anyway.

@@ -151,7 +151,86 @@ describe('adsb.normalizeAircraft', () => {
   });
 });
 
+describe('adsb detail fields', () => {
+  it('keeps what the aircraft reported and leaves out what it did not', async () => {
+    const { normalizeAircraft } = await import('../../../src/sources/adsb.js');
+    const a = normalizeAircraft(raw({
+      baro_rate: -1216, alt_geom: 5375, ias: 250, tas: 262, mach: 0.412,
+      true_heading: 291.4, roll: -0.35, nav_altitude_mcp: 3008, nav_qnh: 1017.6,
+      nav_modes: ['autopilot', 'approach'], wd: 250, ws: 14, oat: -3,
+      type: 'adsb_icao', nic: 8, nac_p: 10, sil: 3, rc: 186, version: 2,
+      rssi: -12.3, messages: 4821.0, emergency: 'none', dbFlags: 9,
+      desc: 'BOEING 737-800', ownOp: 'QANTAS AIRWAYS', year: 2009,
+    }), 'adsb_lol')!;
+    expect(a).toMatchObject({
+      baroRateFpm: -1216, altGeomFt: 5375, iasKt: 250, tasKt: 262, mach: 0.412,
+      trueHeadingDeg: 291.4, rollDeg: -0.35, navAltFt: 3008, navQnhHpa: 1017.6,
+      navModes: ['autopilot', 'approach'], windDirDeg: 250, windKt: 14, oatC: -3,
+      posSource: 'adsb', nic: 8, nacp: 10, sil: 3, rcM: 186, adsbVersion: 2,
+      rssiDb: -12.3, messages: 4821, flags: ['military', 'ladd'],
+      desc: 'BOEING 737-800', operator: 'QANTAS AIRWAYS', year: '2009',
+    });
+    // 'none' is not an emergency, and nothing was said about these.
+    for (const k of ['emergency', 'geomRateFpm', 'magHeadingDeg', 'navHeadingDeg']) {
+      expect(a).not.toHaveProperty(k);
+    }
+  });
+
+  it('drops a value no aircraft could report rather than showing it', async () => {
+    const { normalizeAircraft } = await import('../../../src/sources/adsb.js');
+    const a = normalizeAircraft(raw({
+      baro_rate: 90_000, mach: 12, nav_qnh: 0, rssi: 4, true_heading: 400, oat: 'cold',
+    }), 'adsb_lol')!;
+    for (const k of ['baroRateFpm', 'mach', 'navQnhHpa', 'rssiDb', 'trueHeadingDeg', 'oatC']) {
+      expect(a).not.toHaveProperty(k);
+    }
+  });
+
+  it('names how the position was obtained', async () => {
+    const { posSourceOf } = await import('../../../src/sources/adsb.js');
+    expect(posSourceOf('adsb_icao_nt', 'abc123')).toBe('adsb');
+    expect(posSourceOf('mlat', 'abc123')).toBe('mlat');
+    expect(posSourceOf('tisb_trackfile', '~2a01f0')).toBe('tisb');
+    expect(posSourceOf('adsr_icao', 'abc123')).toBe('adsr');
+    expect(posSourceOf('mode_s', 'abc123')).toBe('modes');
+    expect(posSourceOf(undefined, '~2a01f0')).toBe('tisb');
+    expect(posSourceOf(undefined, 'abc123')).toBeUndefined();
+  });
+
+  it('the plain list keeps three detail fields and drops the rest', async () => {
+    const { normalizeAircraft, withoutFullDetail } = await import('../../../src/sources/adsb.js');
+    const a = normalizeAircraft(raw({
+      baro_rate: 640, type: 'mlat', emergency: 'minfuel', ias: 250, rssi: -9, desc: 'X',
+    }), 'adsb_lol')!;
+    const lean = withoutFullDetail(a);
+    expect(lean).toMatchObject({ baroRateFpm: 640, posSource: 'mlat', emergency: 'minfuel' });
+    for (const k of ['iasKt', 'rssiDb', 'desc']) expect(lean).not.toHaveProperty(k);
+    expect(a.iasKt).toBe(250); // the original is untouched
+  });
+});
+
 describe('adsb.mergeAircraft', () => {
+  it("does not let an MLAT fix a moment newer displace the aircraft's own position", async () => {
+    const { normalizeAircraft, mergeAircraft } = await import('../../../src/sources/adsb.js');
+    const adsb = normalizeAircraft(raw({ lat: -33.0, seen_pos: 3, type: 'adsb_icao' }), 'node:syd');
+    const mlat = normalizeAircraft(raw({ lat: -33.4, seen_pos: 1, type: 'mlat' }), 'adsb_lol');
+    expect(mergeAircraft([adsb!, mlat!])[0]).toMatchObject({ lat: -33.0, posSource: 'adsb' });
+    // Well ahead, it is the better answer.
+    const stale = normalizeAircraft(raw({ lat: -33.0, seen_pos: 20, type: 'adsb_icao' }), 'node:syd');
+    expect(mergeAircraft([stale!, mlat!])[0]).toMatchObject({ lat: -33.4, posSource: 'mlat' });
+  });
+
+  it("fills the airframe's description from the older record, but never its speeds", async () => {
+    const { normalizeAircraft, mergeAircraft } = await import('../../../src/sources/adsb.js');
+    const older = normalizeAircraft(
+      raw({ seen_pos: 20, desc: 'AIRBUS A-320', ownOp: 'JETSTAR', ias: 280, baro_rate: 2000 }), 'adsb_lol');
+    const fresh = normalizeAircraft(raw({ seen_pos: 1 }), 'node:syd');
+    const m = mergeAircraft([older!, fresh!])[0]!;
+    expect(m).toMatchObject({ desc: 'AIRBUS A-320', operator: 'JETSTAR' });
+    expect(m).not.toHaveProperty('iasKt');
+    expect(m).not.toHaveProperty('baroRateFpm');
+  });
+
   it('keeps the freshest position and unions sources', async () => {
     const { normalizeAircraft, mergeAircraft } = await import(
       '../../../src/sources/adsb.js'

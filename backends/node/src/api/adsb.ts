@@ -39,6 +39,7 @@ import {
   adsbTrailsSnapshot,
   adsbRecentAircraft,
   adsbRecentTrails,
+  withoutFullDetail,
   ADSB_RECENT_MAX_SEC,
   type AdsbRecentTrails,
   type AdsbSnapshot,
@@ -117,6 +118,47 @@ const AdsbAircraftRecord = z.object({
     .boolean()
     .describe('true when the position is dead-reckoned from the last heading and speed, not received — show it as a guess'),
   estimatedSec: z.number().int().nullable().describe('When estimated, seconds since the last real fix; otherwise null'),
+  // ---- Detail. Each is absent when the source did not send it. Only
+  // baroRateFpm, posSource and emergency are on the plain list; the rest
+  // come with `detail=1` or `hex`. ----
+  baroRateFpm: z.number().optional().describe('Vertical rate from pressure altitude, feet per minute; negative is descending'),
+  posSource: z
+    .enum(['adsb', 'mlat', 'tisb', 'adsr', 'adsc', 'modes', 'other'])
+    .optional()
+    .describe("How the position was obtained. adsb is the aircraft's own GPS; mlat (multilateration) and tisb (ground radar rebroadcast) are worked out by others and are less exact"),
+  emergency: z
+    .string()
+    .optional()
+    .describe('The emergency the aircraft has declared, when there is one: general, lifeguard, minfuel, nordo, unlawful, downed'),
+  geomRateFpm: z.number().optional().describe('Vertical rate from GPS altitude, feet per minute'),
+  altGeomFt: z.number().optional().describe('GPS (geometric) altitude, feet above the WGS84 ellipsoid'),
+  iasKt: z.number().optional().describe('Indicated airspeed, knots'),
+  tasKt: z.number().optional().describe('True airspeed, knots'),
+  mach: z.number().optional().describe('Mach number'),
+  trueHeadingDeg: z.number().optional().describe('Where the nose points, degrees true; differs from trackDeg by the wind'),
+  magHeadingDeg: z.number().optional().describe('Heading, degrees magnetic'),
+  rollDeg: z.number().optional().describe('Bank angle, degrees; negative is left'),
+  navAltFt: z.number().optional().describe('Altitude selected on the autopilot, feet'),
+  navHeadingDeg: z.number().optional().describe('Heading selected on the autopilot, degrees'),
+  navQnhHpa: z.number().optional().describe('Altimeter setting, hPa'),
+  navModes: z.array(z.string()).optional().describe('Engaged autopilot modes: autopilot, vnav, althold, approach, lnav, tcas'),
+  windDirDeg: z.number().optional().describe("Wind direction, degrees, as an aggregator derived it from the aircraft's own data"),
+  windKt: z.number().optional().describe('Wind speed, knots (derived, as windDirDeg)'),
+  oatC: z.number().optional().describe('Outside air temperature, °C (derived)'),
+  nic: z.number().optional().describe('Navigation integrity category, 0 to 11; higher is better'),
+  nacp: z.number().optional().describe('Position accuracy category, 0 to 11; higher is better'),
+  sil: z.number().optional().describe('Source integrity level, 0 to 3'),
+  rcM: z.number().optional().describe('Radius of containment, metres: the position is within this of the truth'),
+  adsbVersion: z.number().optional().describe('ADS-B version the transponder speaks, 0 to 2'),
+  rssiDb: z.number().optional().describe('Signal strength at the receiver that heard it, dBFS (negative; nearer 0 is stronger)'),
+  messages: z.number().int().optional().describe('Messages that receiver has had from this aircraft'),
+  flags: z
+    .array(z.enum(['military', 'interesting', 'pia', 'ladd']))
+    .optional()
+    .describe("Flags from the aggregator's aircraft database"),
+  desc: z.string().optional().describe("Airframe description from the aggregator's database, e.g. BOEING 737-800"),
+  operator: z.string().optional().describe("Operator from the aggregator's database"),
+  year: z.string().optional().describe('Year of manufacture'),
 });
 
 const AdsbSnapshotSchema = z.object({
@@ -157,9 +199,14 @@ const AdsbAircraftOut = AdsbAircraftRecord.extend({
  *  per snapshot object (the full one changes per poll, the recent one per
  *  second), so many viewers cost one pass. */
 type AircraftOut = AdsbSnapshot['aircraft'][number] & { seenAt: string };
-const _seenAtMemo = new WeakMap<AdsbSnapshot, AircraftOut[]>();
-function withSeenAt(snap: AdsbSnapshot): Omit<AdsbSnapshot, 'aircraft'> & { aircraft: AircraftOut[] } {
-  let aircraft = _seenAtMemo.get(snap);
+const _seenAtMemo = { lean: new WeakMap<AdsbSnapshot, AircraftOut[]>(), full: new WeakMap<AdsbSnapshot, AircraftOut[]>() };
+function withSeenAt(
+  snap: AdsbSnapshot,
+  /** Keep every detail field; otherwise only the three the list carries. */
+  detail: boolean = false,
+): Omit<AdsbSnapshot, 'aircraft'> & { aircraft: AircraftOut[] } {
+  const memo = detail ? _seenAtMemo.full : _seenAtMemo.lean;
+  let aircraft = memo.get(snap);
   if (!aircraft) {
     const at = Date.parse(snap.fetched_at);
     const base = Number.isFinite(at) ? at : Date.now();
@@ -169,13 +216,13 @@ function withSeenAt(snap: AdsbSnapshot): Omit<AdsbSnapshot, 'aircraft'> & { airc
     // shown, and across a thousand aircraft the digits were a real share of
     // an answer every viewer downloads every 15 s.
     aircraft = snap.aircraft.map((a) => ({
-      ...a,
+      ...(detail ? a : withoutFullDetail(a)),
       lat: Math.round(a.lat * 1e5) / 1e5,
       lon: Math.round(a.lon * 1e5) / 1e5,
       ageSec: Math.round(a.ageSec * 10) / 10,
       seenAt: new Date(base - Math.max(0, a.ageSec) * 1000).toISOString(),
     }));
-    _seenAtMemo.set(snap, aircraft);
+    memo.set(snap, aircraft);
   }
   return { ...snap, aircraft };
 }
@@ -253,6 +300,49 @@ const AdsbRecentQuery = z.object({
       `Seconds, 1 to ${ADSB_RECENT_MAX_SEC}. Only what was heard in that many seconds: positions no older, or track points no older. AusAware's own receivers report every couple of seconds, so for the aircraft they hear this is how to follow them closely; aggregator positions change about every 15 seconds. Cached for 2 seconds.`,
     ),
 });
+const AdsbAircraftQuery = AdsbRecentQuery.extend({
+  detail: z
+    .string()
+    .optional()
+    .catch(undefined)
+    .describe(
+      'Set to 1 for every detail field on every aircraft (speeds, headings, autopilot settings, accuracy, signal…). Without it the list carries only baroRateFpm, posSource and emergency, which keeps it small.',
+    ),
+  hex: z
+    .string()
+    .optional()
+    .catch(undefined)
+    .describe(
+      "One aircraft's ICAO address. Only that aircraft is returned, with every detail field and its freshest position (a couple of seconds old where AusAware's receivers hear it); an empty list when it is not being tracked. Cached for 2 seconds.",
+    ),
+});
+const HEX_RE = /^~?[0-9a-f]{4,8}$/;
+/** The query's `hex`, lowercased, or null when absent or not an address. */
+function hexOf(raw: string | undefined): string | null {
+  const h = (raw ?? '').trim().toLowerCase();
+  return HEX_RE.test(h) ? h : null;
+}
+
+/**
+ * One aircraft as a snapshot of its own. The freshest record wins: the merge
+ * with our receivers' current fixes if it is in that, else whatever the last
+ * poll holds (a held or estimated position). Each keeps the fetched_at its
+ * ageSec is measured to.
+ */
+function oneAircraft(hex: string, nowMs: number): AdsbSnapshot {
+  const only = (snap: AdsbSnapshot, a: AdsbSnapshot['aircraft'][number] | undefined): AdsbSnapshot => ({
+    ...snap,
+    aircraft: a ? [a] : [],
+    count: a ? 1 : 0,
+    emergency_count: a && a.esTag !== null ? 1 : 0,
+  });
+  const live = adsbRecentAircraft(ADSB_RECENT_MAX_SEC, nowMs);
+  const fresh = live.aircraft.find((a) => a.hex === hex);
+  if (fresh) return only(live, fresh);
+  const snap = adsbSnapshot();
+  return only(snap, snap.aircraft.find((a) => a.hex === hex));
+}
+
 /** The query's `recent`, or null when absent or invalid. */
 function recentOf(raw: string | undefined): number | null {
   if (raw === undefined || raw === '') return null;
@@ -292,24 +382,29 @@ adsbRouter.get(
     tags: ['Aircraft'],
     summary: 'Aircraft over Australia',
     description:
-      "Aircraft over Australia now, merged from public ADS-B aggregators (adsb.lol, adsb.fi, airplanes.live, ADSB One, and FlyItalyADSB over NSW) and AusAware's own receivers, one record per ICAO address. Records whose `sources` include `flyitaly` carry flight data from FlyItalyADSB (flyitalyadsb.com), CC BY-SA 4.0, which must be credited where you show them. Polled about every 15 seconds. An aircraft that stops reporting is held at its last position for a while; one in flight with a known heading and speed is then projected forward, marked `estimated`, until its last real fix is three minutes old. With `recent`, only aircraft whose position is no older than that many seconds, merged the same way: for aircraft AusAware's receivers hear, that is a position a couple of seconds old.",
+      "Aircraft over Australia now, merged from public ADS-B aggregators (adsb.lol, adsb.fi, airplanes.live, ADSB One, and FlyItalyADSB over NSW) and AusAware's own receivers, one record per ICAO address. Records whose `sources` include `flyitaly` carry flight data from FlyItalyADSB (flyitalyadsb.com), CC BY-SA 4.0, which must be credited where you show them. Polled about every 15 seconds. An aircraft that stops reporting is held at its last position for a while; one in flight with a known heading and speed is then projected forward, marked `estimated`, until its last real fix is three minutes old. With `recent`, only aircraft whose position is no older than that many seconds, merged the same way: for aircraft AusAware's receivers hear, that is a position a couple of seconds old. Each aircraft can carry much more than its position (vertical rate, GPS altitude, airspeeds, heading, autopilot settings, position accuracy, signal strength): the list has three of those fields, `detail=1` adds the rest, and `hex` returns one aircraft with all of them. Detail fields are absent when the source did not send them, and none of them is kept in history.",
     responses: {
       ...okJson(envelope(AdsbAircraft), 'Every aircraft, with how each source fared and the history window'),
       ...GATED_ERRORS,
     },
   }),
-  queryValidator(AdsbRecentQuery),
+  queryValidator(AdsbAircraftQuery),
   (c) => {
     // The history block rides along on the live poll rather than getting its own
     // endpoint: the map already fetches this every 15s, and the date picker
     // needs the window bounds before it can offer a first scrub.
     const now = Date.now();
     const recent = recentOf(c.req.query('recent'));
+    const hex = hexOf(c.req.query('hex'));
+    const detail = hex !== null || ['1', 'true'].includes((c.req.query('detail') ?? '').toLowerCase());
     // Set here, not left to CACHEABLE_PATHS: that list ignores the query, and
     // the full answer must stay uncached for the 15 s refresh.
-    if (recent !== null) c.header('Cache-Control', RECENT_CACHE);
+    if (recent !== null || hex !== null) c.header('Cache-Control', RECENT_CACHE);
+    const snap = hex !== null
+      ? oneAircraft(hex, now)
+      : recent !== null ? adsbRecentAircraft(recent, now) : adsbSnapshot();
     return ok(c, {
-      ...withSeenAt(recent !== null ? adsbRecentAircraft(recent, now) : adsbSnapshot()),
+      ...withSeenAt(snap, detail),
       history: {
         retentionDays: DATA_RETENTION_DAYS,
         oldestMs: adsbHistoryOldestMs(now),

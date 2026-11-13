@@ -213,6 +213,46 @@ describe('?recent= on the live aircraft and trails', () => {
   });
 });
 
+describe('detail on the live aircraft', () => {
+  const DETAILED = {
+    ...SNAPSHOT,
+    aircraft: [
+      { ...SNAPSHOT.aircraft[0]!, baroRateFpm: -640, posSource: 'adsb', iasKt: 118, rssiDb: -9.5, navAltFt: 2000 },
+      SNAPSHOT.aircraft[1]!,
+    ],
+  };
+  type Body = { data: { count: number; aircraft: Array<Record<string, unknown>> } };
+
+  it('the plain list carries three detail fields; detail=1 carries them all', async () => {
+    m.snapshot = DETAILED as never;
+    const a = await app();
+    const lean = ((await (await a.request('/api/v1/adsb/aircraft')).json()) as Body).data.aircraft[0]!;
+    expect(lean).toMatchObject({ baroRateFpm: -640, posSource: 'adsb' });
+    for (const k of ['iasKt', 'rssiDb', 'navAltFt']) expect(lean).not.toHaveProperty(k);
+    const full = ((await (await a.request('/api/v1/adsb/aircraft?detail=1')).json()) as Body).data.aircraft[0]!;
+    expect(full).toMatchObject({ baroRateFpm: -640, iasKt: 118, rssiDb: -9.5, navAltFt: 2000 });
+  });
+
+  it('hex returns that one aircraft with everything, cached for 2 s', async () => {
+    m.snapshot = DETAILED as never;
+    const a = await app();
+    const res = await a.request('/api/v1/adsb/aircraft?hex=7C6B2D');
+    expect(res.headers.get('Cache-Control')).toBe('public, max-age=2');
+    const body = ((await res.json()) as Body).data;
+    expect(body.count).toBe(1);
+    expect(body.aircraft.map((x) => x.hex)).toEqual(['7c6b2d']);
+    expect(body.aircraft[0]).toMatchObject({ iasKt: 118, seenAt: '2026-10-28T03:59:57.600Z' });
+  });
+
+  it('hex for an aircraft that is not tracked is an empty list, and a bad hex is ignored', async () => {
+    const a = await app();
+    const none = ((await (await a.request('/api/v1/adsb/aircraft?hex=abcdef')).json()) as Body).data;
+    expect([none.count, none.aircraft]).toEqual([0, []]);
+    const bad = ((await (await a.request('/api/v1/adsb/aircraft?hex=zzz')).json()) as Body).data;
+    expect(bad.aircraft).toHaveLength(2);
+  });
+});
+
 describe('GET /api/adsb/history and /api/v1/adsb/history', () => {
   /** One stored minute (migration 139) holding one aircraft. */
   const row = (minuteMs: number, offsetMs: number) => ({

@@ -187,6 +187,37 @@ export interface RawAircraft {
   emergency?: string | null;
   seen_pos?: number | null;
   dbFlags?: number | null;
+  // Everything below feeds AdsbDetail. None of it is needed to place an
+  // aircraft; all of it is what a tracker shows once you select one.
+  alt_geom?: number | null;
+  baro_rate?: number | null;
+  geom_rate?: number | null;
+  ias?: number | null;
+  tas?: number | null;
+  mach?: number | null;
+  true_heading?: number | null;
+  mag_heading?: number | null;
+  roll?: number | null;
+  nav_altitude_mcp?: number | null;
+  nav_altitude_fms?: number | null;
+  nav_heading?: number | null;
+  nav_qnh?: number | null;
+  nav_modes?: string[] | null;
+  wd?: number | null;
+  ws?: number | null;
+  oat?: number | null;
+  /** How the position was obtained: adsb_icao, mlat, tisb_icao, adsr_icao… */
+  type?: string | null;
+  nic?: number | null;
+  nac_p?: number | null;
+  sil?: number | null;
+  rc?: number | null;
+  version?: number | null;
+  rssi?: number | null;
+  messages?: number | null;
+  desc?: string | null;
+  ownOp?: string | null;
+  year?: string | number | null;
 }
 interface ReadsbPointResponse {
   ac?: RawAircraft[];
@@ -196,7 +227,176 @@ interface ReadsbPointResponse {
 
 export type EsTag = 'polair' | 'rescue' | 'firebomber' | 'ambulance' | 'military';
 
-export interface AdsbAircraft {
+export type AdsbPosSource = 'adsb' | 'mlat' | 'tisb' | 'adsr' | 'adsc' | 'modes' | 'other';
+export type AdsbFlag = 'military' | 'interesting' | 'pia' | 'ladd';
+
+/**
+ * What an aircraft says about itself beyond where it is. Every field is
+ * absent when the source did not send it (or sent nonsense), never null or
+ * zero: most aircraft send only some of these, and a receiver's decoder a
+ * different set from an aggregator's.
+ *
+ * Live only. None of this is written to the history archive, which stays
+ * [time, lat, lon, altitude] per point.
+ */
+export interface AdsbDetail {
+  /** Vertical rate from pressure altitude, feet per minute; negative descending. */
+  baroRateFpm?: number;
+  /** Vertical rate from GPS altitude, feet per minute. */
+  geomRateFpm?: number;
+  /** GPS (geometric) altitude, feet above the WGS84 ellipsoid. */
+  altGeomFt?: number;
+  iasKt?: number;
+  tasKt?: number;
+  mach?: number;
+  /** Where the nose points, degrees true. Differs from trackDeg by the wind. */
+  trueHeadingDeg?: number;
+  magHeadingDeg?: number;
+  /** Bank angle, degrees; negative is left. */
+  rollDeg?: number;
+  /** Altitude selected on the autopilot (MCP/FCU, else the FMS), feet. */
+  navAltFt?: number;
+  navHeadingDeg?: number;
+  /** Altimeter setting, hPa. */
+  navQnhHpa?: number;
+  /** Engaged modes: autopilot, vnav, althold, approach, lnav, tcas. */
+  navModes?: string[];
+  /** Wind and outside air temperature the aggregator derived from the aircraft's own data. */
+  windDirDeg?: number;
+  windKt?: number;
+  oatC?: number;
+  /** How the position was obtained. MLAT and TIS-B are less exact than ADS-B. */
+  posSource?: AdsbPosSource;
+  /** Navigation integrity (0-11) and position accuracy (0-11) categories, source integrity level (0-3). */
+  nic?: number;
+  nacp?: number;
+  sil?: number;
+  /** Radius of containment, metres: the position is within this of the truth. */
+  rcM?: number;
+  /** ADS-B version the transponder speaks (0-2). */
+  adsbVersion?: number;
+  /** Signal strength at the receiver that heard it, dBFS. */
+  rssiDb?: number;
+  /** Messages received from this aircraft by that receiver. */
+  messages?: number;
+  /** The declared emergency, when there is one: general, lifeguard, minfuel, nordo, unlawful, downed. */
+  emergency?: string;
+  /** Database flags the aggregator holds for the airframe. */
+  flags?: AdsbFlag[];
+  /** Airframe description, operator and year of manufacture from the aggregator's database. */
+  desc?: string;
+  operator?: string;
+  year?: string;
+}
+
+/** Every AdsbDetail key, for code that strips or copies the block. */
+export const ADSB_DETAIL_KEYS = [
+  'baroRateFpm', 'geomRateFpm', 'altGeomFt', 'iasKt', 'tasKt', 'mach',
+  'trueHeadingDeg', 'magHeadingDeg', 'rollDeg', 'navAltFt', 'navHeadingDeg',
+  'navQnhHpa', 'navModes', 'windDirDeg', 'windKt', 'oatC', 'posSource', 'nic',
+  'nacp', 'sil', 'rcM', 'adsbVersion', 'rssiDb', 'messages', 'emergency',
+  'flags', 'desc', 'operator', 'year',
+] as const satisfies ReadonlyArray<keyof AdsbDetail>;
+
+/**
+ * The detail kept on the plain aircraft list: the three a map needs for every
+ * aircraft (a climb arrow, an "approximate position" mark, the kind of
+ * emergency). The rest is a few hundred bytes per aircraft that only matters
+ * for the one selected, and is served on request (`detail`, `hex`).
+ */
+export const ADSB_LIST_DETAIL_KEYS: ReadonlyArray<keyof AdsbDetail> = [
+  'baroRateFpm', 'posSource', 'emergency',
+];
+
+/** Detail that describes the airframe, not the moment: safe to fill from an
+ *  older record or carry between polls. */
+const ADSB_IDENTITY_DETAIL_KEYS = ['flags', 'desc', 'operator', 'year'] as const;
+
+function num(v: unknown, min: number, max: number): number | undefined {
+  return typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max ? v : undefined;
+}
+function text(v: unknown, maxLen: number): string | undefined {
+  if (typeof v !== 'string' && typeof v !== 'number') return undefined;
+  const t = String(v).trim();
+  return t && t.length <= maxLen ? t : undefined;
+}
+
+/** readsb's position `type` in our seven words. */
+export function posSourceOf(type: unknown, hex: string): AdsbPosSource | undefined {
+  const t = typeof type === 'string' ? type.trim().toLowerCase() : '';
+  if (!t) return hex.startsWith('~') ? 'tisb' : undefined;
+  if (t.startsWith('adsb')) return 'adsb';
+  if (t.startsWith('adsr')) return 'adsr';
+  if (t.startsWith('tisb')) return 'tisb';
+  if (t === 'adsc') return 'adsc';
+  if (t === 'mlat') return 'mlat';
+  if (t === 'mode_s') return 'modes';
+  return 'other';
+}
+
+const DB_FLAGS: ReadonlyArray<[number, AdsbFlag]> = [
+  [1, 'military'], [2, 'interesting'], [4, 'pia'], [8, 'ladd'],
+];
+
+/** The detail one raw record carries. Out-of-range values are dropped, not
+ *  clamped: a wrong number shown as fact is worse than a missing row. */
+export function detailOf(raw: RawAircraft, hex: string): AdsbDetail {
+  const d: AdsbDetail = {};
+  const set = <K extends keyof AdsbDetail>(k: K, v: AdsbDetail[K] | undefined): void => {
+    if (v !== undefined) d[k] = v;
+  };
+  set('baroRateFpm', num(raw.baro_rate, -30_000, 30_000));
+  set('geomRateFpm', num(raw.geom_rate, -30_000, 30_000));
+  set('altGeomFt', num(raw.alt_geom, -2_000, 100_000));
+  set('iasKt', num(raw.ias, 0, 1_500));
+  set('tasKt', num(raw.tas, 0, 1_500));
+  set('mach', num(raw.mach, 0, 5));
+  set('trueHeadingDeg', num(raw.true_heading, 0, 360));
+  set('magHeadingDeg', num(raw.mag_heading, 0, 360));
+  set('rollDeg', num(raw.roll, -180, 180));
+  set('navAltFt', num(raw.nav_altitude_mcp, 0, 100_000) ?? num(raw.nav_altitude_fms, 0, 100_000));
+  set('navHeadingDeg', num(raw.nav_heading, 0, 360));
+  set('navQnhHpa', num(raw.nav_qnh, 800, 1_100));
+  if (Array.isArray(raw.nav_modes)) {
+    const modes = raw.nav_modes
+      .filter((m): m is string => typeof m === 'string' && m.length > 0 && m.length <= 12)
+      .slice(0, 8);
+    if (modes.length > 0) d.navModes = modes;
+  }
+  set('windDirDeg', num(raw.wd, 0, 360));
+  set('windKt', num(raw.ws, 0, 500));
+  set('oatC', num(raw.oat, -100, 60));
+  set('posSource', posSourceOf(raw.type, hex));
+  set('nic', num(raw.nic, 0, 11));
+  set('nacp', num(raw.nac_p, 0, 11));
+  set('sil', num(raw.sil, 0, 3));
+  set('rcM', num(raw.rc, 0, 500_000));
+  set('adsbVersion', num(raw.version, 0, 3));
+  set('rssiDb', num(raw.rssi, -60, 0));
+  const messages = num(raw.messages, 0, 1e12);
+  if (messages !== undefined) d.messages = Math.round(messages);
+  const emergency = text(raw.emergency, 16)?.toLowerCase();
+  if (emergency && emergency !== 'none') d.emergency = emergency;
+  if (typeof raw.dbFlags === 'number' && Number.isFinite(raw.dbFlags)) {
+    const flags = DB_FLAGS.filter(([bit]) => ((raw.dbFlags as number) & bit) !== 0).map(([, f]) => f);
+    if (flags.length > 0) d.flags = flags;
+  }
+  set('desc', text(raw.desc, 80));
+  set('operator', text(raw.ownOp, 80));
+  set('year', text(raw.year, 4));
+  return d;
+}
+
+/** A record without the detail the plain list leaves out. */
+export function withoutFullDetail<T extends AdsbAircraft>(a: T): T {
+  const out = { ...a };
+  for (const k of ADSB_DETAIL_KEYS) {
+    if (!ADSB_LIST_DETAIL_KEYS.includes(k)) delete out[k];
+  }
+  return out;
+}
+
+export interface AdsbAircraft extends AdsbDetail {
   /** Lowercase ICAO id; readsb prefixes non-ICAO TIS-B ids with '~'. */
   hex: string;
   callsign: string | null;
@@ -326,7 +526,22 @@ export function normalizeAircraft(
     // ever sets these.
     estimated: false,
     estimatedSec: null,
+    ...detailOf(raw, hex),
   };
+}
+
+/** ADS-B is the aircraft's own GPS; these are worked out by someone else. */
+function isDerivedPosition(a: AdsbAircraft): boolean {
+  return a.posSource === 'mlat' || a.posSource === 'tisb';
+}
+
+/** A derived position must be fresher by more than this to beat a real one. */
+const DERIVED_POSITION_HANDICAP_SEC = 3;
+
+/** True when `a`'s position should be preferred to `b`'s. */
+function fresher(a: AdsbAircraft, b: AdsbAircraft): boolean {
+  const handicap = (x: AdsbAircraft): number => (isDerivedPosition(x) ? DERIVED_POSITION_HANDICAP_SEC : 0);
+  return a.ageSec + handicap(a) < b.ageSec + handicap(b);
 }
 
 /**
@@ -343,8 +558,13 @@ export function mergeAircraft(records: AdsbAircraft[]): AdsbAircraft[] {
       byHex.set(rec.hex, { ...rec, sources: [...rec.sources] });
       continue;
     }
-    const winner = rec.ageSec < prev.ageSec ? { ...rec } : prev;
+    // Freshest wins, except that an MLAT or TIS-B fix only a moment newer
+    // does not displace the aircraft's own ADS-B position.
+    const winner = fresher(rec, prev) ? { ...rec } : prev;
     const loser = winner === prev ? rec : prev;
+    for (const k of ADSB_IDENTITY_DETAIL_KEYS) {
+      if (winner[k] === undefined && loser[k] !== undefined) (winner as AdsbDetail)[k] = loser[k] as never;
+    }
     winner.callsign = winner.callsign ?? loser.callsign;
     winner.reg = winner.reg ?? loser.reg;
     winner.type = winner.type ?? loser.type;
@@ -858,6 +1078,9 @@ function backfillFromState(a: AdsbAircraft, prev: LastSeen, nowMs: number): Adsb
   out.type = out.type ?? prev.rec.type;
   out.category = out.category ?? prev.rec.category;
   out.esTag = out.esTag ?? prev.rec.esTag;
+  for (const k of ADSB_IDENTITY_DETAIL_KEYS) {
+    if (out[k] === undefined && prev.rec[k] !== undefined) (out as AdsbDetail)[k] = prev.rec[k] as never;
+  }
 
   if (out.squawk === null && prev.squawk !== null
       && (nowMs - prev.squawkAtMs) / 1000 <= SQUAWK_CARRY_SEC) {

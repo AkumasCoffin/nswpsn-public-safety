@@ -2626,6 +2626,145 @@
                   ],
                   "description": "When estimated, seconds since the last real fix; otherwise null"
                 },
+                "baroRateFpm": {
+                  "description": "Vertical rate from pressure altitude, feet per minute; negative is descending",
+                  "type": "number"
+                },
+                "posSource": {
+                  "description": "How the position was obtained. adsb is the aircraft's own GPS; mlat (multilateration) and tisb (ground radar rebroadcast) are worked out by others and are less exact",
+                  "type": "string",
+                  "enum": [
+                    "adsb",
+                    "mlat",
+                    "tisb",
+                    "adsr",
+                    "adsc",
+                    "modes",
+                    "other"
+                  ]
+                },
+                "emergency": {
+                  "description": "The emergency the aircraft has declared, when there is one: general, lifeguard, minfuel, nordo, unlawful, downed",
+                  "type": "string"
+                },
+                "geomRateFpm": {
+                  "description": "Vertical rate from GPS altitude, feet per minute",
+                  "type": "number"
+                },
+                "altGeomFt": {
+                  "description": "GPS (geometric) altitude, feet above the WGS84 ellipsoid",
+                  "type": "number"
+                },
+                "iasKt": {
+                  "description": "Indicated airspeed, knots",
+                  "type": "number"
+                },
+                "tasKt": {
+                  "description": "True airspeed, knots",
+                  "type": "number"
+                },
+                "mach": {
+                  "description": "Mach number",
+                  "type": "number"
+                },
+                "trueHeadingDeg": {
+                  "description": "Where the nose points, degrees true; differs from trackDeg by the wind",
+                  "type": "number"
+                },
+                "magHeadingDeg": {
+                  "description": "Heading, degrees magnetic",
+                  "type": "number"
+                },
+                "rollDeg": {
+                  "description": "Bank angle, degrees; negative is left",
+                  "type": "number"
+                },
+                "navAltFt": {
+                  "description": "Altitude selected on the autopilot, feet",
+                  "type": "number"
+                },
+                "navHeadingDeg": {
+                  "description": "Heading selected on the autopilot, degrees",
+                  "type": "number"
+                },
+                "navQnhHpa": {
+                  "description": "Altimeter setting, hPa",
+                  "type": "number"
+                },
+                "navModes": {
+                  "description": "Engaged autopilot modes: autopilot, vnav, althold, approach, lnav, tcas",
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "windDirDeg": {
+                  "description": "Wind direction, degrees, as an aggregator derived it from the aircraft's own data",
+                  "type": "number"
+                },
+                "windKt": {
+                  "description": "Wind speed, knots (derived, as windDirDeg)",
+                  "type": "number"
+                },
+                "oatC": {
+                  "description": "Outside air temperature, °C (derived)",
+                  "type": "number"
+                },
+                "nic": {
+                  "description": "Navigation integrity category, 0 to 11; higher is better",
+                  "type": "number"
+                },
+                "nacp": {
+                  "description": "Position accuracy category, 0 to 11; higher is better",
+                  "type": "number"
+                },
+                "sil": {
+                  "description": "Source integrity level, 0 to 3",
+                  "type": "number"
+                },
+                "rcM": {
+                  "description": "Radius of containment, metres: the position is within this of the truth",
+                  "type": "number"
+                },
+                "adsbVersion": {
+                  "description": "ADS-B version the transponder speaks, 0 to 2",
+                  "type": "number"
+                },
+                "rssiDb": {
+                  "description": "Signal strength at the receiver that heard it, dBFS (negative; nearer 0 is stronger)",
+                  "type": "number"
+                },
+                "messages": {
+                  "description": "Messages that receiver has had from this aircraft",
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "flags": {
+                  "description": "Flags from the aggregator's aircraft database",
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "military",
+                      "interesting",
+                      "pia",
+                      "ladd"
+                    ]
+                  }
+                },
+                "desc": {
+                  "description": "Airframe description from the aggregator's database, e.g. BOEING 737-800",
+                  "type": "string"
+                },
+                "operator": {
+                  "description": "Operator from the aggregator's database",
+                  "type": "string"
+                },
+                "year": {
+                  "description": "Year of manufacture",
+                  "type": "string"
+                },
                 "seenAt": {
                   "type": "string",
                   "description": "When the position was heard, ISO 8601; for an estimated one, when its last real fix was. Count \"seconds ago\" from this rather than ageSec, which is only true at fetched_at"
@@ -8593,7 +8732,7 @@
           "Aircraft"
         ],
         "summary": "Aircraft over Australia",
-        "description": "Aircraft over Australia now, merged from public ADS-B aggregators (adsb.lol, adsb.fi, airplanes.live, ADSB One, and FlyItalyADSB over NSW) and AusAware's own receivers, one record per ICAO address. Records whose `sources` include `flyitaly` carry flight data from FlyItalyADSB (flyitalyadsb.com), CC BY-SA 4.0, which must be credited where you show them. Polled about every 15 seconds. An aircraft that stops reporting is held at its last position for a while; one in flight with a known heading and speed is then projected forward, marked `estimated`, until its last real fix is three minutes old. With `recent`, only aircraft whose position is no older than that many seconds, merged the same way: for aircraft AusAware's receivers hear, that is a position a couple of seconds old.",
+        "description": "Aircraft over Australia now, merged from public ADS-B aggregators (adsb.lol, adsb.fi, airplanes.live, ADSB One, and FlyItalyADSB over NSW) and AusAware's own receivers, one record per ICAO address. Records whose `sources` include `flyitaly` carry flight data from FlyItalyADSB (flyitalyadsb.com), CC BY-SA 4.0, which must be credited where you show them. Polled about every 15 seconds. An aircraft that stops reporting is held at its last position for a while; one in flight with a known heading and speed is then projected forward, marked `estimated`, until its last real fix is three minutes old. With `recent`, only aircraft whose position is no older than that many seconds, merged the same way: for aircraft AusAware's receivers hear, that is a position a couple of seconds old. Each aircraft can carry much more than its position (vertical rate, GPS altitude, airspeeds, heading, autopilot settings, position accuracy, signal strength): the list has three of those fields, `detail=1` adds the rest, and `hex` returns one aircraft with all of them. Detail fields are absent when the source did not send them, and none of them is kept in history.",
         "responses": {
           "200": {
             "description": "Every aircraft, with how each source fared and the history window",
@@ -8665,6 +8804,22 @@
               "maximum": 60
             },
             "description": "Seconds, 1 to 60. Only what was heard in that many seconds: positions no older, or track points no older. AusAware's own receivers report every couple of seconds, so for the aircraft they hear this is how to follow them closely; aggregator positions change about every 15 seconds. Cached for 2 seconds."
+          },
+          {
+            "in": "query",
+            "name": "detail",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Set to 1 for every detail field on every aircraft (speeds, headings, autopilot settings, accuracy, signal…). Without it the list carries only baroRateFpm, posSource and emergency, which keeps it small."
+          },
+          {
+            "in": "query",
+            "name": "hex",
+            "schema": {
+              "type": "string"
+            },
+            "description": "One aircraft's ICAO address. Only that aircraft is returned, with every detail field and its freshest position (a couple of seconds old where AusAware's receivers hear it); an empty list when it is not being tracked. Cached for 2 seconds."
           }
         ],
         "security": [
