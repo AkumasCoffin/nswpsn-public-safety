@@ -1001,5 +1001,5 @@ export async function stopAdsbDailyFlush(): Promise<void> {
   }
   await flushAdsbDaily();
   await flushAdsbCoverage();
-  await flushAdsbLightcone();
+  await flushAdsbLightcone(true);
 }

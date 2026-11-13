@@ -163,8 +163,16 @@ function withSeenAt(snap: AdsbSnapshot): Omit<AdsbSnapshot, 'aircraft'> & { airc
   if (!aircraft) {
     const at = Date.parse(snap.fetched_at);
     const base = Number.isFinite(at) ? at : Date.now();
+    // Rounded here, once per snapshot. A projected position and a re-aged
+    // receiver age are raw floats (-33.86000000000001, 3.4000000000000004):
+    // 5 dp is about a metre and a tenth of a second is finer than anything
+    // shown, and across a thousand aircraft the digits were a real share of
+    // an answer every viewer downloads every 15 s.
     aircraft = snap.aircraft.map((a) => ({
       ...a,
+      lat: Math.round(a.lat * 1e5) / 1e5,
+      lon: Math.round(a.lon * 1e5) / 1e5,
+      ageSec: Math.round(a.ageSec * 10) / 10,
       seenAt: new Date(base - Math.max(0, a.ageSec) * 1000).toISOString(),
     }));
     _seenAtMemo.set(snap, aircraft);

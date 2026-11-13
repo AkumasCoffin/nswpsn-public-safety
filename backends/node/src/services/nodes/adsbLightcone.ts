@@ -60,7 +60,23 @@ interface Pending {
   missed: Map<number, number>;
   /** False until the stored row for this day has been added in. */
   hydrated: boolean;
+  /** A cell has been counted since the last write. */
+  dirty: boolean;
+  /** When this entry was last written (0: never). */
+  flushedMs: number;
 }
+
+/**
+ * How often a day's cells are rewritten while they keep changing.
+ *
+ * The two cell maps are one large JSONB value each, and a write replaces the
+ * whole value. Every minute, for every receiver seen that day, changed or
+ * not, that was hundreds of megabytes a day of dead rows and WAL per receiver
+ * on a slow disk. Nothing reads the stored row between passes (the view adds
+ * memory on top), so ten minutes loses nothing but ten minutes of cells if
+ * the process dies without its shutdown flush.
+ */
+const FLUSH_EVERY_MS = 10 * 60_000;
 
 const pending = new Map<string, Pending>();
 
@@ -78,7 +94,7 @@ function dayEntry(nodeId: string, nowMs: number): Pending {
   const key = `${nodeId}|${sydneyDay(nowMs)}`;
   let cur = pending.get(key);
   if (!cur) {
-    cur = { heard: new Map(), missed: new Map(), hydrated: false };
+    cur = { heard: new Map(), missed: new Map(), hydrated: false, dirty: false, flushedMs: 0 };
     pending.set(key, cur);
   }
   return cur;
@@ -95,8 +111,11 @@ function cellFor(
   return cellOf(slice, bucketOf(bearingDeg(site.lat, site.lon, lat, lon)), ring);
 }
 
-function bump(m: Map<number, number>, cell: number): void {
-  m.set(cell, Math.min(65_535, (m.get(cell) ?? 0) + 1));
+function bump(cur: Pending, m: Map<number, number>, cell: number): void {
+  const n = m.get(cell) ?? 0;
+  if (n >= 65_535) return; // saturated: nothing changes, nothing to write
+  m.set(cell, n + 1);
+  cur.dirty = true;
 }
 
 /**
@@ -126,12 +145,12 @@ export function foldLightcone(
     seen.set(r.hex, nowMs);
     if (r.onGround) continue;
     const c = cellFor(site, r.lat, r.lon, r.altFt);
-    if (c !== null) bump(cur.heard, c);
+    if (c !== null) bump(cur, cur.heard, c);
     const trail = trails.get(r.hex);
     if (!trail) continue;
     for (const p of trail) {
       const tc = cellFor(site, p[1], p[2], p[3]);
-      if (tc !== null) bump(cur.heard, tc);
+      if (tc !== null) bump(cur, cur.heard, tc);
     }
   }
 
@@ -175,7 +194,7 @@ export function noteNetworkAircraft(
         : horizonKm(pin.heightM, slice * SLICE_M);
       if (km > limit) continue;
       cur ??= dayEntry(nodeId, nowMs);
-      bump(cur.missed, cellOf(slice, b, Math.floor(km / RING_KM)));
+      bump(cur, cur.missed, cellOf(slice, b, Math.floor(km / RING_KM)));
     }
   }
 }
@@ -201,15 +220,25 @@ function addObject(into: Map<number, number>, o: unknown): void {
  * is already stored, after which memory is the superset and a replace is
  * correct.
  */
-export async function flushAdsbLightcone(): Promise<number> {
+export async function flushAdsbLightcone(
+  /** Write every changed entry now, whatever its age (shutdown). */
+  force: boolean = false,
+  nowMs: number = Date.now(),
+): Promise<number> {
   if (pending.size === 0) return 0;
   const pool = await getPool();
   if (!pool) return 0;
   let written = 0;
+  const today = sydneyDay(nowMs);
   for (const [key, cur] of Array.from(pending.entries())) {
     const sep = key.lastIndexOf('|');
     const nodeId = key.slice(0, sep);
     const day = key.slice(sep + 1);
+    // Unchanged since the last write: nothing to say. Changed but written
+    // recently: wait, unless the day is over (its last write) or we are
+    // shutting down.
+    if (!cur.dirty) continue;
+    if (!force && day === today && nowMs - cur.flushedMs < FLUSH_EVERY_MS) continue;
     try {
       if (!cur.hydrated) {
         const prev = await pool.query<{ heard: unknown; missed: unknown }>(
@@ -227,14 +256,17 @@ export async function flushAdsbLightcone(): Promise<number> {
         [nodeId, day, JSON.stringify(emptyEnvelope()),
           JSON.stringify(toObject(cur.heard)), JSON.stringify(toObject(cur.missed))],
       );
+      cur.dirty = false;
+      cur.flushedMs = nowMs;
       written += 1;
     } catch (err) {
       log.debug({ err, nodeId, day }, 'adsb lightcone flush failed');
     }
   }
-  const today = sydneyDay(Date.now());
-  for (const key of Array.from(pending.keys())) {
-    if (!key.endsWith(`|${today}`)) pending.delete(key);
+  // A finished day goes once it has been written; one whose write failed
+  // stays for the next pass.
+  for (const [key, cur] of Array.from(pending.entries())) {
+    if (!key.endsWith(`|${today}`) && !cur.dirty) pending.delete(key);
   }
   return written;
 }

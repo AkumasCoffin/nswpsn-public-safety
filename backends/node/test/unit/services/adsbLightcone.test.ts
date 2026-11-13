@@ -139,4 +139,26 @@ describe('lightcone cells', () => {
     const heard = JSON.parse(upsert[1][3] as string) as Record<string, number>;
     expect(Object.values(heard).reduce((a, b) => a + b, 0)).toBe(5);
   });
+
+  it('writes nothing when nothing changed, and a busy day at most every ten minutes', async () => {
+    // Each write replaces two large JSONB values. Every minute, changed or
+    // not, that was the table's whole churn.
+    // Midday in Sydney, so no step below crosses the day boundary.
+    const t = Date.UTC(2026, 5, 10, 2, 0, 0);
+    const near = destination(SITE.lat, SITE.lon, 180, 30);
+    const fold = (at: number) =>
+      foldLightcone(NODE, SITE.lat, SITE.lon, 10, [ac('abc', near.lat, near.lon, 5_000)], new Map(), at);
+    queryMock.mockResolvedValue({ rows: [] });
+    fold(t);
+    expect(await flushAdsbLightcone(false, t)).toBe(1);
+    // Nothing new: no write, however long it has been.
+    expect(await flushAdsbLightcone(false, t + 3_600_000)).toBe(0);
+    // Changed a minute later: held back.
+    fold(t + 60_000);
+    expect(await flushAdsbLightcone(false, t + 61_000)).toBe(0);
+    // ...unless shutting down, or ten minutes have passed.
+    expect(await flushAdsbLightcone(true, t + 62_000)).toBe(1);
+    fold(t + 120_000);
+    expect(await flushAdsbLightcone(false, t + 62_000 + 601_000)).toBe(1);
+  });
 });
