@@ -2299,7 +2299,7 @@
        rather than by unbinding, the same way the touch rule above works: it
        takes effect the instant the pill flips, with no marker churn through
        _rebuildAdsb's diff. Scoped to .adsb-tooltip so vessels keep theirs. */
-    body.adsb-labels-on .leaflet-tooltip.adsb-tooltip { display: none !important; }
+    body.adsb-labels-on .leaflet-tooltip.adsb-ac-tooltip { display: none !important; }
 
     #mobile-tip-card {
       position: fixed; left: 10px; right: 10px; bottom: 10px; z-index: 1200;
@@ -14556,6 +14556,8 @@ function initPagerHoursFromStorage() {
       } catch (e) { /* corrupt/blocked storage — start empty */ }
     })();
     let _adsbPhotoSaveTimer = null;
+    /** Hexes whose photo lookup errored (as opposed to answering "none"). */
+    const _adsbPhotoFailed = new Set();
     function saveAdsbPhotoCache() {
       if (_adsbPhotoSaveTimer) return;
       _adsbPhotoSaveTimer = setTimeout(() => {
@@ -14569,7 +14571,9 @@ function initPagerHoursFromStorage() {
           const out = {};
           let n = 0;
           for (const [hex, v] of _adsbPhotoCache) {
-            if (v === '__loading__') continue;
+            // A lookup that FAILED is "none" for this visit only: saved, one
+            // 429 hid that aircraft's photo for a week.
+            if (v === '__loading__' || _adsbPhotoFailed.has(hex)) continue;
             if (n++ >= ADSB_PHOTO_LS_MAX) break;
             out[hex] = { v: v === '__none__' ? null : v, t: prev[hex] ? prev[hex].t : now };
           }
@@ -15325,7 +15329,7 @@ function initPagerHoursFromStorage() {
         } else {
           const marker = L.marker([a.lat, a.lon], { icon: buildAircraftIcon(a) })
             .bindTooltip(buildAdsbTooltipHtml(a), {
-              className: 'ais-tooltip adsb-tooltip', sticky: true, opacity: 0.97, direction: 'top'
+              className: 'ais-tooltip adsb-tooltip adsb-ac-tooltip', sticky: true, opacity: 0.97, direction: 'top'
             });
           // Click → pin tooltip + highlight the list row (AIS pattern).
           marker.on('click', (ev) => {
@@ -15354,10 +15358,15 @@ function initPagerHoursFromStorage() {
       // replace the frozen picture with the present without warning.
       if (adsbHistoryMode) return;
       const hadData = _adsbAircraft.length > 0;
+      const gen = _adsbLiveGen;
+      _adsbLastLoadMs = Date.now();
       try {
         const res = await apiFetch(`${PROXY_BASE}/api/v1/adsb/aircraft`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = (await res.json()).data;
+        // History was switched on (or off and on) while this was in flight:
+        // an answer from before must not paint over what is showing now.
+        if (adsbHistoryMode || gen !== _adsbLiveGen) return;
         const aircraft = Array.isArray(data.aircraft) ? data.aircraft : [];
         // Keep stale markers over a blank map on transient upstream
         // failures — same guard as the AIS layer.
@@ -15419,10 +15428,12 @@ function initPagerHoursFromStorage() {
     async function loadAdsbTrails() {
       if (adsbHistoryMode) return;   // trails come from the history response
       if (!adsbTrailsEnabled && !_adsbPinnedHex) return;
+      const gen = _adsbLiveGen;
       try {
         const res = await apiFetch(`${PROXY_BASE}/api/v1/adsb/trails`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = (await res.json()).data;
+        if (adsbHistoryMode || gen !== _adsbLiveGen) return;
         _adsbTrails = data.trails || {};
         _adsbTrailTailMs = {};
         // The fast poll may only add what is newer than this build (with a
@@ -15731,16 +15742,19 @@ function initPagerHoursFromStorage() {
       if (adsbHistoryMode || document.hidden || !map.hasLayer(adsbLayer)) return;
       if (_adsbFastBusy) return;   // a slow answer is not stacked on
       _adsbFastBusy = true;
+      const gen = _adsbLiveGen;
       try {
         const wantTrails = adsbTrailsEnabled || !!_adsbPinnedHex;
         const [ra, rt] = await Promise.all([
           apiFetch(`${PROXY_BASE}/api/v1/adsb/aircraft?recent=${ADSB_RECENT_SEC}`),
           wantTrails ? apiFetch(`${PROXY_BASE}/api/v1/adsb/trails?recent=${ADSB_RECENT_SEC}`) : null,
         ]);
-        if (adsbHistoryMode) return;
+        const trailData = (rt && rt.ok) ? ((await rt.json()).data || {}).trails : null;
+        const acData = (ra && ra.ok) ? (await ra.json()).data : null;
+        if (adsbHistoryMode || gen !== _adsbLiveGen) return;
         let trailsChanged = false;
-        if (rt && rt.ok) trailsChanged = _adsbApplyRecentTrails(((await rt.json()).data || {}).trails);
-        if (ra && ra.ok) _adsbApplyRecent((await ra.json()).data);
+        if (trailData) trailsChanged = _adsbApplyRecentTrails(trailData);
+        if (acData) _adsbApplyRecent(acData);
         // Mid-glide, the glide's end redraws the trails.
         if (trailsChanged && !_adsbGlides.size) _rebuildAdsbTrails();
       } catch (e) {
@@ -15749,6 +15763,22 @@ function initPagerHoursFromStorage() {
         _adsbFastBusy = false;
       }
     }
+
+    /** Epoch ms the last full aircraft fetch was started. */
+    let _adsbLastLoadMs = 0;
+    /** Bumped whenever live and history swap, so an answer requested before
+     *  the swap is dropped when it lands. */
+    let _adsbLiveGen = 0;
+
+    function _adsbLoadIfStale() {
+      if (adsbHistoryMode || document.hidden || !map.hasLayer(adsbLayer)) return;
+      if (Date.now() - _adsbLastLoadMs > 10000) loadAdsbData();
+    }
+    // The interval skips ticks while the tab is hidden; coming back must not
+    // show the old picture for up to 15 s.
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && adsbRefreshInterval) { _adsbLoadIfStale(); loadAdsbTrails(); }
+    });
 
     function startAdsbRefresh() {
       if (adsbRefreshInterval) return;
@@ -15762,6 +15792,10 @@ function initPagerHoursFromStorage() {
         if (_adsbTrailTickFlip) loadAdsbTrails();
       }, 15000);
       if (!adsbFastInterval) adsbFastInterval = setInterval(adsbFastTick, ADSB_FAST_MS);
+      // Starting again after the layer was off, the page idle or the tab
+      // away: what is held can be minutes old, and waiting out the first
+      // interval showed it as live. Fetch now.
+      _adsbLoadIfStale();
       loadAdsbTrails();
       console.log('✈️ ADS-B refresh started (15s, receiver-heard aircraft every 3s)');
     }
@@ -15998,6 +16032,10 @@ function initPagerHoursFromStorage() {
       _adsbPlaying = true;
       _adsbPlayTimer = setInterval(() => {
         if (!adsbHistoryMode) { adsbHistoryStopPlay(); adsbHistoryBarRender(); return; }
+        // Wait for the minute already asked for. Advancing regardless meant a
+        // minute slower than one tick was always overtaken and thrown away:
+        // the clock ran on while the map never changed.
+        if (_adsbHistLoading || _adsbHistDebounce || document.hidden) return;
         const newest = Date.now() - ADSB_HIST_LAG_MS;
         const next = (_adsbHistAtMs || newest) + _adsbPlaySpeed * 60_000;
         if (next >= newest) {
@@ -16209,6 +16247,13 @@ function initPagerHoursFromStorage() {
     function adsbHistoryStart() {
       adsbHistoryStopPlay();   // a stale timer from a previous visit
       adsbHistoryMode = true;
+      _adsbLiveGen++;          // drop any live answer still in flight
+      // Clear the live picture now: if the first history fetch is slow or
+      // fails, live aircraft must not sit under a clock showing the past.
+      _adsbAircraft = [];
+      _adsbTrails = {};
+      _adsbGlides.clear();
+      _rebuildAdsb();
       _adsbHistAtMs = Math.floor((Date.now() - ADSB_HIST_LAG_MS) / 60_000) * 60_000;
       _adsbHistCount = null;
       _adsbHistTruncated = false;
@@ -16225,9 +16270,15 @@ function initPagerHoursFromStorage() {
       adsbHistoryMode = false;
       _adsbHistAtMs = null;
       _adsbHistSeq++;              // abandon anything still in flight
+      _adsbLiveGen++;
       if (_adsbHistDebounce) { clearTimeout(_adsbHistDebounce); _adsbHistDebounce = null; }
       adsbHistoryBarRender();
+      // The past comes down at once. Left up, a failed or empty first live
+      // answer kept it on screen with the history bar already gone.
+      _adsbAircraft = [];
       _adsbTrails = {};
+      _rebuildAdsb();
+      if (_adsbPinnedHex) adsbRenderDetailCard();
       loadAdsbData();
       loadAdsbTrails();
       startAdsbRefresh();
@@ -16448,6 +16499,7 @@ function initPagerHoursFromStorage() {
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = (await res.json()).data;
         _adsbPhotoCache.set(a.hex, data.photo ? data.photo : '__none__');
+        _adsbPhotoFailed.delete(a.hex);
         saveAdsbPhotoCache();
         // Refresh the marker's tooltip now rather than waiting for the
         // next 15 s rebuild tick.
@@ -16458,6 +16510,7 @@ function initPagerHoursFromStorage() {
         console.warn('[adsb] photo fetch failed', e);
         // Not persisted — a transient failure shouldn't stick for 7 days.
         _adsbPhotoCache.set(a.hex, '__none__');
+        _adsbPhotoFailed.add(a.hex);
       }
       adsbListRender();
     }

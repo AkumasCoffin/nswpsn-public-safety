@@ -2562,7 +2562,13 @@
       _abLayer = layer;
 
       // A scope is centred on the receiver, out to its outer ring.
-      if (radar) _abMap.fitBounds(radar.bounds);
+      // Framed once per receiver and ring size, not on every refresh: the
+      // refresh used to throw away whatever the viewer had zoomed in on.
+      const frameKey = String(d.nodeId || '') + ':' + (radar ? radar.outerKm : 'tracks');
+      const reframe = _abMap._framedKey !== frameKey;
+      _abMap._framedKey = frameKey;
+      if (!reframe) { /* keep the viewer's zoom and pan */ }
+      else if (radar) _abMap.fitBounds(radar.bounds);
       else try {
         const b = L.latLngBounds([]);
         for (const tr of traces) for (const pt of tr.points) b.extend(pt);

@@ -9426,7 +9426,13 @@
       // Frame whichever is larger. The envelope usually is, and framing only
       // the tracks would crop the coverage ring off the edge of the card.
       // A scope is centred on the receiver, out to its outer ring.
-      if (radar) _nd2TrackMap.fitBounds(radar.bounds);
+      // Framed once per receiver and ring size, not on every refresh: the
+      // refresh used to throw away whatever the viewer had zoomed in on.
+      const frameKey = String(d.nodeId || '') + ':' + (radar ? radar.outerKm : 'tracks');
+      const reframe = _nd2TrackMap._framedKey !== frameKey;
+      _nd2TrackMap._framedKey = frameKey;
+      if (!reframe) { /* keep the viewer's zoom and pan */ }
+      else if (radar) _nd2TrackMap.fitBounds(radar.bounds);
       else try {
         const b = L.latLngBounds([]);
         for (const tr of traces) for (const p of tr.points) b.extend(p);
@@ -9477,12 +9483,21 @@
         window.AdsbLightcone.mount(host, d, { heightHint: 'The operator has not set it yet.' });
         return;
       }
-      el.dataset.lcNode = '';
+      nd2DestroyLightcone();
       el.innerHTML = '<div class="nd2-card nd2-polar-card">'
         + '<div class="nd2-card-h"><span>' + escapeHtml(name) + ' — coverage</span>'
         +   '<span class="nd2-note">how far it hears, per bearing</span></div>'
         + '<div id="nd2-aov-polar">' + nd2AdsbPolarBody(d.coverage, 460) + '</div>'
         + '</div>';
+    }
+
+    /** Stop the 3D coverage view: its render loop and resize observer keep
+     *  running against a hidden panel otherwise. */
+    function nd2DestroyLightcone() {
+      const host = document.getElementById('nd2-aov-lc');
+      if (host && host._alc) host._alc.destroy();
+      const el = document.getElementById('nd2-anode-coverage');
+      if (el) { el.dataset.lcNode = ''; if (host) el.innerHTML = ''; }
     }
 
     function nd2DestroyTrackMap() {
@@ -9920,6 +9935,7 @@
      *  can see, and re-entering would then build a second map over the first. */
     function nd2AdsbLeaveDetail() {
       nd2DestroyTrackMap();
+      nd2DestroyLightcone();
       nd2DestroyAdsbCharts('nd2-anode');
       nd2.anodes.level = 'list';
       nd2.anodes.nodeId = null;
