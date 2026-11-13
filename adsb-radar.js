@@ -1,10 +1,11 @@
-/* Radar-scope dressing for a receiver's tracks map (feeder.html, staff.html).
+/* Polar-plot dressing for a receiver's tracks map (feeder.html, staff.html).
  *
  * The map stays a Leaflet map, so tracks keep their hover labels and the map
- * still pans and zooms. This adds what makes it read as a scope around the
- * receiver: range rings at a round step, bearing spokes every 30 degrees with
- * compass labels, a green-tinted basemap (CSS class "adsb-radar" on the map
- * container), and a frame centred on the receiver rather than on the traffic.
+ * still pans and zooms. This makes it read as a plot around the receiver:
+ * a navy field, thin range rings at a round step with their distances up the
+ * north line, eight faint spokes, N/E/S/W, and a frame centred on the
+ * receiver rather than on the traffic. The basemap stays as a faint grey
+ * outline for bearings (CSS class "adsb-radar" on the map container).
  *
  * Rings are drawn on the map, not over it, so their distances stay true when
  * the map is zoomed.
@@ -12,7 +13,8 @@
 (function () {
   'use strict';
 
-  const RING = '#4ade80';
+  const RING = '#94a3b8';   // rings, spokes and their labels: one quiet slate
+  const FIELD = '#38bdf8';  // the faint disc the rings sit on
   const R_EARTH = 6371;
 
   function toRad(d) { return d * Math.PI / 180; }
@@ -70,23 +72,25 @@
     for (let i = 1; i <= r.n; i += 1) {
       const km = i * r.step;
       const outer = i === r.n;
+      // Solid hairlines; the outer one a touch stronger and carrying the
+      // faint disc, so the plot has an edge without a frame.
       L.circle(c, {
-        radius: km * 1000, interactive: false, fill: false,
-        color: RING, weight: outer ? 1.4 : 1, opacity: outer ? 0.6 : 0.32,
-        dashArray: outer ? null : '3 5',
+        radius: km * 1000, interactive: false,
+        color: RING, weight: 1, opacity: outer ? 0.42 : 0.2,
+        fill: outer, fillColor: FIELD, fillOpacity: 0.035,
       }).addTo(layer);
-      // Distance just inside each ring, on the north-east diagonal where a
-      // spoke does not run through it.
-      label(dest(site.lat, site.lon, 45, km), km + ' km', 'adsb-radar-km').addTo(layer);
+      // Distances climb the north line, just right of it. Only the outer one
+      // says "km": the rest are plainly the same unit.
+      label(dest(site.lat, site.lon, 0, km), outer ? km + ' km' : String(km), 'adsb-radar-km').addTo(layer);
     }
 
-    for (let b = 0; b < 360; b += 30) {
+    for (let b = 0; b < 360; b += 45) {
+      const cardinal = b % 90 === 0;
       L.polyline([c, dest(site.lat, site.lon, b, r.outer)], {
-        interactive: false, color: RING, weight: 1, opacity: b % 90 === 0 ? 0.3 : 0.16,
+        interactive: false, color: RING, weight: 1, opacity: cardinal ? 0.2 : 0.1,
       }).addTo(layer);
-      const txt = b === 0 ? 'N' : b === 90 ? 'E' : b === 180 ? 'S' : b === 270 ? 'W' : String(b);
-      label(dest(site.lat, site.lon, b, r.outer * 1.07), txt,
-        b % 90 === 0 ? 'adsb-radar-cardinal' : 'adsb-radar-deg').addTo(layer);
+      if (!cardinal) continue;
+      label(dest(site.lat, site.lon, b, r.outer * 1.07), 'NESW'[b / 90], 'adsb-radar-cardinal').addTo(layer);
     }
 
     const bounds = L.latLngBounds([
@@ -100,19 +104,27 @@
   // their point through the inner span: Leaflet positions the marker element
   // itself with a transform, so one set on it would be overwritten.
   const css = `
-    .adsb-radar { background: #020805; }
-    .adsb-radar .leaflet-tile-pane {
-      filter: sepia(1) hue-rotate(75deg) saturate(1.6) brightness(0.62) contrast(1.1);
-    }
+    .adsb-radar { background: #0b1220; }
+    /* The map is context, not content: a faint grey outline under the plot. */
+    .adsb-radar .leaflet-tile-pane { filter: grayscale(1) brightness(0.9); opacity: 0.28; }
     .adsb-radar-lbl { background: none; border: 0; }
     .adsb-radar-lbl span {
       position: absolute; transform: translate(-50%, -50%); white-space: nowrap;
-      font: 600 10px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      color: #86efac; text-shadow: 0 0 3px #000, 0 0 3px #000; pointer-events: none;
+      font: 500 9.5px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      color: #64748b; text-shadow: 0 0 3px #0b1220, 0 0 3px #0b1220; pointer-events: none;
     }
-    .adsb-radar-lbl.adsb-radar-cardinal span { font-size: 12px; color: #bbf7d0; }
-    .adsb-radar-lbl.adsb-radar-deg span { opacity: 0.7; }
-    .adsb-radar-lbl.adsb-radar-km span { opacity: 0.85; transform: translate(4px, -50%); }
+    .adsb-radar-lbl.adsb-radar-cardinal span { font-size: 10.5px; color: #94a3b8; }
+    .adsb-radar-lbl.adsb-radar-km span { transform: translate(5px, -50%); }
+    /* Leaflet's own controls, toned down to sit on the navy field. */
+    .adsb-radar .leaflet-bar a {
+      background: #111a2c; color: #94a3b8; border-bottom-color: rgba(148,163,184,0.18);
+    }
+    .adsb-radar .leaflet-bar a:hover { background: #18243b; color: #e2e8f0; }
+    .adsb-radar .leaflet-bar { border: 1px solid rgba(148,163,184,0.22); box-shadow: none; }
+    .adsb-radar .leaflet-control-attribution {
+      background: rgba(11,18,32,0.7); color: #64748b; font-size: 9px;
+    }
+    .adsb-radar .leaflet-control-attribution a { color: #7c8ba1; }
   `;
   if (!document.getElementById('adsb-radar-css')) {
     const el = document.createElement('style');

@@ -498,7 +498,7 @@
     /* A square scope centred on the receiver (see adsb-radar.js), not a
        letterbox: traffic spreads in every direction from the antenna. */
     .ab-map { width: 100%; max-width: 560px; aspect-ratio: 1 / 1; margin: 0 auto;
-      border-radius: 10px; overflow: hidden; border: 1px solid rgba(74,222,128,0.28); }
+      border-radius: 10px; overflow: hidden; border: 1px solid rgba(148,163,184,0.18); }
     .ab-note { font-size: 0.7rem; color: var(--text-soft); margin: 0.4rem 0 0.9rem; }
     .ab-scroll { max-height: 34vh; overflow-y: auto; }
     .ab-tbl { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
@@ -758,7 +758,7 @@
 
   <script src="config.js"></script>
   <script src="adsb-lightcone.js?v=6"></script>
-  <script src="adsb-radar.js?v=1"></script>
+  <script src="adsb-radar.js?v=2"></script>
   <script>
     const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -2195,8 +2195,9 @@
       const layer = L.layerGroup();
       for (const poly of _abCoverageGeom) {
         L.polygon(poly, {
-          color: '#c084fc', weight: 1, opacity: 0.55,
-          fillColor: '#c084fc', fillOpacity: 0.10, interactive: false,
+          // Measured reach: the cyan line and soft fill of a range plot.
+          color: '#38bdf8', weight: 1.6, opacity: 0.9,
+          fillColor: '#38bdf8', fillOpacity: 0.12, interactive: false,
         }).addTo(layer);
       }
       _abCoverageLayer = layer.addTo(_abMap);
