@@ -25,7 +25,7 @@
     },
     {
       "name": "Power outages",
-      "description": "Every electricity distributor's outages in one feed — Endeavour Energy, Essential Energy and Ausgrid — unplanned and planned"
+      "description": "Electricity distributors' outages in one feed, unplanned and planned — NSW (Endeavour Energy, Essential Energy, Ausgrid), Victoria (AusNet, CitiPower, Powercor, Jemena), Queensland (Energex, Ergon Energy), South Australia (SA Power Networks) and Western Australia (Western Power, Horizon Power)"
     },
     {
       "name": "Road hazards",
@@ -3539,22 +3539,49 @@
                         "essential_current",
                         "essential_planned",
                         "essential_future",
-                        "ausgrid"
+                        "ausgrid",
+                        "ausnet",
+                        "citipower",
+                        "powercor",
+                        "jemena",
+                        "energex",
+                        "ergon",
+                        "sapn",
+                        "westernpower",
+                        "horizon"
                       ],
-                      "description": "What stored history files it under (/api/v1/history?source=…&source_id=<id> finds its past): endeavour_current for unplanned and endeavour_planned for planned Endeavour Energy outages; essential_current (unplanned), essential_planned (planned, under way) and essential_future (to come) for Essential Energy; ausgrid for every Ausgrid outage"
+                      "description": "What stored history files it under (/api/v1/history?source=…&source_id=<id> finds its past): endeavour_current for unplanned and endeavour_planned for planned Endeavour Energy outages; essential_current (unplanned), essential_planned (planned, under way) and essential_future (to come) for Essential Energy; for every other distributor its own name, the same as `distributor` (ausgrid, ausnet, citipower, …)"
                     },
                     "distributor": {
                       "type": "string",
                       "enum": [
                         "endeavour",
                         "essential",
-                        "ausgrid"
-                      ]
+                        "ausgrid",
+                        "ausnet",
+                        "citipower",
+                        "powercor",
+                        "jemena",
+                        "energex",
+                        "ergon",
+                        "sapn",
+                        "westernpower",
+                        "horizon"
+                      ],
+                      "description": "endeavour: Endeavour Energy (NSW); essential: Essential Energy (NSW); ausgrid: Ausgrid (NSW); ausnet: AusNet (VIC); citipower: CitiPower (VIC); powercor: Powercor (VIC); jemena: Jemena (VIC); energex: Energex (QLD); ergon: Ergon Energy (QLD); sapn: SA Power Networks (SA); westernpower: Western Power (WA); horizon: Horizon Power (WA)"
                     },
                     "state": {
                       "type": "string",
-                      "const": "NSW",
-                      "description": "All three distributors are in NSW"
+                      "enum": [
+                        "NSW",
+                        "VIC",
+                        "QLD",
+                        "SA",
+                        "WA",
+                        "NT",
+                        "ACT"
+                      ],
+                      "description": "The state the distributor's network is in"
                     },
                     "kind": {
                       "type": "string",
@@ -3570,7 +3597,7 @@
                         "active",
                         "scheduled"
                       ],
-                      "description": "active: the power is off now (every unplanned outage, and planned work under way); scheduled: planned work not yet started"
+                      "description": "active: the power is off now (every unplanned outage, and planned work under way); scheduled: planned work not yet started. Decided when the feed is read, from the start time"
                     },
                     "area": {
                       "type": "string",
@@ -3618,7 +3645,7 @@
                           }
                         }
                       },
-                      "description": "The outage area's outline as outer rings of [longitude, latitude]; empty when the distributor gives none (Essential Energy gives one)"
+                      "description": "The outage area's outline as outer rings of [longitude, latitude]; empty when the distributor gives none (of the NSW distributors, only Essential Energy gives one)"
                     },
                     "details": {
                       "type": "object",
@@ -3626,7 +3653,7 @@
                         "type": "string"
                       },
                       "additionalProperties": {},
-                      "description": "The distributor's own extra fields, under the per-distributor feed's names (Endeavour Energy: streets, postcode, status; Essential Energy: title; Ausgrid: streets, status in words, power_status as Ausgrid writes it, reason)"
+                      "description": "The distributor's own extra fields, under its own names; what is in it differs by distributor (Endeavour Energy: streets, postcode, status; Essential Energy: title; Ausgrid: streets, status in words, power_status as Ausgrid writes it, reason)"
                     }
                   },
                   "required": [
@@ -3672,11 +3699,33 @@
                   "enum": [
                     "endeavour",
                     "essential",
-                    "ausgrid"
+                    "ausgrid",
+                    "ausnet",
+                    "citipower",
+                    "powercor",
+                    "jemena",
+                    "energex",
+                    "ergon",
+                    "sapn",
+                    "westernpower",
+                    "horizon"
                   ]
                 },
                 "name": {
                   "type": "string"
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "NSW",
+                    "VIC",
+                    "QLD",
+                    "SA",
+                    "WA",
+                    "NT",
+                    "ACT"
+                  ],
+                  "description": "The state the distributor's network is in"
                 },
                 "count": {
                   "type": "integer",
@@ -3685,7 +3734,7 @@
                   "description": "Outages from this distributor in this answer, after the filters"
                 },
                 "updated_at": {
-                  "description": "When this server last read all of the distributor's outage feeds (the earliest of their last reads), ISO 8601 UTC; null if one has not been read yet or is switched off",
+                  "description": "When this server last read all of the distributor's outage feeds (the earliest of their last reads), ISO 8601 UTC; null if one has not been read yet or is switched off, and then its count of 0 does not mean it has no outages",
                   "type": [
                     "string",
                     "null"
@@ -3695,6 +3744,7 @@
               "required": [
                 "distributor",
                 "name",
+                "state",
                 "count",
                 "updated_at"
               ],
@@ -3898,7 +3948,7 @@
           },
           "source": {
             "type": "string",
-            "description": "The archived source: one of rfs, nt_fire, qld_fire, vic_emergency, wa_incident, sa_cfs, sa_mfs, qld_warning, wa_warning, bom_land, bom_marine, act_ambulance, traffic_incident, traffic_roadwork, traffic_flood, traffic_fire, traffic_majorevent, traffic_alpine, traffic_lga, traffic_works, endeavour_current, endeavour_planned, endeavour_maintenance, ausgrid, essential_current, essential_planned, essential_future, dorsal, pager"
+            "description": "The archived source: one of rfs, nt_fire, qld_fire, vic_emergency, wa_incident, sa_cfs, sa_mfs, qld_warning, wa_warning, bom_land, bom_marine, act_ambulance, traffic_incident, traffic_roadwork, traffic_flood, traffic_fire, traffic_majorevent, traffic_alpine, traffic_lga, traffic_works, endeavour_current, endeavour_planned, endeavour_maintenance, ausgrid, essential_current, essential_planned, essential_future, ausnet, citipower, powercor, jemena, energex, ergon, sapn, westernpower, horizon, dorsal, pager"
           },
           "source_id": {
             "description": "The source's own id for the incident",
@@ -9270,7 +9320,7 @@
           "Power outages"
         ],
         "summary": "Every distributor, one feed",
-        "description": "Electricity outages on Endeavour Energy's, Essential Energy's and Ausgrid's networks — unplanned and planned, now and to come — from each distributor's public outage data, in one shape: the common fields every distributor has, plus `details` for each one's own. `kind` says whether an outage is unplanned or planned, and `status` whether the power is off now or the work is still to come; distributor, kind and status narrow the list. Times are UTC; Essential Energy writes its own without a zone, so they are read as Sydney time. `sources` says per distributor how many outages it gave and when this server last read it. Ausgrid's planned work is listed up to 30 days ahead. Refreshed every one to five minutes.",
+        "description": "Electricity outages — unplanned and planned, now and to come — on the networks of NSW (Endeavour Energy, Essential Energy, Ausgrid), Victoria (AusNet, CitiPower, Powercor, Jemena), Queensland (Energex, Ergon Energy), South Australia (SA Power Networks) and Western Australia (Western Power, Horizon Power), from each distributor's public outage data, in one shape: the common fields every distributor has, plus `details` for each one's own. Every outage says its distributor and its state. `kind` says whether an outage is unplanned or planned, and `status` whether the power is off now or the work is still to come; state, distributor, kind and status narrow the list. Every time is ISO 8601 UTC, whatever zone the distributor wrote it in. `sources` says per distributor how many outages it gave and when this server last read it; a distributor that is not being read has a null `updated_at` there, rather than looking as if it had no outages. Planned work is listed as far ahead as each distributor publishes it (Ausgrid: 30 days). Refreshed every one to fifteen minutes, depending on the distributor.",
         "responses": {
           "200": {
             "description": "A GeoJSON FeatureCollection of outages",
@@ -9336,11 +9386,19 @@
         "parameters": [
           {
             "in": "query",
+            "name": "state",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated; any of NSW, VIC, QLD, SA, WA, in any case. Leave out for all."
+          },
+          {
+            "in": "query",
             "name": "distributor",
             "schema": {
               "type": "string"
             },
-            "description": "Comma-separated; any of endeavour, essential, ausgrid. Leave out for all."
+            "description": "Comma-separated; any of endeavour, essential, ausgrid, ausnet, citipower, powercor, jemena, energex, ergon, sapn, westernpower, horizon, in any case. Leave out for all."
           },
           {
             "in": "query",
@@ -9348,7 +9406,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Comma-separated; any of unplanned, planned. Leave out for all."
+            "description": "Comma-separated; any of unplanned, planned, in any case. Leave out for all."
           },
           {
             "in": "query",
@@ -9356,7 +9414,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Comma-separated; any of active, scheduled. Leave out for all."
+            "description": "Comma-separated; any of active, scheduled, in any case. Leave out for all."
           }
         ],
         "security": [
@@ -9463,7 +9521,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Only these archived sources, comma-separated: rfs, nt_fire, qld_fire, vic_emergency, wa_incident, sa_cfs, sa_mfs, qld_warning, wa_warning, bom_land, bom_marine, act_ambulance, traffic_incident, traffic_roadwork, traffic_flood, traffic_fire, traffic_majorevent, traffic_alpine, traffic_lga, traffic_works, endeavour_current, endeavour_planned, endeavour_maintenance, ausgrid, essential_current, essential_planned, essential_future, dorsal, pager. A key reads only the sources its scopes cover; naming another is refused (403), and leaving this out means all of them (or all of feed's)"
+            "description": "Only these archived sources, comma-separated: rfs, nt_fire, qld_fire, vic_emergency, wa_incident, sa_cfs, sa_mfs, qld_warning, wa_warning, bom_land, bom_marine, act_ambulance, traffic_incident, traffic_roadwork, traffic_flood, traffic_fire, traffic_majorevent, traffic_alpine, traffic_lga, traffic_works, endeavour_current, endeavour_planned, endeavour_maintenance, ausgrid, essential_current, essential_planned, essential_future, ausnet, citipower, powercor, jemena, energex, ergon, sapn, westernpower, horizon, dorsal, pager. A key reads only the sources its scopes cover; naming another is refused (403), and leaving this out means all of them (or all of feed's)"
           },
           {
             "in": "query",

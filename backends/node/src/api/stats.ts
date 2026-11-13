@@ -44,7 +44,7 @@ import type { BomSnapshot } from '../sources/bom.js';
 import type { BeachsafeBeach } from '../sources/beach.js';
 import { INTERSTATE_STORES } from '../sources/interstateRoads.js';
 import { mergedFires } from './fires.js';
-import { mergedOutages } from './outages.js';
+import { DISTRIBUTOR_INFO, DISTRIBUTORS, mergedOutages, type Distributor, type Outage } from './outages.js';
 import { roadFeed } from './traffic.js';
 
 export const statsRouter = new Hono();
@@ -178,8 +178,45 @@ interface PowerSummary {
   };
   total_outages: number;
   total_customers: number;
+  by_distributor: Record<string, { outages: number; customers: number }>;
 }
 
+/**
+ * Every distributor's outages off now, from the merged list
+ * (/api/v1/outages?status=active), and the distributors read so far. The
+ * merged list has an outage once per feed that lists it (Endeavour's current
+ * and maintenance overlap), so a distributor's id counts once.
+ */
+function outagesUnderWay(): { outages: Outage[]; read: Set<Distributor> } {
+  const merged = mergedOutages({ status: ['active'] });
+  const seen = new Set<string>();
+  const outages = merged.outages.filter((o) => {
+    if (!o.id) return true;
+    const key = `${o.distributor}:${o.id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return { outages, read: merged.read };
+}
+
+/** Customers as a whole number, never negative. */
+const wholeCustomers = (o: Outage): number => Math.max(0, Math.round(o.customers_affected) || 0);
+
+/**
+ * The power block of /api/stats/summary.
+ *
+ * `ausgrid`, `endeavour`, `essential`, `total_outages` and `total_customers`
+ * are as they have always been: the three NSW distributors, each counted in
+ * its own terms, and the totals are theirs alone. The Discord bot and the
+ * archived snapshots read them, so they do not change as other states'
+ * distributors are added.
+ *
+ * `by_distributor` is every distributor in one measure: outages under way
+ * and the customers they have off, as the merged feed and by_state count
+ * them. A distributor that has not been read yet (or is switched off) is
+ * absent from it, not zero.
+ */
 export function summarisePower(): PowerSummary {
   const power: PowerSummary = {
     ausgrid: { unplanned: 0, planned: 0, customers_affected: 0, total: 0 },
@@ -193,6 +230,7 @@ export function summarisePower(): PowerSummary {
     essential: { unplanned: 0, planned: 0, future: 0, total: 0, customers_affected: 0 },
     total_outages: 0,
     total_customers: 0,
+    by_distributor: {},
   };
 
   // --- Ausgrid: counted from the markers themselves. The snapshot also
@@ -254,6 +292,21 @@ export function summarisePower(): PowerSummary {
   power.essential.total = essAll.length;
   power.total_outages += essAll.length;
   power.total_customers += power.essential.customers_affected;
+
+  // --- Every distributor, in the order the merged feed lists them.
+  const underWay = outagesUnderWay();
+  const counted = new Map<Distributor, { outages: number; customers: number }>();
+  for (const o of underWay.outages) {
+    let row = counted.get(o.distributor);
+    if (!row) counted.set(o.distributor, (row = { outages: 0, customers: 0 }));
+    row.outages += 1;
+    row.customers += wholeCustomers(o);
+  }
+  for (const distributor of DISTRIBUTORS) {
+    const row = counted.get(distributor);
+    if (row) power.by_distributor[distributor] = row;
+    else if (underWay.read.has(distributor)) power.by_distributor[distributor] = { outages: 0, customers: 0 };
+  }
 
   return power;
 }
@@ -544,23 +597,18 @@ export function summariseByState(): Record<string, StateStats> {
     for (const f of feed.records) add(f.properties.state, metric, 1);
   }
 
-  // Power: outages off now. The merged list has an outage once per feed
-  // that lists it (Endeavour's current and maintenance overlap), so an id
-  // counts once, as summarisePower counts it.
-  const power = mergedOutages({ status: ['active'] });
-  if (power.read) {
-    add('NSW', 'outages');
-    add('NSW', 'customers');
+  // Power: outages off now, each under its own state. A state has the two
+  // metrics once one of its distributors has been read; until then it is
+  // absent, which is not the same as no outages.
+  const power = outagesUnderWay();
+  for (const distributor of power.read) {
+    const { state } = DISTRIBUTOR_INFO[distributor];
+    add(state, 'outages');
+    add(state, 'customers');
   }
-  const seen = new Set<string>();
   for (const o of power.outages) {
-    if (o.id) {
-      const key = `${o.distributor}:${o.id}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-    }
-    add('NSW', 'outages', 1);
-    add('NSW', 'customers', Math.max(0, Math.round(o.customers_affected) || 0));
+    add(o.state, 'outages', 1);
+    add(o.state, 'customers', wholeCustomers(o));
   }
 
   const out: Record<string, StateStats> = {};

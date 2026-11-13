@@ -36,6 +36,7 @@ import {
 import { mirroredRoutes } from '../../../src/api/v1/mirror.js';
 import { isPublicPath } from '../../../src/services/auth/apiKey.js';
 import { FEEDS, needFromScope } from '../../../src/services/auth/apiKeyScopes.js';
+import { DISTRIBUTOR_INFO, DISTRIBUTORS } from '../../../src/sources/outages/common.js';
 
 /** Every cell of the staff table. */
 const EVERY_CELL = Object.entries(FEEDS).flatMap(([feed, f]) => f.windows.map((w) => `${feed}:${w}`));
@@ -108,6 +109,18 @@ describe('openapi.json', () => {
     expect(op.tags).toEqual(['Power outages']);
     expect(op['x-scopes']).toEqual(['outages:live']);
     expect(ops(fresh).filter((o) => o.op.tags[0] === 'Power outages').map((o) => o.path)).toEqual(['/api/v1/outages']);
+  });
+
+  it('the outages feed is described with every distributor it has, and a state filter', () => {
+    const op = fresh.paths['/api/v1/outages']?.['get'];
+    const tag = fresh.tags.find((t: { name: string }) => t.name === 'Power outages');
+    for (const d of DISTRIBUTORS) {
+      expect(op.description, d).toContain(DISTRIBUTOR_INFO[d].name);
+      expect(tag.description, d).toContain(DISTRIBUTOR_INFO[d].name);
+    }
+    expect(op.parameters.map((p: { name: string }) => p.name)).toEqual(['state', 'distributor', 'kind', 'status']);
+    // No longer three NSW distributors on Sydney time.
+    expect(JSON.stringify(op)).not.toMatch(/All three|Sydney/);
   });
 
   it('describes none of this site\'s own routes', () => {

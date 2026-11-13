@@ -71,6 +71,17 @@ const SOURCE_TO_FAMILY: Record<string, ArchiveTable> = {
   essential_planned: 'archive_power',
   essential_future: 'archive_power',
   essential_energy_cancelled: 'archive_power',
+  // The other states' distributors (sources/outages/): each archives under
+  // its own name.
+  ausnet: 'archive_power',
+  citipower: 'archive_power',
+  powercor: 'archive_power',
+  jemena: 'archive_power',
+  energex: 'archive_power',
+  ergon: 'archive_power',
+  sapn: 'archive_power',
+  westernpower: 'archive_power',
+  horizon: 'archive_power',
   // Misc — BoM, beach, weather, pager, news, aviation, centralwatch
   bom: 'archive_misc',
   bom_warning: 'archive_misc',

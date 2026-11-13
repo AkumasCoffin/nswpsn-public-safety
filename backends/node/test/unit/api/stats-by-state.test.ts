@@ -22,6 +22,7 @@ vi.mock('../../../src/db/pool.js', () => ({
 import { statsRouter, summariseByState, parseHistoryStep } from '../../../src/api/stats.js';
 import { buildStatsSnapshot } from '../../../src/services/statsArchiver.js';
 import { liveStore } from '../../../src/store/live.js';
+import { outageOf, withStatus } from '../../../src/sources/outages/common.js';
 
 const fc = (features: unknown[]) => ({ type: 'FeatureCollection', features, count: features.length });
 
@@ -140,6 +141,36 @@ describe('summariseByState', () => {
   it('says 0 outages once a distributor has been read and has none', () => {
     liveStore.set('endeavour_current', []);
     expect(summariseByState()).toEqual({ NSW: { outages: 0, customers: 0 } });
+  });
+
+  it("counts another state's outages under that state, and only once its distributor has been read", () => {
+    const now = Date.now();
+    const outage = (distributor: 'ausnet' | 'jemena' | 'energex' | 'westernpower', fields: Partial<Parameters<typeof outageOf>[1]>) =>
+      withStatus(outageOf(distributor, { id: 'x', kind: 'unplanned', ...fields }), now);
+    liveStore.set('endeavour_current', [{ id: 'INCD-1', customersAffected: 10, outageType: 'Unplanned' }]);
+    liveStore.set('ausnet', [
+      outage('ausnet', { id: 'A1', customers_affected: 300 }),
+      // Under way since an hour ago, though the stored record still says scheduled.
+      { ...outage('ausnet', { id: 'A2', kind: 'planned', customers_affected: 40, start_at: new Date(now - 3_600_000).toISOString() }), status: 'scheduled' },
+      // Still to come: nobody is off.
+      outage('ausnet', { id: 'A3', kind: 'planned', customers_affected: 900, start_at: new Date(now + 86_400_000).toISOString() }),
+    ]);
+    liveStore.set('jemena', [outage('jemena', { id: 'J1', customers_affected: 7 })]);
+    // Read, and nothing off.
+    liveStore.set('westernpower', []);
+    // Queensland's, South Australia's and Horizon Power's have not been read.
+
+    expect(summariseByState()).toEqual({
+      NSW: { outages: 1, customers: 10 },
+      VIC: { outages: 3, customers: 347 },
+      WA: { outages: 0, customers: 0 },
+    });
+
+    // A state appears when one of its distributors is read, with or without outages.
+    liveStore.set('energex', [outage('energex', { id: 'E1', customers_affected: 2 })]);
+    expect(summariseByState()['QLD']).toEqual({ outages: 1, customers: 2 });
+    liveStore.delete('westernpower');
+    expect(summariseByState()['WA']).toBeUndefined();
   });
 
   it('lists states and metrics in a fixed order, whole numbers only', () => {

@@ -10,6 +10,7 @@ import { Hono } from 'hono';
 import { statsRouter } from '../../../src/api/stats.js';
 import { liveStore } from '../../../src/store/live.js';
 import { _resetForTests } from '../../../src/services/activityMode.js';
+import { outageOf, withStatus } from '../../../src/sources/outages/common.js';
 
 function makeApp() {
   const app = new Hono();
@@ -95,11 +96,53 @@ describe('stats router', () => {
     expect(power['essential']?.['total']).toBe(3);
     expect(power['essential']?.['customers_affected']).toBe(10);
 
+    // The fields that were always there, and by_distributor after them.
+    expect(Object.keys(power)).toEqual(['ausgrid', 'endeavour', 'essential', 'total_outages', 'total_customers', 'by_distributor']);
+
     // Skeleton sections still present even with no data.
     expect(body['traffic']).toBeDefined();
     expect(body['emergency']).toBeDefined();
     expect(body['environment']).toBeDefined();
     expect(typeof body['timestamp']).toBe('string');
+  });
+
+  it('power.by_distributor: outages under way and their customers, for every distributor read', async () => {
+    const now = Date.now();
+    liveStore.set('endeavour_current', [
+      { id: 'INCD-1', customersAffected: 10, outageType: 'Unplanned' },
+      { id: 'INCD-2', customersAffected: 5, outageType: 'Unplanned' },
+    ]);
+    // INCD-2 is in both of Endeavour's feeds: once.
+    liveStore.set('endeavour_maintenance', [{ id: 'INCD-2', customersAffected: 5, outageType: 'Current Maintenance' }]);
+    // Work still to come is not under way.
+    liveStore.set('endeavour_planned', [{ id: 'INCD-4', customersAffected: 100, outageType: 'Future Maintenance' }]);
+    liveStore.set('essential_current', [
+      { incidentId: 'ES-1', customersAffected: 7, outageType: 'unplanned', status: 'active', feedType: 'current' },
+    ]);
+    liveStore.set('essential_future', [
+      { incidentId: 'ES-2', customersAffected: 50, outageType: 'planned', status: 'scheduled', feedType: 'future' },
+    ]);
+    liveStore.set('ausnet', [
+      withStatus(outageOf('ausnet', { id: 'A1', kind: 'unplanned', customers_affected: 300.4 }), now),
+      withStatus(outageOf('ausnet', { id: 'A2', kind: 'planned', customers_affected: 40, start_at: new Date(now - 60_000).toISOString() }), now),
+      withStatus(outageOf('ausnet', { id: 'A3', kind: 'planned', customers_affected: 900, start_at: new Date(now + 86_400_000).toISOString() }), now),
+    ]);
+    // Read, with nothing off.
+    liveStore.set('horizon', []);
+
+    const res = await makeApp().request('/api/stats/summary');
+    const power = ((await res.json()) as { power: Record<string, unknown> }).power;
+    // In the merged feed's order. Ausgrid and the rest have not been read: absent, not zero.
+    expect(Object.keys(power['by_distributor'] as object)).toEqual(['endeavour', 'essential', 'ausnet', 'horizon']);
+    expect(power['by_distributor']).toEqual({
+      endeavour: { outages: 2, customers: 15 },
+      essential: { outages: 1, customers: 7 },
+      ausnet: { outages: 2, customers: 340 },
+      horizon: { outages: 0, customers: 0 },
+    });
+    // The totals are still the NSW distributors' own, as they always were.
+    expect(power['total_outages']).toBe(5);
+    expect(power['total_customers']).toBe(72);
   });
 
   it('GET /api/cache/status returns entries pulled from LiveStore', async () => {

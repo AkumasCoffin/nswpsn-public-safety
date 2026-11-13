@@ -64,7 +64,8 @@ export const FEEDS = {
   ambulance: { label: 'ACT Ambulance', covers: 'ACT Ambulance Service incidents', windows: ['live', 'history'] },
   outages: {
     label: 'Power outages',
-    covers: 'Every electricity distributor in one feed (Endeavour Energy, Essential Energy, Ausgrid), unplanned and planned',
+    covers:
+      'Electricity distributors in one feed, unplanned and planned outages: NSW (Endeavour Energy, Essential Energy, Ausgrid), VIC (AusNet, CitiPower, Powercor, Jemena), QLD (Energex, Ergon Energy), SA (SA Power Networks) and WA (Western Power, Horizon Power)',
     windows: ['live', 'history'],
   },
   roads: {
@@ -231,6 +232,15 @@ export const HISTORY_SOURCES: Readonly<Record<string, FeedKey>> = {
   essential_current: 'outages',
   essential_planned: 'outages',
   essential_future: 'outages',
+  ausnet: 'outages',
+  citipower: 'outages',
+  powercor: 'outages',
+  jemena: 'outages',
+  energex: 'outages',
+  ergon: 'outages',
+  sapn: 'outages',
+  westernpower: 'outages',
+  horizon: 'outages',
   dorsal: 'beaches',
   pager: 'pager',
 };

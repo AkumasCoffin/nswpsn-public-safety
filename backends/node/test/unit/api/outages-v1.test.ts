@@ -2,13 +2,15 @@
  * GET /api/v1/outages — every electricity distributor's outages in one feed
  * (api/outages.ts).
  *
- * Read from the same LiveStore snapshots the per-distributor routes serve,
- * each in its source's own shape. Pinned here: the shared snake_case shape and
- * what goes in `details`; kind and status from each distributor's own terms;
- * the stored-history source each is filed under; times in UTC — a zone as
- * written, none as Sydney time, and one that cannot be read kept in details;
- * the distributor/kind/status filters and their refusals; `sources` per
- * distributor; the bare FeatureCollection on both paths; and what a key needs.
+ * The NSW distributors are read from the same LiveStore snapshots the
+ * per-distributor routes serve, each in its source's own shape; the other
+ * states' from stores that hold the shared shape already. Pinned here: the
+ * shared snake_case shape and what goes in `details`; kind and status from
+ * each distributor's own terms; the stored-history source each is filed under;
+ * times in UTC — a zone as written, none as Sydney time, and one that cannot be
+ * read kept in details; every outage's state; the state/distributor/kind/status
+ * filters and their refusals; `sources` per distributor; the bare
+ * FeatureCollection on both paths; and what a key needs.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Hono } from 'hono';
@@ -30,10 +32,14 @@ import { requireApiKey } from '../../../src/services/auth/apiKey.js';
 import { _clearApiKeyCache, lookupPrefix } from '../../../src/services/auth/apiKeys.js';
 import { parseEssentialKml } from '../../../src/sources/essential.js';
 import { normaliseAusgridOutage } from '../../../src/sources/ausgrid.js';
+import { DISTRIBUTOR_INFO, DISTRIBUTORS, outageOf, withStatus } from '../../../src/sources/outages/common.js';
 
 const NOW = Date.UTC(2026, 10, 2, 1, 0, 0); // 2026-11-02T01:00:00Z
 const READ_AT = new Date(NOW).toISOString();
-const STORES = ['endeavour_current', 'endeavour_maintenance', 'endeavour_planned', 'essential_current', 'essential_future', 'ausgrid'];
+const STORES = [
+  'endeavour_current', 'endeavour_maintenance', 'endeavour_planned', 'essential_current', 'essential_future', 'ausgrid',
+  'ausnet', 'citipower', 'powercor', 'jemena', 'energex', 'ergon', 'sapn', 'westernpower', 'horizon',
+];
 
 // --- Each distributor in its source's own shape ------------------------------
 
@@ -137,8 +143,42 @@ type Answer = {
   type: string;
   features: Array<{ type: string; geometry: { type: string; coordinates: number[] } | null; properties: Props }>;
   count: number;
-  sources: Array<{ distributor: string; name: string; count: number; updated_at: string | null }>;
+  sources: Array<{ distributor: string; name: string; state: string; count: number; updated_at: string | null }>;
 };
+
+// --- The other states' distributors, in the shape their sources store ------------
+
+// Planned work an hour from NOW, stored by a poll that ran when it was still to come.
+const PLANNED_START = new Date(NOW + 3_600_000).toISOString();
+const AUSNET_UNPLANNED = withStatus(
+  outageOf('ausnet', {
+    id: 'INC-501',
+    kind: 'unplanned',
+    area: 'Wodonga',
+    customers_affected: 310,
+    cause: 'Tree on powerline',
+    start_at: '2026-11-01T23:10:00.000Z',
+    restore_at: '2026-11-02T03:30:00.000Z',
+    updated_at: '2026-11-02T00:40:00.000Z',
+    lat: -36.12,
+    lon: 146.88,
+    details: { towns: ['Wodonga', 'Bandiana'] },
+  }),
+  NOW,
+);
+const AUSNET_PLANNED = withStatus(outageOf('ausnet', { id: 'PLN-9', kind: 'planned', area: 'Benalla', customers_affected: 40, start_at: PLANNED_START }), NOW);
+const HORIZON_UNPLANNED = withStatus(
+  outageOf('horizon', {
+    id: 'HP-77',
+    kind: 'unplanned',
+    area: 'Broome',
+    customers_affected: 25,
+    lat: -17.96,
+    lon: 122.24,
+    polygons: [[[122.2, -17.9], [122.3, -17.9], [122.3, -18]]],
+  }),
+  NOW,
+);
 
 const PROPERTY_NAMES = [
   'area', 'cause', 'customers_affected', 'details', 'distributor', 'id', 'kind', 'polygons', 'restore_at', 'source',
@@ -334,6 +374,94 @@ describe('GET /api/v1/outages', () => {
     });
   });
 
+  it("another state's distributor: its store is the shared shape, read as it is", async () => {
+    liveStore.set('ausnet', [AUSNET_UNPLANNED]);
+    const body = await read('/api/v1/outages?distributor=ausnet');
+    expect(body.features).toEqual([
+      {
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [146.88, -36.12] },
+        properties: {
+          id: 'INC-501',
+          source: 'ausnet',
+          distributor: 'ausnet',
+          state: 'VIC',
+          kind: 'unplanned',
+          status: 'active',
+          area: 'Wodonga',
+          customers_affected: 310,
+          cause: 'Tree on powerline',
+          start_at: '2026-11-01T23:10:00.000Z',
+          restore_at: '2026-11-02T03:30:00.000Z',
+          updated_at: '2026-11-02T00:40:00.000Z',
+          polygons: [],
+          details: { towns: ['Wodonga', 'Bandiana'] },
+        },
+      },
+    ]);
+    expect(body.sources).toEqual([{ distributor: 'ausnet', name: 'AusNet', state: 'VIC', count: 1, updated_at: READ_AT }]);
+    for (const f of body.features) expect(Object.keys(f.properties).sort()).toEqual(PROPERTY_NAMES);
+  });
+
+  it("its planned work is scheduled until it starts, whatever the stored record says", async () => {
+    liveStore.set('ausnet', [AUSNET_UNPLANNED, AUSNET_PLANNED]);
+    expect(AUSNET_PLANNED.status).toBe('scheduled');
+    expect(ids(await read('/api/v1/outages?distributor=ausnet&status=scheduled'))).toEqual(['PLN-9']);
+    expect(ids(await read('/api/v1/outages?distributor=ausnet&status=active'))).toEqual(['INC-501']);
+
+    // The poller has not run again; the work has begun.
+    vi.setSystemTime(NOW + 3_600_000);
+    expect(ids(await read('/api/v1/outages?distributor=ausnet&status=scheduled'))).toEqual([]);
+    const now = byId(await read('/api/v1/outages?distributor=ausnet&status=active'), 'PLN-9');
+    expect(now.properties).toMatchObject({ kind: 'planned', status: 'active', state: 'VIC', start_at: PLANNED_START });
+  });
+
+  it('every outage says its state, and the merged list runs NSW first, then state by state', async () => {
+    liveStore.set('ausnet', [AUSNET_UNPLANNED]);
+    liveStore.set('horizon', [HORIZON_UNPLANNED]);
+    const body = await read('/api/v1/outages');
+    expect(body.features.map((f) => [f.properties['distributor'], f.properties['state']])).toEqual([
+      ['endeavour', 'NSW'], ['endeavour', 'NSW'], ['endeavour', 'NSW'],
+      ['essential', 'NSW'], ['essential', 'NSW'], ['essential', 'NSW'],
+      ['ausnet', 'VIC'],
+      ['horizon', 'WA'],
+    ]);
+    expect(byId(body, 'HP-77')).toMatchObject({
+      geometry: { type: 'Point', coordinates: [122.24, -17.96] },
+      properties: { polygons: [[[122.2, -17.9], [122.3, -17.9], [122.3, -18]]], details: {} },
+    });
+  });
+
+  it('?state= keeps the distributors of those states (any case), and the sources list follows', async () => {
+    liveStore.set('ausnet', [AUSNET_UNPLANNED, AUSNET_PLANNED]);
+    liveStore.set('horizon', [HORIZON_UNPLANNED]);
+    const vic = await read('/api/v1/outages?state=vic');
+    expect(ids(vic)).toEqual(['INC-501', 'PLN-9']);
+    expect(vic.sources.map((s) => [s.distributor, s.state, s.count])).toEqual([
+      ['ausnet', 'VIC', 2], ['citipower', 'VIC', 0], ['powercor', 'VIC', 0], ['jemena', 'VIC', 0],
+    ]);
+    expect(ids(await read('/api/v1/outages?state=WA,%20Vic&kind=unplanned'))).toEqual(['INC-501', 'HP-77']);
+    expect((await read('/api/v1/outages?state=NSW')).count).toBe(6);
+    // A state and a distributor of another state have nothing in common.
+    const none = await read('/api/v1/outages?state=QLD&distributor=ausnet');
+    expect(none).toMatchObject({ count: 0, features: [], sources: [] });
+    // Read, with nothing: Queensland's are not read yet.
+    expect((await read('/api/v1/outages?state=qld')).sources).toEqual([
+      { distributor: 'energex', name: 'Energex', state: 'QLD', count: 0, updated_at: null },
+      { distributor: 'ergon', name: 'Ergon Energy', state: 'QLD', count: 0, updated_at: null },
+    ]);
+  });
+
+  it('a state the feed has no distributor in is refused, like any unknown one', async () => {
+    for (const state of ['ACT', 'NT', 'nsw,xx']) {
+      const res = await app().request(`/api/v1/outages?state=${state}`);
+      expect(res.status, state).toBe(400);
+      const { error } = (await res.json()) as { error: { code: string; message: string } };
+      expect(error.code).toBe('validation_failed');
+      expect(error.message, state).toBe(`state: unknown state: ${state === 'nsw,xx' ? 'XX' : state} (one of NSW, VIC, QLD, SA, WA)`);
+    }
+  });
+
   it('filters by distributor, kind and status (any case), and the sources list follows', async () => {
     expect(ids(await read('/api/v1/outages?status=scheduled'))).toEqual(['SP 3', 'INCD-2-p']);
     expect(ids(await read('/api/v1/outages?kind=PLANNED&status=active'))).toEqual(['SP 2', 'INCD-2-p']);
@@ -343,26 +471,38 @@ describe('GET /api/v1/outages', () => {
   });
 
   it('`sources`: one entry per distributor, counted after the filters, null when not every feed has been read', async () => {
+    // Read and empty: no outages. Not the same as Ausgrid's, which is not read.
+    liveStore.set('sapn', []);
     const body = await read('/api/v1/outages?kind=planned');
-    expect(body.sources).toEqual([
-      { distributor: 'endeavour', name: 'Endeavour Energy', count: 2, updated_at: READ_AT },
-      { distributor: 'essential', name: 'Essential Energy', count: 2, updated_at: READ_AT },
-      { distributor: 'ausgrid', name: 'Ausgrid', count: 0, updated_at: null },
+    expect(body.sources.slice(0, 3)).toEqual([
+      { distributor: 'endeavour', name: 'Endeavour Energy', state: 'NSW', count: 2, updated_at: READ_AT },
+      { distributor: 'essential', name: 'Essential Energy', state: 'NSW', count: 2, updated_at: READ_AT },
+      { distributor: 'ausgrid', name: 'Ausgrid', state: 'NSW', count: 0, updated_at: null },
+    ]);
+    // Every distributor, in order, each under its name and state; the ones with no source yet are not read.
+    expect(body.sources.map((s) => s.distributor)).toEqual([...DISTRIBUTORS]);
+    for (const s of body.sources) expect(s, s.distributor).toMatchObject(DISTRIBUTOR_INFO[s.distributor as keyof typeof DISTRIBUTOR_INFO]);
+    expect(body.sources.slice(3).map((s) => [s.distributor, s.count, s.updated_at])).toEqual([
+      ['ausnet', 0, null], ['citipower', 0, null], ['powercor', 0, null], ['jemena', 0, null], ['energex', 0, null], ['ergon', 0, null],
+      ['sapn', 0, READ_AT], ['westernpower', 0, null], ['horizon', 0, null],
     ]);
     liveStore.delete('essential_future');
     const partial = await read('/api/v1/outages');
     expect(partial.sources.find((s) => s.distributor === 'essential')).toEqual({
-      distributor: 'essential', name: 'Essential Energy', count: 2, updated_at: null,
+      distributor: 'essential', name: 'Essential Energy', state: 'NSW', count: 2, updated_at: null,
     });
   });
 
   it('an unknown value is refused: 400 validation_failed, naming each bad field', async () => {
-    const res = await app().request('/api/v1/outages?distributor=agl&kind=maybe&status=done');
+    const res = await app().request('/api/v1/outages?state=mars&distributor=agl&kind=maybe&status=done');
     expect(res.status).toBe(400);
-    const { error } = (await res.json()) as { error: { code: string; message: string; details: { issues: Array<{ path: string }> } } };
+    const { error } = (await res.json()) as { error: { code: string; message: string; details: { issues: Array<{ path: string; message: string }> } } };
     expect(error.code).toBe('validation_failed');
-    expect(error.details.issues.map((i) => i.path)).toEqual(['distributor', 'kind', 'status']);
-    expect(error.message).toBe('distributor: unknown distributor: agl (one of endeavour, essential, ausgrid)');
+    expect(error.details.issues.map((i) => i.path)).toEqual(['state', 'distributor', 'kind', 'status']);
+    expect(error.message).toBe('state: unknown state: MARS (one of NSW, VIC, QLD, SA, WA)');
+    expect(error.details.issues[1]!.message).toBe(
+      'unknown distributor: agl (one of endeavour, essential, ausgrid, ausnet, citipower, powercor, jemena, energex, ergon, sapn, westernpower, horizon)',
+    );
   });
 });
 

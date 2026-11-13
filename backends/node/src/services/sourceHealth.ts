@@ -48,6 +48,18 @@ const SOURCE_THRESHOLDS: Record<string, ThresholdEntry> = {
   roads_act:         { soft: 1800, hard: 3600, label: 'Roads ACT closures' },
   power_endeavour:   { soft: 1200, hard: 3600, label: 'Endeavour outages' },
   power_ausgrid:     { soft: 1800, hard: 5400, label: 'Ausgrid outages' },
+  // The other states' distributors, under their registry names. Some are
+  // read every 5 to 15 minutes, so the default 5 / 15 minutes would call a
+  // healthy one degraded between polls.
+  ausnet:            { soft: 900,  hard: 2700, label: 'AusNet outages' },
+  citipower:         { soft: 900,  hard: 2700, label: 'CitiPower outages' },
+  powercor:          { soft: 900,  hard: 2700, label: 'Powercor outages' },
+  jemena:            { soft: 900,  hard: 2700, label: 'Jemena outages' },
+  energex:           { soft: 900,  hard: 2700, label: 'Energex outages' },
+  ergon:             { soft: 900,  hard: 2700, label: 'Ergon Energy outages' },
+  sapn:              { soft: 900,  hard: 2700, label: 'SA Power Networks outages' },
+  westernpower:      { soft: 900,  hard: 2700, label: 'Western Power outages' },
+  horizon:           { soft: 900,  hard: 2700, label: 'Horizon Power outages' },
   waze:              { soft: 600,  hard: 1800, label: 'Waze' },
   pager:             { soft: 1200, hard: 3600, label: 'Pagermon' },
   rdio:              { soft: 3900, hard: 12600, label: 'rdio-scanner' },

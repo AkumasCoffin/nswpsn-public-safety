@@ -16,6 +16,7 @@ import {
   type ProviderFacets,
   type TypeFacets,
 } from '../../../src/store/filterCache.js';
+import { DISTRIBUTOR_INFO, DISTRIBUTORS, OUTAGE_STORES, outageOf, withStatus } from '../../../src/sources/outages/common.js';
 
 function clearLive(): void {
   for (const k of liveStore.keys()) liveStore.delete(k);
@@ -37,11 +38,12 @@ describe('filterCache', () => {
 
   it('returns the full provider list when LiveStore is empty', () => {
     const facets = getFilterFacetsLive();
-    // 17 providers: the seven fire agencies (rfs, nt_fire, qfd, vic,
-    // dfes, sacfs, samfs) plus bom, livetraffic, endeavour, ausgrid,
-    // essential, pager, user, rdio, actas, dorsal. Waze was retired with
-    // its ingest.
-    expect(facets.providers).toHaveLength(17);
+    // 26 providers: the seven fire agencies (rfs, nt_fire, qfd, vic,
+    // dfes, sacfs, samfs) plus bom, livetraffic, the twelve electricity
+    // distributors (endeavour, ausgrid, essential, then ausnet, citipower,
+    // powercor, jemena, energex, ergon, sapn, westernpower, horizon), pager,
+    // user, rdio, actas, dorsal. Waze was retired with its ingest.
+    expect(facets.providers).toHaveLength(26);
     // Pin the newest one by key as well as by count — a provider missing
     // from PROVIDER_ORDER is silently dropped from the list rather than
     // erroring, which is exactly the failure this count is here to catch.
@@ -51,6 +53,32 @@ describe('filterCache', () => {
     }
     expect(facets.date_range.oldest).toBeNull();
     expect(facets.date_range.newest).toBeNull();
+  });
+
+  it("lists every distributor the merged outage feed has, each a provider of its own with one type", () => {
+    const facets = getFilterFacetsLive();
+    for (const d of DISTRIBUTORS) {
+      const provider = findProvider(facets, d);
+      expect(provider?.name, d).toBe(DISTRIBUTOR_INFO[d].name);
+    }
+    // The type's key is the archived source: the logs page sends it back as ?source=.
+    for (const store of OUTAGE_STORES) {
+      expect(findProvider(facets, store)?.types.map((t) => [t.alert_type, t.name]), store).toEqual([[store, 'Outages']]);
+    }
+  });
+
+  it("counts a distributor's stored outages against its own provider", () => {
+    const now = Date.now();
+    liveStore.set('ausnet', [
+      withStatus(outageOf('ausnet', { id: 'A1', kind: 'unplanned', cause: 'Tree on powerline' }), now),
+      withStatus(outageOf('ausnet', { id: 'A2', kind: 'planned', cause: 'Pole replacement' }), now),
+    ]);
+    liveStore.set('horizon', [withStatus(outageOf('horizon', { id: 'H1', kind: 'unplanned' }), now)]);
+    const facets = getFilterFacetsLive();
+    expect(findProvider(facets, 'ausnet')?.count).toBe(2);
+    expect(findType(findProvider(facets, 'ausnet'), 'ausnet')?.count).toBe(2);
+    expect(findProvider(facets, 'horizon')?.count).toBe(1);
+    expect(findProvider(facets, 'ausgrid')?.count).toBe(0);
   });
 
   it('counts records from an array snapshot', () => {
