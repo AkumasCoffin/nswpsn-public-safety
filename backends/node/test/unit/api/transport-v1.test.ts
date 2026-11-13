@@ -43,6 +43,7 @@ vi.mock('../../../src/sources/tfnsw.js', () => ({
   fetchTfnswPositions: vi.fn(async () => []),
   applyTfnswPositions: vi.fn(),
   fetchTfnswAlerts: tfnsw.alerts,
+  quietWarn: vi.fn(),
   tfnswConfigured: () => tfnsw.configured,
   tfnswPositionsEnabled: () => false,
 }));

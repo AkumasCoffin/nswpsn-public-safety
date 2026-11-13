@@ -46,6 +46,7 @@ import {
   fetchTfnswPositions,
   applyTfnswPositions,
   fetchTfnswAlerts,
+  quietWarn,
   tfnswConfigured,
   tfnswPositionsEnabled,
   type TfnswAlert,
@@ -1792,7 +1793,7 @@ transportRouter.get(
         fetched_at: new Date().toISOString(),
       } satisfies z.infer<typeof TransportAlertsSchema>);
     } catch (err) {
-      log.warn({ err }, 'transport: alerts unavailable');
+      quietWarn('transport: alerts unavailable', err);
       return fail(c, 502, 'service_unavailable', 'Transport for NSW alerts could not be read just now.', {
         error: 'alerts upstream unavailable',
       });

@@ -350,6 +350,21 @@ describe('fetchTfnswPositions', () => {
     expect(fetchBufferMock).toHaveBeenCalledTimes(1);
   });
 
+  it('parks a feed the key is not allowed (401): nothing changes that between requests', async () => {
+    fetchBufferMock.mockRejectedValue(Object.assign(new Error('HTTP 401'), { status: 401 }));
+    expect(await _testables.fetchFeed('/v1/gtfs/alerts/buses')).toBeNull();
+    expect(await _testables.fetchFeed('/v1/gtfs/alerts/buses')).toBeNull();
+    expect(fetchBufferMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('parks a feed whose 200 body is not GTFS-realtime, rather than decoding it again on every request', async () => {
+    // A leading zero byte is field number 0, which protobuf refuses.
+    fetchBufferMock.mockResolvedValue(new Uint8Array([0x00, 0x01, 0x02]));
+    expect(await _testables.fetchFeed('/v2/gtfs/alerts/all')).toBeNull();
+    expect(await _testables.fetchFeed('/v2/gtfs/alerts/all')).toBeNull();
+    expect(fetchBufferMock).toHaveBeenCalledTimes(1);
+  });
+
   it('parks a 404 feed for the long window', async () => {
     fetchBufferMock.mockRejectedValue(Object.assign(new Error('HTTP 404'), { status: 404 }));
     await _testables.fetchFeed('/v1/gtfs/vehiclepos/lightrail/innerwest');

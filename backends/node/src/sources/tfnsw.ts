@@ -121,6 +121,19 @@ function authHeaders(): Record<string, string> {
 const _parkedFeeds = new Map<string, number>(); // path → parked-until ts
 const DEAD_FEED_PARK_MS = 3_600_000;
 const RATE_LIMIT_PARK_MS = 120_000;
+// A feed whose body is not a GTFS-realtime message. Asking again in a minute
+// would get the same body; a quarter of an hour is soon enough to notice a fix.
+const BAD_BODY_PARK_MS = 900_000;
+
+/** What a body that would not decode looks like, for the one log line it gets. */
+function describeBody(buf: Uint8Array): string {
+  if (buf.length === 0) return 'empty';
+  const b0 = buf[0];
+  if (b0 === 0x7b || b0 === 0x5b) return 'JSON';
+  if (b0 === 0x3c) return 'HTML or XML';
+  if (b0 === 0x1f && buf[1] === 0x8b) return 'gzip';
+  return `binary, starts ${Buffer.from(buf.subarray(0, 12)).toString('hex')}`;
+}
 
 function feedParked(path: string): boolean {
   const until = _parkedFeeds.get(path);
@@ -148,10 +161,30 @@ async function fetchFeed(path: string): Promise<GtfsRealtimeBindings.transit_rea
       timeoutMs: FEED_TIMEOUT_MS,
       headers: authHeaders(),
     });
-    return rt.FeedMessage.decode(buf);
+    try {
+      return rt.FeedMessage.decode(buf);
+    } catch (decodeErr) {
+      // A 200 whose body is not the message. Parked, and said once in one
+      // line with what the body was: this used to be retried on every request
+      // and logged with a stack trace each time, which said nothing about why.
+      // Alerts change slowly, so a quarter of an hour; a vehicle feed is only
+      // held back for the two minutes a rate limit is, in case one body was cut short.
+      const alerts = path.includes('/alerts/');
+      _parkedFeeds.set(path, Date.now() + (alerts ? BAD_BODY_PARK_MS : RATE_LIMIT_PARK_MS));
+      log.warn(
+        { path, bytes: buf.length, body: describeBody(buf), reason: (decodeErr as Error).message },
+        `tfnsw: feed answered something that is not GTFS-realtime — parked for ${alerts ? '15min' : '2min'}`,
+      );
+      return null;
+    }
   } catch (err) {
     const status = (err as { status?: number | null }).status;
-    if (status === 404 || status === 410) {
+    if (status === 401 || status === 403) {
+      // The key is not allowed this feed (each TfNSW API product is
+      // subscribed to separately). Nothing changes that between requests.
+      _parkedFeeds.set(path, Date.now() + DEAD_FEED_PARK_MS);
+      log.warn({ path, status }, 'tfnsw: the API key is not allowed this feed — parked for 1h');
+    } else if (status === 404 || status === 410) {
       _parkedFeeds.set(path, Date.now() + DEAD_FEED_PARK_MS);
       log.warn({ path, status }, 'tfnsw: feed unavailable — parked for 1h');
     } else if (status === 429) {
@@ -622,6 +655,16 @@ function decodeAlerts(
 
 const alertsCache = new SwrCache<TfnswAlert[]>(2);
 
+// One line, without a stack, at most once every ten minutes per message.
+const _quietAt = new Map<string, number>();
+const QUIET_MS = 600_000;
+export function quietWarn(msg: string, err: unknown): void {
+  const now = Date.now();
+  if (now - (_quietAt.get(msg) ?? 0) < QUIET_MS) return;
+  _quietAt.set(msg, now);
+  log.warn({ reason: (err as Error)?.message ?? String(err) }, msg);
+}
+
 export async function fetchTfnswAlerts(): Promise<TfnswAlert[]> {
   if (!tfnswConfigured()) return [];
   const { value } = await alertsCache.get(
@@ -652,7 +695,9 @@ export async function fetchTfnswAlerts(): Promise<TfnswAlert[]> {
     {
       fresh: ALERT_FRESH_MS,
       stale: ALERT_STALE_MS,
-      onError: (err) => log.warn({ err }, 'tfnsw: alerts refresh failed'),
+      // The feeds that failed have each said why; this is the summary, and
+      // with every feed parked it would otherwise repeat on every request.
+      onError: (err) => quietWarn('tfnsw: alerts refresh failed', err),
     },
   );
   return value;
