@@ -1483,7 +1483,21 @@
     @media (max-width: 900px) {
       .adsb-history-bar { bottom: 12px; padding: 8px 10px; }
       .adsb-hb-clock { font-size: 13px; }
+      /* The detail card is a bottom sheet here and sat on top of the bar:
+         pinning an aircraft in history hid the scrubber. Lift the bar clear. */
+      body:has(#adsb-detail-card.open) .adsb-history-bar { bottom: calc(45vh + 10px); }
     }
+    /* Shown while the aircraft picture is old because the feed is not
+       answering. Same slot as the history bar, which is never up in live mode. */
+    .adsb-stale-badge {
+      position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
+      z-index: 860; display: none; pointer-events: none;
+      background: rgba(15, 23, 42, 0.95); border: 1px solid rgba(251, 191, 36, 0.5);
+      border-radius: 999px; padding: 5px 12px; font-size: 11.5px; color: #fbbf24;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.45); white-space: nowrap;
+    }
+    .adsb-stale-badge.on { display: block; }
+    .adsb-tbl-row:focus-visible, .adsb-th:focus-visible { outline: 2px solid #c084fc; outline-offset: -2px; }
     @media (max-width: 900px) {
       .floating-filter-sidebar { display: none; }
       .floating-filter-panel { display: none !important; }
@@ -2948,6 +2962,7 @@
       <!-- Time scrubber for the aircraft layer. Hidden until the History pill
            turns it on. -->
       <div class="adsb-history-bar" id="adsb-history-bar"></div>
+      <div class="adsb-stale-badge" id="adsb-stale-badge" role="status" aria-live="polite"></div>
 
       <!-- Compact icon-over-label toggles: the coloured icon carries the
            layer identity, the small caption keeps it unambiguous. -->
@@ -14201,6 +14216,14 @@ function initPagerHoursFromStorage() {
     window.toggleListSection = function (which) {
       const sec = document.getElementById(which + '-list-section');
       if (sec) sec.classList.toggle('collapsed');
+      // The aircraft rows are not built while the section is collapsed.
+      if (which === 'adsb' && sec && !sec.classList.contains('collapsed')) adsbListRender();
+    };
+    /** Enter or Space on a list row or sort header does what a click does. */
+    window.adsbKeyActivate = function (ev) {
+      if (ev.key !== 'Enter' && ev.key !== ' ') return;
+      ev.preventDefault();
+      ev.currentTarget.click();
     };
 
     // Called from the layer toggles: open the panel while either layer
@@ -15303,19 +15326,52 @@ function initPagerHoursFromStorage() {
       };
     }
 
+    // hex -> record, built on first use after the list changes. Looking an
+    // aircraft up by scanning the list was once per marker per trail redraw:
+    // 800 markers over a 1,500-aircraft list, every few seconds.
+    let _adsbIdx = { arr: null, len: -1, map: new Map() };
+    function _adsbGet(hex) {
+      if (_adsbIdx.arr !== _adsbAircraft || _adsbIdx.len !== _adsbAircraft.length) {
+        _adsbIdx = {
+          arr: _adsbAircraft, len: _adsbAircraft.length,
+          map: new Map(_adsbAircraft.map((x) => [x.hex, x])),
+        };
+      }
+      return _adsbIdx.map.get(hex);
+    }
+
+    /** A marker's tooltip is built when it opens (see _rebuildAdsb); this
+     *  refreshes one that is open right now. */
+    function _adsbTooltipRefresh(marker) {
+      if (!marker.isTooltipOpen || !marker.isTooltipOpen()) return;
+      const t = marker.getTooltip();
+      if (t) t.update();
+    }
+
     function _adsbSearchHay(a) {
       return [a.callsign, a.reg, a.hex, a.type, a.squawk]
         .filter(Boolean).map((s) => String(s).toLowerCase()).join(' ');
     }
 
-    function _rebuildAdsb() {
+    /**
+     * Bring the markers into line with the aircraft list, filters and view.
+     *
+     * `opts.list === false` skips the list (the caller, or the map's own
+     * moveend handler, renders it). `opts.panel === false` skips the filter
+     * panel: it shows counts, and redrawing it on every data tick or pan
+     * closed whatever dropdown the viewer had open.
+     */
+    function _rebuildAdsb(opts) {
+      const o = opts || {};
       const showGround = map.getZoom() >= ADSB_GROUND_MIN_ZOOM;
       const view = map.getBounds().pad(0.2);
       const q = _adsbListSearch;
       const seen = new Set();
       let rendered = 0;
       for (const a of _adsbAircraft) {
-        if (rendered >= ADSB_MAX_RENDER) break;
+        // The pinned aircraft is drawn even past the cap: it is the one the
+        // viewer asked for, and the card would be describing nothing.
+        if (rendered >= ADSB_MAX_RENDER && a.hex !== _adsbPinnedHex) continue;
         if (a.onGround && !showGround) continue;
         if (!isFinite(a.lat) || !isFinite(a.lon)) continue;
         // Australia-wide feed: only render the padded viewport, except
@@ -15339,10 +15395,16 @@ function initPagerHoursFromStorage() {
             existing.marker.setIcon(buildAircraftIcon(a));
             existing.iconKey = key;
           }
-          existing.marker.setTooltipContent(buildAdsbTooltipHtml(a));
+          _adsbTooltipRefresh(existing.marker);
         } else {
-          const marker = L.marker([a.lat, a.lon], { icon: buildAircraftIcon(a) })
-            .bindTooltip(buildAdsbTooltipHtml(a), {
+          // keyboard:false — each marker was a tab stop, up to 800 of them
+          // between the page and anything after the map. The list is the
+          // keyboard way in.
+          const hex = a.hex;
+          const marker = L.marker([a.lat, a.lon], { icon: buildAircraftIcon(a), keyboard: false })
+            // Built when it opens, from the record as it is then. Rebuilding
+            // every marker's tooltip HTML on every pass was most of the pass.
+            .bindTooltip(() => buildAdsbTooltipHtml(_adsbGet(hex) || a), {
               className: 'ais-tooltip adsb-tooltip adsb-ac-tooltip', sticky: true, opacity: 0.97, direction: 'top'
             });
           // Click → pin tooltip + highlight the list row (AIS pattern).
@@ -15360,11 +15422,22 @@ function initPagerHoursFromStorage() {
         if (!seen.has(hex)) {
           adsbLayer.removeLayer(entry.marker);
           _adsbMarkers.delete(hex);
+          _adsbGlides.delete(hex); // or a marker re-made for this hex inherits it
         }
       }
       _rebuildAdsbTrails(); // trails follow the rendered-marker set
-      adsbListRender();
-      if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
+      if (o.list !== false) adsbListRender();
+      if (o.panel !== false) _adsbRefreshFilterPanel();
+    }
+
+    /** Redraw the aircraft filter panel, if it is the one open and the viewer
+     *  is not in the middle of using a control in it. */
+    function _adsbRefreshFilterPanel() {
+      if (typeof refreshActiveFilterPanel !== 'function' || _activeFilterKey !== 'adsb') return;
+      const fp = document.getElementById('floating-filter-panel');
+      const ae = document.activeElement;
+      if (fp && ae && fp.contains(ae) && (ae.tagName === 'SELECT' || ae.tagName === 'INPUT')) return;
+      refreshActiveFilterPanel();
     }
 
     async function loadAdsbData() {
@@ -15397,6 +15470,7 @@ function initPagerHoursFromStorage() {
         // receivers hear. Keep whichever is newer, or the marker would jump
         // back along its track every 15 s.
         _adsbStampFix(aircraft, data.fetched_at);
+        _adsbLastOkMs = Date.now();
         const held = new Map(_adsbAircraft.map((x) => [x.hex, x]));
         _adsbAircraft = aircraft.map((x) => {
           const h = held.get(x.hex);
@@ -15407,7 +15481,7 @@ function initPagerHoursFromStorage() {
         if (_adsbPendingPinHex) {
           const want = _adsbPendingPinHex;
           _adsbPendingPinHex = null;
-          if (_adsbAircraft.some((x) => x.hex === want)) adsbPinAircraft(want);
+          if (_adsbGet(want)) adsbPinAircraft(want);
           else showToast(want.toUpperCase() + ' is not being tracked right now', 'info');
         }
         // Altitude, speed and position age all move on every poll.
@@ -15502,7 +15576,7 @@ function initPagerHoursFromStorage() {
         const focused = hex === focusHex;
         let pts = _adsbTrails[hex];
         if (!pts || pts.length < 2) continue;
-        const a = _adsbAircraft.find((x) => x.hex === hex);
+        const a = _adsbGet(hex);
         // Trail points + the marker's live position as the head.
         const m = entry.marker.getLatLng();
         // Never run past the aircraft. The trails and the aircraft list are
@@ -15651,7 +15725,7 @@ function initPagerHoursFromStorage() {
       if (document.hidden || !_adsbPinnedHex) return;
       const el = document.getElementById('adsb-detail-card');
       if (!el || !el.classList.contains('open')) return;
-      const a = _adsbAircraft.find((x) => x.hex === _adsbPinnedHex);
+      const a = _adsbGet(_adsbPinnedHex);
       if (!a) return;
       const ago = _adsbHeardAgo(a) + 's';
       for (const n of el.querySelectorAll('[data-adsb-age],[data-adsb-est]')) n.textContent = ago;
@@ -15713,6 +15787,7 @@ function initPagerHoursFromStorage() {
         }
         if (!(r._fixMs > (_adsbAircraft[i]._fixMs || 0))) continue;
         _adsbAircraft[i] = r;
+        if (_adsbIdx.arr === _adsbAircraft) _adsbIdx.map.set(r.hex, r);
         moved.push(r);
       }
       for (const a of moved) {
@@ -15723,14 +15798,16 @@ function initPagerHoursFromStorage() {
           e.marker.setIcon(buildAircraftIcon(a));
           e.iconKey = key;
         }
-        e.marker.setTooltipContent(buildAdsbTooltipHtml(a));
+        _adsbTooltipRefresh(e.marker);
         _adsbGlideTo(a.hex, e.marker, a.lat, a.lon);
       }
       // A newly heard aircraft has no marker yet; the rebuild applies every
       // filter and the render cap. After the glides are set, so it retargets
       // them rather than snapping the markers.
-      if (added) _rebuildAdsb();
-      if (_adsbPinnedHex && (added || moved.some((a) => a.hex === _adsbPinnedHex))) adsbRenderDetailCard();
+      // The filter panel is left alone: one more aircraft is not worth
+      // closing the dropdown someone has open.
+      if (added) _rebuildAdsb({ panel: false });
+      if (_adsbPinnedHex && moved.some((a) => a.hex === _adsbPinnedHex)) adsbRenderDetailCard();
     }
 
     /** Extend the held trails with a `recent` trails answer. Points carry
@@ -15759,9 +15836,39 @@ function initPagerHoursFromStorage() {
       return changed;
     }
 
+    // Consecutive fast polls that failed, and when the next one may go. A
+    // feed answering 429 or 5xx was being asked again every 3 s regardless.
+    let _adsbFastFails = 0;
+    let _adsbFastNextMs = 0;
+    /** Epoch ms of the last full aircraft answer that was applied. */
+    let _adsbLastOkMs = 0;
+
+    function _adsbFastOutcome(ok) {
+      if (ok) { _adsbFastFails = 0; _adsbFastNextMs = 0; return; }
+      _adsbFastFails = Math.min(_adsbFastFails + 1, 4);
+      // 6, 12, 24, 48 s.
+      _adsbFastNextMs = Date.now() + ADSB_FAST_MS * Math.pow(2, _adsbFastFails);
+    }
+
+    // Says so when the picture is old. Without it a feed that had stopped
+    // answering looked exactly like a quiet sky: the markers just sat there.
+    setInterval(() => {
+      const el = document.getElementById('adsb-stale-badge');
+      if (!el) return;
+      const live = !adsbHistoryMode && !document.hidden && map.hasLayer(adsbLayer) && adsbRefreshInterval;
+      const ageSec = _adsbLastOkMs ? Math.round((Date.now() - _adsbLastOkMs) / 1000) : 0;
+      const stale = live && ageSec > 45;
+      el.classList.toggle('on', !!stale);
+      if (stale) {
+        el.textContent = 'Aircraft positions are '
+          + (ageSec < 120 ? ageSec + ' s' : Math.round(ageSec / 60) + ' min') + ' old — retrying';
+      }
+    }, 5000);
+
     async function adsbFastTick() {
       if (adsbHistoryMode || document.hidden || !map.hasLayer(adsbLayer)) return;
       if (_adsbFastBusy) return;   // a slow answer is not stacked on
+      if (Date.now() < _adsbFastNextMs) return;
       _adsbFastBusy = true;
       const gen = _adsbLiveGen;
       try {
@@ -15772,6 +15879,7 @@ function initPagerHoursFromStorage() {
         ]);
         const trailData = (rt && rt.ok) ? ((await rt.json()).data || {}).trails : null;
         const acData = (ra && ra.ok) ? (await ra.json()).data : null;
+        _adsbFastOutcome(!!(ra && ra.ok));
         if (adsbHistoryMode || gen !== _adsbLiveGen) return;
         let trailsChanged = false;
         if (trailData) trailsChanged = _adsbApplyRecentTrails(trailData);
@@ -15782,6 +15890,7 @@ function initPagerHoursFromStorage() {
         if (_adsbPinnedHex) adsbLoadPinDetail();
       } catch (e) {
         // Quiet: the 15 s refresh carries on regardless.
+        _adsbFastOutcome(false);
       } finally {
         _adsbFastBusy = false;
       }
@@ -15800,7 +15909,11 @@ function initPagerHoursFromStorage() {
     // The interval skips ticks while the tab is hidden; coming back must not
     // show the old picture for up to 15 s.
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden && adsbRefreshInterval) { _adsbLoadIfStale(); loadAdsbTrails(); }
+      if (!document.hidden && adsbRefreshInterval) {
+        _adsbLastOkMs = Date.now(); // the badge counts from the return, not from before the tab was left
+        _adsbLoadIfStale();
+        loadAdsbTrails();
+      }
     });
 
     function startAdsbRefresh() {
@@ -15818,6 +15931,7 @@ function initPagerHoursFromStorage() {
       // Starting again after the layer was off, the page idle or the tab
       // away: what is held can be minutes old, and waiting out the first
       // interval showed it as live. Fetch now.
+      _adsbLastOkMs = Date.now(); // the clock starts now, not when the layer was last on
       _adsbLoadIfStale();
       loadAdsbTrails();
       console.log('✈️ ADS-B refresh started (15s, receiver-heard aircraft every 3s)');
@@ -16433,6 +16547,11 @@ function initPagerHoursFromStorage() {
       // Prefetch photos for what's on screen, so the detail card has one ready
       // before anyone clicks a row.
       if (map.hasLayer(adsbLayer)) adsbQueuePhotoPrefetch(matches.slice(0, 40));
+      // The count above is always current; the rows are only built when they
+      // can be seen. Opening the panel or expanding the section renders them.
+      const panel = document.getElementById('ais-list-panel');
+      const section = document.getElementById('adsb-list-section');
+      if ((panel && !panel.classList.contains('open')) || (section && section.classList.contains('collapsed'))) return;
       if (matches.length === 0) {
         body.innerHTML = '<div class="ais-list-empty">' +
           (q ? 'No matches for &ldquo;' + escapeHtml(q) + '&rdquo;' : 'No aircraft in current view.') +
@@ -16442,6 +16561,7 @@ function initPagerHoursFromStorage() {
 
       const head = '<div class="adsb-tbl-head"><span></span>' + ADSB_COLS.map((c) =>
         '<span class="adsb-th' + (c.num ? ' num' : '') + (key === c.key ? ' sorted' : '') + '"'
+        + ' role="button" tabindex="0" onkeydown="adsbKeyActivate(event)"'
         + ' onclick="adsbSortBy(\'' + c.key + '\')">' + c.label
         + (key === c.key ? (dir === 1 ? ' &#9650;' : ' &#9660;') : '') + '</span>').join('') + '</div>';
 
@@ -16452,6 +16572,7 @@ function initPagerHoursFromStorage() {
         const km = dist.get(a.hex);
         const altTxt = a.onGround ? 'GND' : (a.altFt != null ? a.altFt.toLocaleString() : '—');
         return '<div class="adsb-tbl-row' + (_adsbPinnedHex === a.hex ? ' selected' : '') + '"'
+          + ' role="button" tabindex="0" onkeydown="adsbKeyActivate(event)"'
           + ' onclick="adsbListClickRow(\'' + jsArg(a.hex) + '\', event)">'
           + '<span>' + adsbListGlyph(a) + '</span>'
           + '<span class="adsb-cell-id"><span class="adsb-flight' + (anon ? ' anon' : '') + '">'
@@ -16528,7 +16649,7 @@ function initPagerHoursFromStorage() {
         // Refresh the marker's tooltip now rather than waiting for the
         // next 15 s rebuild tick.
         const entry = _adsbMarkers.get(a.hex);
-        if (entry) entry.marker.setTooltipContent(buildAdsbTooltipHtml(a));
+        if (entry) _adsbTooltipRefresh(entry.marker);
         if (_adsbPinnedHex === a.hex) adsbRenderDetailCard();
       } catch (e) {
         console.warn('[adsb] photo fetch failed', e);
@@ -17012,12 +17133,29 @@ function initPagerHoursFromStorage() {
     function adsbRenderDetailCard() {
       const el = document.getElementById('adsb-detail-card');
       if (!el) return;
+      // The card is redrawn whole every few seconds. Two things must survive
+      // that: text the viewer is selecting (so the redraw waits), and which
+      // button has the keyboard focus (put back afterwards).
+      const shownHex = el.dataset.hex || '';
+      try {
+        const sel = window.getSelection();
+        if (sel && !sel.isCollapsed && sel.anchorNode && el.contains(sel.anchorNode)
+            && shownHex && shownHex === (_adsbPinnedHex || '')) return;
+      } catch (e) { /* no selection API: just redraw */ }
+      const focused = el.contains(document.activeElement) ? document.activeElement.getAttribute('data-act') : null;
+      if (focused) {
+        setTimeout(() => {
+          const again = el.querySelector('[data-act="' + focused + '"]');
+          if (again && !el.contains(document.activeElement)) again.focus({ preventScroll: true });
+        }, 0);
+      }
+      el.dataset.hex = _adsbPinnedHex || '';
       // An airport or navaid is the other thing this card can be showing.
       // One card, because a chart feature and an aircraft answer the same
       // question — "what is this" — and two cards would stack on one click.
       if (!_adsbPinnedHex && _aeroPinned) { aeroRenderDetailCard(el); return; }
       if (!_adsbPinnedHex) { adsbHideDetailCard(); return; }
-      const a = _adsbAircraft.find((x) => x.hex === _adsbPinnedHex);
+      const a = _adsbGet(_adsbPinnedHex);
       // Pinned but gone from the feed: keep the card up and say so rather than
       // silently vanishing, which reads as a misclick.
       if (!a) {
@@ -17136,7 +17274,9 @@ function initPagerHoursFromStorage() {
         +   row('Emergency', emergencyKind
               ? '<span style="color:#f87171;">' + (ADSB_EMERGENCY_TEXT[emergencyKind] || escapeHtml(String(emergencyKind))) + '</span>'
               : null)
-        +   row('Distance', distTxt)
+        // From the middle of the map, which while following IS the aircraft:
+        // "0.0 km" there told nobody anything.
+        +   row('Distance', _adsbFollowActive ? null : distTxt)
         +   row('Position age', '<span data-adsb-age>' + _adsbHeardAgo(a) + 's</span>')
         +   row('ICAO', escapeHtml(a.hex.toUpperCase()), 'mono')
         + '</div>'
@@ -17148,11 +17288,11 @@ function initPagerHoursFromStorage() {
         + infoCredit
         + noteHtml
         + '<div class="adsb-dc-acts">'
-        +   '<button class="adsb-dc-btn' + (_adsbFollowActive ? ' on' : '') + '" onclick="adsbToggleFollow()">'
+        +   '<button class="adsb-dc-btn' + (_adsbFollowActive ? ' on' : '') + '" data-act="follow" onclick="adsbToggleFollow()">'
         +     '<i class="fa-solid fa-crosshairs"></i> ' + (_adsbFollowActive ? 'Following' : 'Follow') + '</button>'
-        +   '<button class="adsb-dc-btn" onclick="adsbCentreOnPinned()"><i class="fa-solid fa-location-crosshairs"></i> Centre</button>'
-        +   '<button class="adsb-dc-btn" onclick="adsbCopyPinnedHex()"><i class="fa-solid fa-copy"></i> Copy</button>'
-        +   '<button class="adsb-dc-btn" onclick="adsbCopyPinnedLink()" title="Copy a link to this aircraft"><i class="fa-solid fa-link"></i> Link</button>'
+        +   '<button class="adsb-dc-btn" data-act="centre" onclick="adsbCentreOnPinned()"><i class="fa-solid fa-location-crosshairs"></i> Centre</button>'
+        +   '<button class="adsb-dc-btn" data-act="copy" onclick="adsbCopyPinnedHex()"><i class="fa-solid fa-copy"></i> Copy</button>'
+        +   '<button class="adsb-dc-btn" data-act="link" onclick="adsbCopyPinnedLink()" title="Copy a link to this aircraft"><i class="fa-solid fa-link"></i> Link</button>'
         + '</div>';
     }
 
@@ -17171,7 +17311,7 @@ function initPagerHoursFromStorage() {
     };
 
     window.adsbCopyPinnedHex = function () {
-      const a = _adsbAircraft.find((x) => x.hex === _adsbPinnedHex);
+      const a = _adsbGet(_adsbPinnedHex);
       const txt = a ? (a.callsign || a.reg || a.hex).toUpperCase() : (_adsbPinnedHex || '').toUpperCase();
       if (!txt) return;
       try {
@@ -17227,7 +17367,7 @@ function initPagerHoursFromStorage() {
       adsbRenderDetailCard();
       adsbLoadPinDetail();
       // Lazy-load the Planespotters photo for the pinned row.
-      const a = _adsbAircraft.find((x) => x.hex === hex);
+      const a = _adsbGet(hex);
       if (a) adsbFetchPhoto(a);
     }
 
@@ -17843,17 +17983,14 @@ function initPagerHoursFromStorage() {
 
     // Ground-target visibility depends on zoom; re-diff when the zoom
     // crosses the threshold while the layer is on.
+    // One pass per pan or zoom, markers and trails only. A zoom also ends in
+    // a moveend, so the old separate zoomend rebuild (for the ground-traffic
+    // threshold, which _rebuildAdsb reads fresh anyway) was a second full
+    // pass; the list has its own debounced moveend handler; and the filter
+    // panel does not depend on the view. Follow mode pans every few seconds,
+    // so this is the path that runs most.
     registerViewportCuller(() => {
-      if (map.hasLayer(adsbLayer)) _rebuildAdsb();
-    });
-    let _adsbLastShowGround = null;
-    map.on('zoomend', () => {
-      if (!map.hasLayer(adsbLayer)) return;
-      const showGround = map.getZoom() >= ADSB_GROUND_MIN_ZOOM;
-      if (showGround !== _adsbLastShowGround) {
-        _adsbLastShowGround = showGround;
-        _rebuildAdsb();
-      }
+      if (map.hasLayer(adsbLayer)) _rebuildAdsb({ list: false, panel: false });
     });
 
     // ==================== PUBLIC TRANSPORT LAYER ====================
