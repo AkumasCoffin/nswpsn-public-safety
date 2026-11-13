@@ -4008,6 +4008,7 @@
       endeavour_maintenance: { data: null, timestamp: 0 },
       endeavour_future: { data: null, timestamp: 0 },
       essential_energy: { data: null, timestamp: 0 },
+      ausgrid: { data: null, timestamp: 0 },
       // NASA FIRMS fire-hotspot polygons
       firms_hotspots: { data: null, timestamp: 0 },
       // ACT Ambulance Service responses (ESA feed)
@@ -10319,6 +10320,53 @@ function initPagerHoursFromStorage() {
         console.log(`Loaded ${essOutages.length} Essential Energy outages`);
       } catch (e) {
         console.error('Essential Energy outages error', e);
+      }
+
+      // Ausgrid - from the merged outages feed, which is the one place that
+      // has its planned work of the month ahead as well as what is off now
+      // (/api/ausgrid/outages answers outages under way only, for the bot).
+      try {
+        let ausgridData;
+        const agCached = layerCache.ausgrid;
+        const agNow = Date.now();
+        if (!agCached.data || (agNow - agCached.timestamp) >= LAYER_CACHE_TTL) {
+          const res = await apiFetch(`${PROXY_BASE}/api/v1/outages?distributor=ausgrid`);
+          // A failed read keeps the last answer rather than clearing the pins.
+          ausgridData = res.ok ? await res.json() : (agCached.data || { features: [] });
+          if (res.ok) layerCache.ausgrid = { data: ausgridData, timestamp: agNow };
+        } else {
+          ausgridData = agCached.data;
+        }
+        const agFeatures = Array.isArray(ausgridData?.features) ? ausgridData.features : [];
+        agFeatures.forEach(f => {
+          const p = f.properties || {};
+          const d = p.details || {};
+          const c = f.geometry && f.geometry.type === 'Point' ? f.geometry.coordinates : null;
+          if (!c || !Number.isFinite(c[0]) || !Number.isFinite(c[1])) return;
+          const planned = p.kind === 'planned';
+          const scheduled = p.status === 'scheduled';
+          const outage = {
+            suburb: p.area || 'Area not given',
+            streets: d.streets || '',
+            cause: p.cause || '',
+            status: d.status || '',
+            customersAffected: p.customers_affected || 0,
+            startTime: p.start_at || '',
+            estimatedRestoration: p.restore_at || '',
+            lastUpdated: p.updated_at || '',
+            outageType: planned ? 'Planned' : 'Unplanned',
+            latitude: c[1],
+            longitude: c[0],
+            source: 'ausgrid'
+          };
+          // The same three groups, colours and icons as Endeavour's pins.
+          if (scheduled) addOutageMarker(outage, outagesFutureCluster, '#22c55e', 'rgba(34,197,94,0.4)', 'fa-wrench', 'Ausgrid (Future Maintenance)');
+          else if (planned) addOutageMarker(outage, outagesMaintenanceCluster, '#f97316', 'rgba(249,115,22,0.4)', 'fa-wrench', 'Ausgrid (Current Maintenance)');
+          else addOutageMarker(outage, outagesUnplannedCluster, '#ef4444', 'rgba(239,68,68,0.5)', 'fa-bolt', 'Ausgrid (Unplanned)');
+        });
+        console.log(`Loaded ${agFeatures.length} Ausgrid outages`);
+      } catch (e) {
+        console.error('Ausgrid outages error', e);
       }
       
       // Add cluster layers to main outages layer based on current filter state

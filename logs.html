@@ -2575,8 +2575,8 @@
         }
       });
       
-      // Show map if has coordinates (exclude Ausgrid which doesn't have coords)
-      if (item.latitude && item.longitude && item.source !== 'ausgrid') {
+      // Show map if it has coordinates (Ausgrid's records carry them now).
+      if (item.latitude && item.longitude) {
         showMapPanel(item);
       } else {
         closeMapPanel();
@@ -3305,7 +3305,7 @@
             selectedIncident = record;
             // Clear any list selection highlight since this record isn't in the list.
             document.querySelectorAll('.incident-card.selected').forEach(el => el.classList.remove('selected'));
-            if (record.latitude && record.longitude && record.source !== 'ausgrid') {
+            if (record.latitude && record.longitude) {
               showMapPanel(record);
             } else {
               closeMapPanel();
@@ -3939,6 +3939,31 @@
         if (extraFields.length > 0) {
           html += `<div class="lg-mb8">
             <div class="lg-kv-k" style="--c:${wazeColor}"><i class="fas fa-info-circle"></i>Details</div>
+            <div class="lg-grid2">`;
+          extraFields.forEach(([label, value]) => {
+            html += `<div class="lg-meta">${escapeHtml(label)}:</div><div class="lg-t10">${escapeHtml(String(value))}</div>`;
+          });
+          html += `</div></div>`;
+        }
+      } else if (source === 'ausgrid') {
+        // Ausgrid extra details. Records stored before Ausgrid's outage map
+        // changed carry only suburb, cause and times; the rest are skipped
+        // when empty.
+        const extraFields = [];
+        if (data.suburb) extraFields.push(['Area', data.suburb]);
+        if (data.streets) extraFields.push(['Streets', data.streets]);
+        if (data.outageType) extraFields.push(['Type', data.outageType]);
+        if (data.StatusText) extraFields.push(['Status', data.StatusText]);
+        if (data.customersAffected) extraFields.push(['Customers Affected', data.customersAffected]);
+        if (data.startTime) extraFields.push(['Started', formatDateTime(data.startTime)]);
+        if (data.estRestoration) extraFields.push(['Est. Restoration', formatDateTime(data.estRestoration)]);
+        if (data.WhenUpdated) extraFields.push(['Updated by Ausgrid', formatDateTime(data.WhenUpdated)]);
+        if (data.cause) extraFields.push(['Cause', data.cause]);
+        if (data.Reason) extraFields.push(['Reason', data.Reason]);
+
+        if (extraFields.length > 0) {
+          html += `<div class="lg-mb8">
+            <div style="color:#fb923c; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fas fa-info-circle"></i>Details</div>
             <div class="lg-grid2">`;
           extraFields.forEach(([label, value]) => {
             html += `<div class="lg-meta">${escapeHtml(label)}:</div><div class="lg-t10">${escapeHtml(String(value))}</div>`;
