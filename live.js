@@ -11,7 +11,7 @@
   'use strict';
 
   const API = 'https://api.forcequit.xyz';
-  const STATES = ['ALL', 'NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'ACT', 'NT'];
+  const STATES = ['ALL', 'NSW', 'VIC', 'QLD', 'SA', 'WA', 'ACT', 'NT'];
   // Only for reading the few feeds that still send a Sydney wall-clock time
   // with no zone. Times are SHOWN in the reader's own zone: the page covers
   // five time zones, and "6:12 pm" in Sydney time is wrong on a phone in Perth.
