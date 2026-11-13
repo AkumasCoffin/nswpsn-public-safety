@@ -19,7 +19,12 @@ import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import { DATA_RETENTION_DAYS } from '../lib/retention.js';
 import { fetchJson } from '../sources/shared/http.js';
-import { DAY_MS, GLOBE_HISTORY_SEQ, type GlobeImportResult } from './adsbGlobeHistoryImport.js';
+import {
+  DAY_MS,
+  GLOBE_HISTORY_DONE_SEQ,
+  GLOBE_HISTORY_SEQ,
+  type GlobeImportResult,
+} from './adsbGlobeHistoryImport.js';
 
 const CHECK_EVERY_MS = 60 * 60_000;
 /** First check after boot: out of the way of startup and the first polls. */
@@ -79,11 +84,21 @@ async function listReleases(year: number): Promise<GhRelease[]> {
 async function importedDays(days: readonly number[]): Promise<Set<number>> {
   const pool = await getPool();
   if (!pool) return new Set(days); // nowhere to write: treat as done
-  const r = await pool.query<{ minute: Date }>(
-    `SELECT minute FROM adsb_track_chunks WHERE seq = $1 AND minute = ANY($2::timestamptz[])`,
-    [GLOBE_HISTORY_SEQ, days.map((d) => new Date(d).toISOString())],
+  // Done: the marker row, written after the last hour. Days imported before
+  // the marker had its own seq have none, so a day whose LAST hour holds
+  // imported rows also counts: a run cut short never reached that hour.
+  const r = await pool.query<{ day: Date }>(
+    `SELECT d.day
+       FROM unnest($1::timestamptz[]) AS d(day)
+      WHERE EXISTS (SELECT 1 FROM adsb_track_chunks c
+                     WHERE c.minute = d.day AND c.seq = $2)
+         OR EXISTS (SELECT 1 FROM adsb_track_chunks c
+                     WHERE c.seq = $3
+                       AND c.minute >= d.day + interval '23 hours'
+                       AND c.minute <  d.day + interval '24 hours')`,
+    [days.map((d) => new Date(d).toISOString()), GLOBE_HISTORY_DONE_SEQ, GLOBE_HISTORY_SEQ],
   );
-  return new Set(r.rows.map((x) => x.minute.getTime()));
+  return new Set(r.rows.map((x) => x.day.getTime()));
 }
 
 let timer: NodeJS.Timeout | null = null;

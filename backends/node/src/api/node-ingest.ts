@@ -1301,7 +1301,7 @@ nodeIngestRouter.post('/api/node-ingest/adsb-upload', async (c) => {
   //    Recording them after the gate left a paused node showing a coverage
   //    envelope with no tracks inside it.
   const { records, trails } = normalizeNodeUploadWithTrails(
-    parsed, adsbNodeSourceId(r.nodeId, nodeRow?.name ?? null));
+    parsed, adsbNodeSourceId(r.nodeId, nodeRow?.name ?? null), Date.now(), r.nodeId);
   recordNodeAdsbReception(r.nodeId, records, range);
   //    The 3D coverage cells: every airborne position, by altitude, plus the
   //    "reported recently" set the missed-aircraft count compares against.

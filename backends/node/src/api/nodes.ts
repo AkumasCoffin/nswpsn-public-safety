@@ -77,6 +77,7 @@ import {
   setAutoUpdate,
 } from '../services/nodes/globalConfig.js';
 import { clearAdsbNodeState } from '../services/nodes/adsbNodeStore.js';
+import { _resetNodeClock } from '../sources/adsb.js';
 import { mintNodeToken, _clearNodeTokenCache } from '../services/auth/nodeToken.js';
 
 export const nodesRouter = new Hono();
@@ -945,6 +946,7 @@ nodesRouter.delete('/api/nodes/:id', requireRole(isOwner), async (c) => {
     // receiver stays on the map for up to two minutes and keeps its coverage
     // picture for the rest of the window.
     clearAdsbNodeState(id);
+    _resetNodeClock(id);
     const ok = await deleteNode(id);
     if (!ok) return c.json({ error: 'node not found' }, 404);
     _clearNodeTokenCache();

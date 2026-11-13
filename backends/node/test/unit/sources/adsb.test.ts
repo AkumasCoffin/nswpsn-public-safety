@@ -187,6 +187,39 @@ describe('adsb.mergeAircraft', () => {
     });
   });
 
+  it("takes the freshest record's own squawk, and borrows one only when it has none", async () => {
+    const { normalizeAircraft, mergeAircraft } = await import(
+      '../../../src/sources/adsb.js'
+    );
+    // An older record still on 7700 must not mark an aircraft already back on 1200.
+    const was7700 = normalizeAircraft(raw({ squawk: '7700', seen_pos: 30 }), 'adsb_lol');
+    const now1200 = normalizeAircraft(raw({ squawk: '1200', seen_pos: 1 }), 'adsb_fi');
+    expect(mergeAircraft([was7700!, now1200!])[0]).toMatchObject({
+      squawk: '1200', emergencySquawk: false,
+    });
+    const noSquawk = normalizeAircraft(raw({ squawk: undefined, seen_pos: 1 }), 'adsb_fi');
+    expect(mergeAircraft([was7700!, noSquawk!])[0]).toMatchObject({
+      squawk: '7700', emergencySquawk: true,
+    });
+  });
+
+  it('keeps each receiver its own clock, whatever the receivers are called', async () => {
+    const { normalizeNodeUploadWithTrails, _resetNodeClock } = await import(
+      '../../../src/sources/adsb.js'
+    );
+    _resetNodeClock();
+    const now = 1_800_000_000_000;
+    const upload = (atMs: number) => ({
+      at: new Date(atMs).toISOString(),
+      aircraft: [raw({ seen_pos: 1 })] as never,
+    });
+    // Two receivers both named "home". A's clock runs 30 s fast.
+    normalizeNodeUploadWithTrails(upload(now + 30_000), 'node:home', now, 'id-a');
+    const b = normalizeNodeUploadWithTrails(upload(now), 'node:home', now, 'id-b');
+    // Sharing A's estimate, B's prompt upload looked 30 s late.
+    expect(b.records[0]?.ageSec).toBe(1);
+  });
+
   it('keeps distinct hexes separate', async () => {
     const { normalizeAircraft, mergeAircraft } = await import(
       '../../../src/sources/adsb.js'
@@ -484,15 +517,79 @@ describe('adsb.fetchAdsbAircraft', () => {
     expect(snap.aircraft[0]?.lat).toBe(-34.1);
   });
 
-  it('throws only when every upstream fails', async () => {
+  it('a total outage serves the held aircraft rather than failing the poll', async () => {
+    // Thrown, this put the poller into a five-minute backoff over a blip.
+    vi.setSystemTime(1_800_000_000_000);
     const { fetchAdsbAircraft } = await import('../../../src/sources/adsb.js');
-    fetchJsonMock.mockRejectedValue(new Error('fetch failed: ETIMEDOUT'));
-    const p = fetchAdsbAircraft();
-    // Attach the rejection expectation before advancing timers so the
-    // rejection isn't unhandled.
-    const assertion = expect(p).rejects.toThrow(/all upstreams failed/);
+    fetchJsonMock.mockResolvedValue({ ac: [raw({ hex: 'aaa111' })] });
+    let p = fetchAdsbAircraft();
     await vi.runAllTimersAsync();
-    await assertion;
+    await p;
+    vi.setSystemTime(1_800_000_020_000);
+    fetchJsonMock.mockRejectedValue(new Error('fetch failed: ETIMEDOUT'));
+    p = fetchAdsbAircraft();
+    await vi.runAllTimersAsync();
+    const snap = await p;
+    expect(snap.aircraft.map((a) => a.hex)).toEqual(['aaa111']);
+    expect(snap.upstreams.filter((u) => u.id !== 'nodes').every((u) => !u.ok)).toBe(true);
+  });
+
+  it('ages a feed record by the rest of the sweep before the merge', async () => {
+    // The first circle answers at once; the sweep then staggers on for
+    // seconds. Its 1 s position is older than that by the time it is merged.
+    vi.setSystemTime(1_800_000_000_000);
+    const { fetchAdsbAircraft } = await import('../../../src/sources/adsb.js');
+    let first = true;
+    fetchJsonMock.mockImplementation(() => {
+      const ac = first ? [raw({ hex: 'aaa111', seen_pos: 1 })] : [];
+      first = false;
+      return Promise.resolve({ ac });
+    });
+    const p = fetchAdsbAircraft();
+    await vi.runAllTimersAsync();
+    const snap = await p;
+    const sweepSec = (Date.parse(snap.fetched_at) - 1_800_000_000_000) / 1000;
+    expect(sweepSec).toBeGreaterThan(1);
+    expect(snap.aircraft[0]?.ageSec).toBeCloseTo(1 + sweepSec, 3);
+  });
+
+  it('carries a squawk and its emergency onto a record that arrives without one, briefly', async () => {
+    vi.setSystemTime(1_800_000_000_000);
+    const { fetchAdsbAircraft } = await import('../../../src/sources/adsb.js');
+    const poll = async (over: Record<string, unknown>) => {
+      fetchJsonMock.mockResolvedValue({ ac: [raw({ hex: 'aaa111', ...over })] });
+      const p = fetchAdsbAircraft();
+      await vi.runAllTimersAsync();
+      return (await p).aircraft[0]!;
+    };
+    expect((await poll({ squawk: '7700' })).emergencySquawk).toBe(true);
+    vi.setSystemTime(1_800_000_020_000);
+    const carried = await poll({ squawk: undefined });
+    expect([carried.squawk, carried.emergencySquawk]).toEqual(['7700', true]);
+    vi.setSystemTime(1_800_000_100_000);
+    const lapsed = await poll({ squawk: undefined });
+    expect([lapsed.squawk, lapsed.emergencySquawk]).toEqual([null, false]);
+  });
+
+  it('holds a low aircraft that goes quiet instead of projecting it past the runway', async () => {
+    vi.setSystemTime(1_800_000_000_000);
+    const { fetchAdsbAircraft } = await import('../../../src/sources/adsb.js');
+    fetchJsonMock.mockResolvedValue({
+      ac: [
+        raw({ hex: 'low111', alt_baro: 800, gs: 140, track: 160 }),
+        raw({ hex: 'hi2222', alt_baro: 30000, gs: 450, track: 160 }),
+      ],
+    });
+    let p = fetchAdsbAircraft();
+    await vi.runAllTimersAsync();
+    await p;
+    vi.setSystemTime(1_800_000_070_000);
+    fetchJsonMock.mockResolvedValue({ ac: [] });
+    p = fetchAdsbAircraft();
+    await vi.runAllTimersAsync();
+    const byHex = new Map((await p).aircraft.map((a) => [a.hex, a]));
+    expect(byHex.get('hi2222')?.estimated).toBe(true);
+    expect(byHex.get('low111')?.estimated).toBe(false);
   });
 });
 
@@ -603,7 +700,7 @@ describe('adsb upstream health', () => {
 
   it('with every upstream paused the probes cover the whole map', async () => {
     fetchJsonMock.mockImplementation(() => Promise.reject(status(403)));
-    await expect(poll()).rejects.toThrow(/all upstreams failed/);
+    expect((await poll()).count).toBe(0);
     fetchJsonMock.mockReset();
     fetchJsonMock.mockResolvedValue({ ac: [raw()] });
     vi.setSystemTime(T0 + 61 * 60_000);
