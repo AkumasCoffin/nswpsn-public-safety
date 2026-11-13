@@ -15589,9 +15589,33 @@ function initPagerHoursFromStorage() {
      *  less its age. Compared to keep the newer of two copies. */
     function _adsbStampFix(list, fetchedAt) {
       const base = Date.parse(fetchedAt);
-      const at = Number.isFinite(base) ? base : Date.now();
-      for (const a of list) a._fixMs = at - (Number(a.ageSec) || 0) * 1000;
+      // A server time far from this device's clock (a wrong PC clock) would
+      // make every age count from the wrong moment; count from arrival then.
+      const at = (Number.isFinite(base) && Math.abs(Date.now() - base) < 120000) ? base : Date.now();
+      for (const a of list) { a._fixMs = at - (Number(a.ageSec) || 0) * 1000; a._atMs = at; }
     }
+
+    /** Seconds since the record's answer was built, so ages shown in the
+     *  detail card keep counting between updates. 0 in history replay. */
+    function _adsbSinceMs(a) {
+      if (adsbHistoryMode || !a || !Number.isFinite(a._atMs)) return 0;
+      return Math.max(0, Date.now() - a._atMs);
+    }
+
+    // The detail card's "Position age" and "no signal for" count up every
+    // second; only their text changes, so the card (and its photo) isn't redrawn.
+    setInterval(() => {
+      if (document.hidden || !_adsbPinnedHex) return;
+      const el = document.getElementById('adsb-detail-card');
+      if (!el || !el.classList.contains('open')) return;
+      const a = _adsbAircraft.find((x) => x.hex === _adsbPinnedHex);
+      if (!a) return;
+      const since = _adsbSinceMs(a) / 1000;
+      const age = el.querySelector('[data-adsb-age]');
+      if (age) age.textContent = Math.round((Number(a.ageSec) || 0) + since) + 's';
+      const est = el.querySelector('[data-adsb-est]');
+      if (est) est.textContent = Math.round((a.estimatedSec || a.ageSec || 0) + since) + 's';
+    }, 1000);
 
     function _adsbGlideTo(hex, marker, lat, lon) {
       const from = marker.getLatLng();
@@ -16836,7 +16860,8 @@ function initPagerHoursFromStorage() {
       // from the last real fix.
       const estHtml = a.estimated
         ? '<div class="adsb-dc-est"><i class="fa-solid fa-triangle-exclamation"></i> '
-          + 'Estimated position — no signal for ' + Math.round(a.estimatedSec || a.ageSec) + 's. '
+          + 'Estimated position — no signal for <span data-adsb-est>'
+          + Math.round((a.estimatedSec || a.ageSec || 0) + _adsbSinceMs(a) / 1000) + 's</span>. '
           + 'Projected along its last known heading and speed.</div>'
         : '';
 
@@ -16883,7 +16908,7 @@ function initPagerHoursFromStorage() {
               ? '<span style="color:' + (sqBad ? '#f87171' : '#e2e8f0') + ';">' + escapeHtml(a.squawk) + (sqBad ? ' — EMERGENCY' : '') + '</span>'
               : null)
         +   row('Distance', distTxt)
-        +   row('Position age', Math.round(a.ageSec) + 's')
+        +   row('Position age', '<span data-adsb-age>' + Math.round((Number(a.ageSec) || 0) + _adsbSinceMs(a) / 1000) + 's</span>')
         +   row('ICAO', escapeHtml(a.hex.toUpperCase()), 'mono')
         + '</div>'
         + infoCredit
