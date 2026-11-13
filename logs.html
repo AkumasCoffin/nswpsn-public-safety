@@ -1060,6 +1060,15 @@
       'essential_future': { icon: 'calendar-plus', color: '#06b6d4' },
       'essential_planned': { icon: 'calendar-check', color: '#22c55e' },
       'ausgrid': { icon: 'bolt', color: '#fbbf24' },
+      'ausnet': { icon: 'bolt', color: '#fbbf24' },
+      'citipower': { icon: 'bolt', color: '#fbbf24' },
+      'powercor': { icon: 'bolt', color: '#fbbf24' },
+      'jemena': { icon: 'bolt', color: '#fbbf24' },
+      'energex': { icon: 'bolt', color: '#fbbf24' },
+      'ergon': { icon: 'bolt', color: '#fbbf24' },
+      'sapn': { icon: 'bolt', color: '#fbbf24' },
+      'westernpower': { icon: 'bolt', color: '#fbbf24' },
+      'horizon': { icon: 'bolt', color: '#fbbf24' },
       // BOM
       'bom_land': { icon: 'mountain-sun', color: '#22c55e' },
       'bom_marine': { icon: 'water', color: '#0ea5e9' },
@@ -2432,6 +2441,15 @@
           if (lengthKm > 0) details.push(`<span class="lg-tint" style="--c:#fecaca"><i class="fas fa-ruler-horizontal"></i> ${lengthKm} km</span>`);
           if (delayMins > 0) details.push(`<span class="lg-tint" style="--c:#f87171"><i class="fas fa-clock"></i> ${delayMins}min delay</span>`);
           if (details.length) extraDetails = details.join(' · ');
+        } else if (MERGED_OUTAGE_SOURCES.has(item.source)) {
+          // The other states' distributors, all stored in the merged feed's shape.
+          const customers = Number(data.customers_affected) || 0;
+          if (data.kind) extraInfo += `<span class="lg-badge" style="--badge:#ca8a04">${escapeHtml(data.kind === 'planned' ? 'Planned' : 'Unplanned')}</span>`;
+          if (data.state) extraInfo += `<span class="lg-badge" style="--badge:#475569">${escapeHtml(data.state)}</span>`;
+          const bits = [];
+          if (customers > 0) bits.push(`<span class="lg-tint" style="--c:#f87171"><i class="fas fa-users"></i> ${customers.toLocaleString()}</span>`);
+          if (data.cause) bits.push(escapeHtml(data.cause));
+          if (bits.length) extraDetails = bits.join(' · ');
         } else if (item.source.includes('endeavour')) {
           const suburb = data.suburb || '';
           const postcode = data.postcode || '';
@@ -2908,7 +2926,7 @@
             if (item.source === 'user_incident') sourceColor = '#a855f7';
             else if (item.source.includes('traffic')) sourceColor = '#f97316';
             else if (item.source.includes('waze')) sourceColor = '#06b6d4';
-            else if (item.source.includes('endeavour') || item.source.includes('ausgrid')) sourceColor = '#eab308';
+            else if (item.source.includes('endeavour') || item.source.includes('ausgrid') || MERGED_OUTAGE_SOURCES.has(item.source)) sourceColor = '#eab308';
             else if (item.source.includes('essential')) sourceColor = '#06b6d4';
             else if (item.source.includes('bom')) sourceColor = '#3b82f6';
             
@@ -3509,6 +3527,15 @@
         'endeavour_current': 'Endeavour',
         'endeavour_planned': 'Endeavour',
         'ausgrid': 'Ausgrid',
+        'ausnet': 'AusNet',
+        'citipower': 'CitiPower',
+        'powercor': 'Powercor',
+        'jemena': 'Jemena',
+        'energex': 'Energex',
+        'ergon': 'Ergon Energy',
+        'sapn': 'SA Power Networks',
+        'westernpower': 'Western Power',
+        'horizon': 'Horizon Power',
         'essential_current': 'Essential Energy',
         'essential_planned': 'Essential Energy',
         'essential_future': 'Essential (Future)',
@@ -3596,6 +3623,15 @@
         'bom_land': { primary: '#22c55e', secondary: '#4ade80' },
         'bom_marine': { primary: '#0ea5e9', secondary: '#38bdf8' },
         'ausgrid': { primary: '#eab308', secondary: '#facc15' },
+        'ausnet': { primary: '#eab308', secondary: '#facc15' },
+        'citipower': { primary: '#eab308', secondary: '#facc15' },
+        'powercor': { primary: '#eab308', secondary: '#facc15' },
+        'jemena': { primary: '#eab308', secondary: '#facc15' },
+        'energex': { primary: '#eab308', secondary: '#facc15' },
+        'ergon': { primary: '#eab308', secondary: '#facc15' },
+        'sapn': { primary: '#eab308', secondary: '#facc15' },
+        'westernpower': { primary: '#eab308', secondary: '#facc15' },
+        'horizon': { primary: '#eab308', secondary: '#facc15' },
         'act_ambulance': { primary: '#ec4899', secondary: '#f472b6' },
         'traffic_alpine': { primary: '#7dd3fc', secondary: '#bae6fd' },
         'traffic_lga': { primary: '#a3e635', secondary: '#bef264' },
@@ -3945,6 +3981,32 @@
           });
           html += `</div></div>`;
         }
+      } else if (MERGED_OUTAGE_SOURCES.has(source)) {
+        // The other states' distributors: one shape, so one branch. `details`
+        // holds whatever that distributor gives beyond the common fields.
+        const extraFields = [];
+        const det = (data.details && typeof data.details === 'object') ? data.details : {};
+        if (data.area) extraFields.push(['Area', data.area]);
+        if (det.streets) extraFields.push(['Streets', det.streets]);
+        if (data.state) extraFields.push(['State', data.state]);
+        if (data.kind) extraFields.push(['Type', data.kind === 'planned' ? 'Planned' : 'Unplanned']);
+        if (det.status) extraFields.push(['Status', det.status]);
+        if (data.customers_affected) extraFields.push(['Customers Affected', data.customers_affected]);
+        if (data.start_at) extraFields.push(['Started', formatDateTime(data.start_at)]);
+        if (data.restore_at) extraFields.push(['Est. Restoration', formatDateTime(data.restore_at)]);
+        if (data.lastUpdated) extraFields.push(['Updated by distributor', formatDateTime(data.lastUpdated)]);
+        if (data.cause) extraFields.push(['Cause', data.cause]);
+        if (det.reason) extraFields.push(['Reason', det.reason]);
+
+        if (extraFields.length > 0) {
+          html += `<div class="lg-mb8">
+            <div style="color:#fb923c; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;"><i class="fas fa-info-circle"></i>Details</div>
+            <div class="lg-grid2">`;
+          extraFields.forEach(([label, value]) => {
+            html += `<div class="lg-meta">${escapeHtml(label)}:</div><div class="lg-t10">${escapeHtml(String(value))}</div>`;
+          });
+          html += `</div></div>`;
+        }
       } else if (source === 'ausgrid') {
         // Ausgrid extra details. Records stored before Ausgrid's outage map
         // changed carry only suburb, cause and times; the rest are skipped
@@ -4143,6 +4205,15 @@
         'endeavour_current': '<i class="fas fa-bolt" style="color:#ef4444"></i>',
         'endeavour_planned': '<i class="fas fa-calendar-check" style="color:#22c55e"></i>',
         'ausgrid': '<i class="fas fa-plug" style="color:#facc15"></i>',
+        'ausnet': '<i class="fas fa-plug" style="color:#facc15"></i>',
+        'citipower': '<i class="fas fa-plug" style="color:#facc15"></i>',
+        'powercor': '<i class="fas fa-plug" style="color:#facc15"></i>',
+        'jemena': '<i class="fas fa-plug" style="color:#facc15"></i>',
+        'energex': '<i class="fas fa-plug" style="color:#facc15"></i>',
+        'ergon': '<i class="fas fa-plug" style="color:#facc15"></i>',
+        'sapn': '<i class="fas fa-plug" style="color:#facc15"></i>',
+        'westernpower': '<i class="fas fa-plug" style="color:#facc15"></i>',
+        'horizon': '<i class="fas fa-plug" style="color:#facc15"></i>',
         'essential_current': '<i class="fas fa-bolt" style="color:#06b6d4"></i>',
         'essential_planned': '<i class="fas fa-calendar-check" style="color:#06b6d4"></i>',
         'essential_future': '<i class="fas fa-calendar-alt" style="color:#8b5cf6"></i>',
@@ -4290,6 +4361,10 @@
       return `${days}d ago`;
     }
     
+    // Outage sources stored in the merged feed's shape (/api/v1/outages):
+    // the distributors outside NSW. NSW's three keep their own older shapes.
+    const MERGED_OUTAGE_SOURCES = new Set(['ausnet', 'citipower', 'powercor', 'jemena', 'energex', 'ergon', 'sapn', 'westernpower', 'horizon']);
+
     function formatDateTime(str) {
       // Format ISO date strings to human-readable format
       if (!str) return '';
