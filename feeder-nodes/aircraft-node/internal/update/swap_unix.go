@@ -24,6 +24,16 @@ func swapAndRestart(exePath, pendingPath string) error {
 	if err := os.Chmod(pendingPath, 0o755); err != nil {
 		return fmt.Errorf("chmod pending: %w", err)
 	}
+	// Keep the binary being replaced as <exe>.prev. The rename below would
+	// otherwise be the last anyone saw of it, and a new build that cannot
+	// start leaves a host with nothing to go back to: with this, recovery is
+	// `mv nodeagent.prev nodeagent`. A hard link, so it costs no copy; if it
+	// fails (another filesystem, no permission) the update still goes ahead.
+	prev := exePath + ".prev"
+	_ = os.Remove(prev)
+	if err := os.Link(exePath, prev); err != nil {
+		log.Printf("update: could not keep the previous binary as %s: %v", prev, err)
+	}
 	if err := os.Rename(pendingPath, exePath); err != nil {
 		return fmt.Errorf("replace exe: %w", err)
 	}

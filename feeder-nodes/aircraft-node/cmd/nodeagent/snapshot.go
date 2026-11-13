@@ -164,8 +164,43 @@ func newPositionTrail() *positionTrail {
 	return &positionTrail{byHex: make(map[string][]trailPoint)}
 }
 
+// decoderNowMs is the instant the decoder wrote this file, in epoch ms.
+//
+// seen_pos counts back from THAT instant, not from whenever the agent got
+// round to reading the file. Counting back from the read put every fix late
+// by however long the file had been sitting (up to a second), and put the
+// same fix at two different times when two reads saw one file, so a parked
+// aircraft grew a trail of duplicates a few hundred milliseconds apart.
+//
+// The decoder shares this host's clock, so the two agree to within the file's
+// age. A `now` that is missing, ahead of us, or far behind is not believed
+// and the read time is used as before.
+func decoderNowMs(air *decoderjson.AircraftFile, readAt time.Time) int64 {
+	readMs := readAt.UnixMilli()
+	if air.Now <= 0 {
+		return readMs
+	}
+	fileMs := int64(air.Now * 1000)
+	if lag := readMs - fileMs; lag < 0 || lag > 15_000 {
+		return readMs
+	}
+	return fileMs
+}
+
+// ageToSnapshot re-bases each seen_pos from the decoder's write to the
+// snapshot's own `at`, which is what the backend measures it against.
+func ageToSnapshot(list []snapshotAircraft, lagMs int64) {
+	if lagMs <= 0 {
+		return
+	}
+	lag := float64(lagMs) / 1000
+	for i := range list {
+		list[i].SeenPos += lag
+	}
+}
+
 func (t *positionTrail) observe(air *decoderjson.AircraftFile, now time.Time) {
-	nowMs := now.UnixMilli()
+	nowMs := decoderNowMs(air, now)
 	for i := range air.Aircraft {
 		a := &air.Aircraft[i]
 		if !a.HasPosition() || a.SeenPos == nil || *a.SeenPos > maxPositionAge {
@@ -284,9 +319,12 @@ func runSnapshotLoop(ctx context.Context, m *aircraftManager, q *queue.Queue) {
 
 		now := time.Now()
 		list := buildAircraft(air)
+		ageToSnapshot(list, now.UnixMilli()-decoderNowMs(air, now))
 		attachTrails(list, trail.take(), now)
 		body := snapshotBody{
-			At:       now.UTC().Format(time.RFC3339),
+			// To the millisecond. Whole seconds put up to a second of noise
+			// into the backend's estimate of how long the upload took.
+			At:       now.UTC().Format("2006-01-02T15:04:05.000Z07:00"),
 			Aircraft: list,
 			Stats:    buildStats(air, stats, len(list)),
 		}

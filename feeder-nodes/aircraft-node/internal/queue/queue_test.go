@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -65,5 +66,37 @@ func TestOpenStillClearsCrashedWrites(t *testing.T) {
 	}
 	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
 		t.Fatalf("temp file from a crashed write should be removed, stat err = %v", err)
+	}
+}
+
+// After an outage the queue holds a run of snapshots. Each is the whole
+// picture at one instant, so only the newest is worth sending: draining the
+// stale ones first spent the server's per-minute allowance on them and the
+// fresh ones behind were dropped.
+func TestSendsTheNewestAndDropsWhatItSupersedes(t *testing.T) {
+	q, err := Open(t.TempDir(), 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{`{"n":1}`, `{"n":2}`, `{"n":3}`} {
+		if err := q.Enqueue("application/json", []byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	var sent []string
+	q.RunSender(ctx, func(_ string, body []byte) SendResult {
+		sent = append(sent, string(body))
+		cancel()
+		return SendOK
+	})
+	if len(sent) != 1 || sent[0] != `{"n":3}` {
+		t.Fatalf("sent %v, want only the newest", sent)
+	}
+	if d := q.Depth(); d != 0 {
+		t.Fatalf("depth = %d, want 0: the superseded snapshots should be gone", d)
+	}
+	if n := q.Superseded(); n != 2 {
+		t.Fatalf("superseded = %d, want 2", n)
 	}
 }

@@ -63,7 +63,8 @@ const (
 	backoffMax      = 60 * time.Second
 )
 
-// Queue is a FIFO, disk-backed, bounded call buffer. Safe for concurrent use.
+// Queue is a disk-backed, bounded buffer of snapshots, sent newest first.
+// Safe for concurrent use.
 type Queue struct {
 	dir      string
 	maxBytes int64
@@ -76,15 +77,18 @@ type Queue struct {
 	// can only ever be stale by depthCacheTTL of no activity.
 	depthVal int
 	depthAt  time.Time
-	// Remembered tail of the last sortedFiles scan, consumed in order by
-	// oldest(); see there. Cleared by invalidateDepth.
-	oldestRun []string
-
 	// expired counts snapshots discarded for exceeding maxItemAge — undeliverable,
 	// not undeliverable-yet. Reported in the status heartbeat so a node losing
 	// calls to a long outage is visible rather than silent.
 	expired atomic.Uint64
+	// superseded counts snapshots dropped because a newer one was already
+	// queued behind them (see newest).
+	superseded atomic.Uint64
 }
+
+// Superseded returns how many snapshots were dropped in favour of a newer one
+// this run.
+func (q *Queue) Superseded() uint64 { return q.superseded.Load() }
 
 // Expired returns how many calls were discarded for age this run.
 func (q *Queue) Expired() uint64 { return q.expired.Load() }
@@ -295,45 +299,30 @@ func (q *Queue) Depth() int {
 // own enqueue or send.
 func (q *Queue) invalidateDepth() {
 	q.depthAt = time.Time{}
-	// The directory changed, so a remembered run of "next oldest" names may
-	// no longer be in order (an Enqueue can land before them after a clock
-	// step, and a Purge can remove them).
-	q.oldestRun = nil
 }
 
-// oldest returns the oldest queued item's filename, or "" if empty.
+// newest returns the newest queued item's filename ("" if empty) and the names
+// of every older one.
 //
-// Returns a short RUN of names, cached, rather than re-scanning per item. The
-// underlying sortedFiles is os.ReadDir + sort over the whole queue directory
-// under q.mu, and RunSender called it once per item drained — so clearing a
-// 5000-item backlog cost 5000 scans of 5000 entries, serialised against every
-// Enqueue, exactly when throughput matters most. The cache is dropped whenever
-// the directory changes (invalidateDepth), and a name that has since been sent
-// simply fails to open and is skipped.
-func (q *Queue) oldest() string {
+// A snapshot is the whole picture at one instant, so a newer one supersedes
+// everything before it. The queue used to drain oldest first: after an outage
+// that sent up to ~45 stale snapshots back to back, which used the server's
+// whole per-minute allowance, and the server then silently dropped the fresh
+// ones for the rest of that minute. The map showed minute-old positions just
+// as the link came back. Newest first, the first thing delivered after an
+// outage is the present.
+func (q *Queue) newest() (name string, older []string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-
-	for len(q.oldestRun) > 0 {
-		name := q.oldestRun[0]
-		q.oldestRun = q.oldestRun[1:]
-		if _, err := os.Stat(filepath.Join(q.dir, name)); err == nil {
-			return name
-		}
-	}
-
 	files := q.sortedFiles()
 	if len(files) == 0 {
-		return ""
+		return "", nil
 	}
-	// Keep the next few so the common case — draining in order — does not
-	// re-scan for every one.
-	const runLen = 64
-	q.oldestRun = make([]string, 0, runLen)
-	for i := 1; i < len(files) && i < runLen; i++ {
-		q.oldestRun = append(q.oldestRun, files[i].name)
+	older = make([]string, 0, len(files)-1)
+	for _, f := range files[:len(files)-1] {
+		older = append(older, f.name)
 	}
-	return files[0].name
+	return files[len(files)-1].name, older
 }
 
 // readItem parses a queue file into its Content-Type and body.
@@ -359,10 +348,11 @@ func (q *Queue) remove(name string) {
 	q.invalidateDepth()
 }
 
-// RunSender drains the queue in FIFO order until ctx is cancelled. It repeatedly
-// takes the oldest item and calls send(): on SendOK/SendDrop the item is deleted
-// and it continues immediately; on SendRetry it sleeps with exponential backoff
-// (+jitter) and retries the same item. When the queue is empty it polls briefly.
+// RunSender sends the newest snapshot until ctx is cancelled, dropping the ones
+// it supersedes (see newest). On SendOK/SendDrop the item is deleted and it
+// continues immediately; on SendRetry it sleeps with exponential backoff
+// (+jitter) and then sends whatever is newest by then. When the queue is empty
+// it polls briefly.
 func (q *Queue) RunSender(ctx context.Context, send func(contentType string, body []byte) SendResult) {
 	backoff := backoffInitial
 	for {
@@ -370,7 +360,14 @@ func (q *Queue) RunSender(ctx context.Context, send func(contentType string, bod
 			return
 		}
 
-		name := q.oldest()
+		name, older := q.newest()
+		if len(older) > 0 {
+			for _, o := range older {
+				q.remove(o)
+			}
+			total := q.superseded.Add(uint64(len(older)))
+			log.Printf("queue: dropped %d snapshot(s) superseded by a newer one (%d this run)", len(older), total)
+		}
 		if name == "" {
 			// Empty — wait a bit before polling again.
 			if !sleepCtx(ctx, 500*time.Millisecond) {
