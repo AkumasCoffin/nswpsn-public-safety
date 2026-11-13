@@ -534,10 +534,20 @@ export interface OutageSourceDef {
   intervalMs: number;
   /** Every outage under way or to come. Throws when the distributor's answer is not what it should be. */
   fetch: () => Promise<OutageRecord[]>;
+  /**
+   * Off unless <NAME>_DISABLED=false. For a distributor whose site refuses
+   * this server: polling it would only ask, be refused and log a failure
+   * every few minutes. It stays written and tested, and one env line turns
+   * it on if the distributor allows the server or the refusal stops.
+   */
+  offByDefault?: boolean;
 }
 
-/** <NAME>_DISABLED=true, read when the source registers. */
-const switchedOff = (name: string): boolean => (process.env[`${name.toUpperCase()}_DISABLED`] ?? '').trim().toLowerCase() === 'true';
+/** <NAME>_DISABLED, read when the source registers: 'true' is off, 'false' is on, anything else the source's default. */
+const switchedOff = (name: string, offByDefault = false): boolean => {
+  const v = (process.env[`${name.toUpperCase()}_DISABLED`] ?? '').trim().toLowerCase();
+  return v === 'true' ? true : v === 'false' ? false : offByDefault;
+};
 
 /**
  * Register a distributor with the poller: family `power`, its records stored
@@ -555,7 +565,7 @@ const switchedOff = (name: string): boolean => (process.env[`${name.toUpperCase(
  */
 export function registerOutages(def: OutageSourceDef): void {
   const { name } = def;
-  if (switchedOff(name)) {
+  if (switchedOff(name, def.offByDefault)) {
     liveStore.delete(name);
     return;
   }

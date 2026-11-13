@@ -436,7 +436,7 @@ describe('outageArchiveItems', () => {
 });
 
 describe('registerOutages', () => {
-  const ENV = ['WESTERNPOWER_DISABLED', 'HORIZON_DISABLED', 'SAPN_DISABLED'];
+  const ENV = ['WESTERNPOWER_DISABLED', 'HORIZON_DISABLED', 'SAPN_DISABLED', 'JEMENA_DISABLED'];
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(NOW);
@@ -495,6 +495,18 @@ describe('registerOutages', () => {
       expect(getSource('sapn'), v).toBeDefined();
     }
     expect(liveStore.getData<Outage[]>('sapn')?.[0]?.id).toBe('kept');
+  });
+
+  it('offByDefault: off unless <NAME>_DISABLED=false, for a distributor whose site refuses this server', () => {
+    // A name no earlier test in this file has registered.
+    liveStore.set('jemena', [withStatus(outageOf('jemena', { id: 'old', kind: 'unplanned' }), NOW)]);
+    registerOutages({ name: 'jemena', intervalMs: 180_000, fetch: async () => [], offByDefault: true });
+    expect(getSource('jemena')).toBeUndefined();
+    expect(liveStore.get('jemena')).toBeNull();
+
+    process.env['JEMENA_DISABLED'] = 'false';
+    registerOutages({ name: 'jemena', intervalMs: 180_000, fetch: async () => [], offByDefault: true });
+    expect(getSource('jemena')).toBeDefined();
   });
 });
 

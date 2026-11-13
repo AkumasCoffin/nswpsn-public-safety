@@ -1,5 +1,7 @@
 /**
- * Wire-up file for the three power sources.
+ * Wire-up file for the power sources: NSW's three distributors, each with a
+ * module of its own shape, and the other states' nine, which all answer in
+ * the merged feed's shape (sources/outages/).
  *
  * Each source module owns its own `register()` (registerSource calls into
  * the shared registry). This file is just a one-liner the entry point
@@ -12,11 +14,25 @@
 import registerEndeavour from './endeavour.js';
 import registerAusgrid from './ausgrid.js';
 import registerEssential from './essential.js';
+import registerAusnet from './outages/ausnet.js';
+import registerCppc from './outages/cppc.js';
+import registerJemena from './outages/jemena.js';
+import registerEnergyq from './outages/energyq.js';
+import registerSapn from './outages/sapn.js';
+import registerWesternPower from './outages/westernpower.js';
+import registerHorizon from './outages/horizon.js';
 
 export function registerAllPowerSources(): void {
   registerEndeavour();
   registerAusgrid();
   registerEssential();
+  registerAusnet(); // VIC
+  registerCppc(); // VIC: CitiPower and Powercor, one file
+  registerJemena(); // VIC
+  registerEnergyq(); // QLD: Energex and Ergon
+  registerSapn(); // SA
+  registerWesternPower(); // WA
+  registerHorizon(); // WA
 }
 
 export default registerAllPowerSources;

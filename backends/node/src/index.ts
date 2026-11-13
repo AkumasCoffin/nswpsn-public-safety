@@ -131,7 +131,7 @@ async function preflight(): Promise<void> {
   // Register every source with the source registry. The poller walks
   // the registry; nothing happens until startPolling() fires.
   registerAllSources(); // rfs, bom, traffic, beach, weather, pager
-  registerAllPowerSources(); // endeavour, ausgrid, essential
+  registerAllPowerSources(); // NSW's three distributors and the other states' nine
 
   liveStore.startPersistLoop();
   // Ensure this month's (and next month's) archive partitions exist
