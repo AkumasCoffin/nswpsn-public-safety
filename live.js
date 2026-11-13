@@ -568,6 +568,22 @@
     set('aircraft', ['aircraft'], html);
   }
 
+  /**
+   * A column chart over time. slots: [{ from, to, n }], oldest first; `ticks`
+   * are the slot indexes that get a clock time under them. Columns are plain
+   * boxes with their count as text for assistive tech and on hover.
+   */
+  function columns(title, slots, ticks) {
+    const max = Math.max(1, ...slots.map((sl) => sl.n));
+    const total = slots.reduce((n, sl) => n + sl.n, 0);
+    return `<h3 class="lv-sub">${esc(title)}</h3>
+      <div class="lv-cols" role="img" aria-label="${esc(`${title}: ${total} in all, at most ${max} in one step`)}">
+        <div class="lv-cols-scale" aria-hidden="true"><span>${num(max)}</span><span>0</span></div>
+        <div class="lv-cols-plot">${slots.map((sl) => `<div class="lv-col${sl.n ? '' : ' is-zero'}" title="${esc(`${clock(sl.from)} – ${clock(sl.to)}: ${sl.n}`)}"><span style="height:${sl.n ? Math.max(6, (sl.n / max) * 100).toFixed(1) : 0}%"></span></div>`).join('')}</div>
+        <div class="lv-cols-axis" aria-hidden="true">${slots.map((sl, i) => `<span>${ticks.includes(i) ? esc(clock(sl.from)) : ''}</span>`).join('')}</div>
+      </div>`;
+  }
+
   function renderPager() {
     const pr = problem(['pager'], 'pager messages');
     if (pr.block) return set('pager', ['pager'], pr.html);
@@ -575,20 +591,28 @@
       const p = f.properties || {};
       return { type: tidy(p.type), stop: p.is_stop === true, time: toMs(p.timestamp) || toMs(p.fetched_at) };
     });
-    // Six half-hour steps back from now, oldest first.
-    const HALF = 1_800_000, now = Date.now();
-    const slots = Array.from({ length: 6 }, (_, i) => ({ from: now - (6 - i) * HALF, n: 0 }));
+    // Twelve quarter-hour steps on the clock's own quarters (6:00, 6:15, …),
+    // the last one still filling, so a column keeps its meaning between refreshes.
+    const Q = 900_000, now = Date.now();
+    const end = Math.floor(now / Q) * Q + Q;
+    const slots = Array.from({ length: 12 }, (_, i) => ({ from: end - (12 - i) * Q, to: end - (11 - i) * Q, n: 0 }));
     for (const x of items) {
       if (x.time == null) continue;
-      const i = Math.floor((x.time - (now - 6 * HALF)) / HALF);
-      if (i >= 0 && i < 6) slots[i].n += 1;
+      const i = Math.floor((x.time - slots[0].from) / Q);
+      if (i >= 0 && i < 12) slots[i].n += 1;
     }
+    // A time under each column that starts an hour.
+    const ticks = slots.map((sl, i) => (new Date(sl.from).getMinutes() === 0 ? i : -1)).filter((i) => i >= 0);
     const types = {};
     for (const x of items) { const t = x.stop ? 'Stop message' : (x.type || 'Type not read'); types[t] = (types[t] || 0) + 1; }
+    const last = items.reduce((m, x) => Math.max(m, x.time || 0), 0);
+    const chips = Object.entries(types).sort((a, b) => b[1] - a[1]).slice(0, 8);
     const html = pr.html
-      + figs([[items.length, 'located messages, last 3 hours'], [items.filter((x) => x.stop).length, 'stop messages']])
-      + bars('Messages by half hour', slots.map((sl) => ({ label: `${clock(sl.from)} – ${clock(sl.from + HALF)}`, value: sl.n })), { empty: 'No located pager messages in the last three hours.' })
-      + bars('By type', Object.entries(types).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([label, value]) => ({ label, value })), { empty: 'No located pager messages in the last three hours.' })
+      + figs([[items.length, 'located messages, last 3 hours'], last ? [ago(last), 'most recent'] : null])
+      + (items.length
+        ? columns('Messages per quarter hour', slots, ticks)
+          + `<h3 class="lv-sub">By type</h3><p class="lv-chips">${chips.map(([label, n]) => `<span><b class="lv-num">${num(n)}</b>${esc(label)}</span>`).join('')}</p>`
+        : '<p class="lv-empty">No located pager messages in the last three hours.</p>')
       + '<p class="lv-note">Counts only the messages that could be placed on the map. The messages themselves are on the <a href="map">map</a> and in the <a href="logs">logs</a>.</p>';
     set('pager', ['pager'], html);
   }

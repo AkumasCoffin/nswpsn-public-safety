@@ -204,6 +204,23 @@
 .lv-legend { display: flex; flex-wrap: wrap; gap: 0.3rem 1.2rem; margin: 0.55rem 0 0; font-size: 13px; color: var(--text-muted); }
 .lv-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 0.4rem; }
 .lv-legend b { color: var(--text-main); }
+/* A column chart over time: a scale on the left, columns, clock times under the hours. */
+.lv-cols { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.3rem 0.5rem; }
+.lv-cols-scale { display: flex; flex-direction: column; justify-content: space-between; text-align: right; font-size: 12px; color: var(--text-soft); font-variant-numeric: tabular-nums; }
+.lv-cols-plot {
+  display: flex; align-items: flex-end; gap: 4px; height: 110px; padding: 0 2px;
+  border-bottom: 1px solid var(--lv-line-strong);
+  background: linear-gradient(to bottom, var(--lv-line) 1px, transparent 1px) 0 0 / 100% 50% repeat-y;
+}
+.lv-col { flex: 1 1 0; height: 100%; display: flex; align-items: flex-end; min-width: 0; }
+.lv-col span { display: block; width: 100%; border-radius: 4px 4px 0 0; background: #cbd5e1; }
+.lv-col:hover span { background: #f8fafc; }
+.lv-cols-axis { grid-column: 2; display: flex; gap: 4px; padding: 0 2px; font-size: 12px; color: var(--text-muted); }
+.lv-cols-axis span { flex: 1 1 0; min-width: 0; white-space: nowrap; }
+.lv-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0; }
+.lv-chips span { display: inline-flex; align-items: baseline; gap: 0.45rem; font-size: 13px; padding: 0.3rem 0.65rem; border: 1px solid var(--lv-line-strong); border-radius: 999px; color: var(--text-muted); }
+.lv-chips b { color: var(--text-main); }
+
 /* Water quality: good and fair are quiet, the two that matter stand out. */
 .is-good { background: var(--lv-ok); }
 .is-fair { background: #94a3b8; }
