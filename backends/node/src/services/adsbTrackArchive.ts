@@ -142,7 +142,12 @@ export function noteAdsbPositions(observed: AdsbAircraft[], nowMs: number): void
     if (a.type) id.type = a.type;
     if (a.esTag) id.esTag = a.esTag;
     id.lastSeenMs = nowMs;
-    addPoint(a.hex, [nowMs, a.lat, a.lon, a.altFt], a.sources);
+    // Stamped with when the fix was heard, not when the poll finished: an
+    // aggregator position can be ~20 s old by then, and our receivers' points
+    // (noteAdsbNodePoints) carry their real times, so a poll-time stamp put
+    // it after newer points and the replayed track doubled back.
+    const fixMs = nowMs - Math.max(0, Number.isFinite(a.ageSec) ? a.ageSec : 0) * 1000;
+    addPoint(a.hex, [Math.round(fixMs), a.lat, a.lon, a.altFt], a.sources);
   }
 }
 

@@ -128,10 +128,31 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+/** What the handler serves for SNAPSHOT: each aircraft gains seenAt, the
+ *  moment it was heard (fetched_at less its age). */
+const SERVED = {
+  ...SNAPSHOT,
+  aircraft: SNAPSHOT.aircraft.map((x) => ({
+    ...x,
+    seenAt: new Date(Date.parse(SNAPSHOT.fetched_at) - x.ageSec * 1000).toISOString(),
+  })),
+};
+
 describe('GET /api/adsb/aircraft and /api/v1/adsb/aircraft', () => {
+  it('stamps each aircraft with when it was heard', async () => {
+    const a = await app();
+    const res = (await (await a.request('/api/v1/adsb/aircraft')).json()) as {
+      data: { aircraft: Array<{ hex: string; seenAt: string }> };
+    };
+    expect(res.data.aircraft.map((x) => [x.hex, x.seenAt])).toEqual([
+      ['7c6b2d', '2026-10-28T03:59:57.600Z'],
+      ['~2a01f0', '2026-10-28T03:59:46.000Z'],
+    ]);
+  });
+
   it('the snapshot plus the history window — bare on the old path, in data on v1', async () => {
     const a = await app();
-    const body = { ...SNAPSHOT, history: { retentionDays: DATA_RETENTION_DAYS, oldestMs: OLDEST, newestMs: NOW } };
+    const body = { ...SERVED, history: { retentionDays: DATA_RETENTION_DAYS, oldestMs: OLDEST, newestMs: NOW } };
 
     const old = await a.request('/api/adsb/aircraft');
     expect(old.status).toBe(200);
@@ -160,7 +181,7 @@ describe('GET /api/adsb/trails and /api/v1/adsb/trails', () => {
 describe('?recent= on the live aircraft and trails', () => {
   it('serves the recent aircraft, cached for 2 s, on both paths', async () => {
     const a = await app();
-    const body = { ...SNAPSHOT, count: 1, history: { retentionDays: DATA_RETENTION_DAYS, oldestMs: OLDEST, newestMs: NOW } };
+    const body = { ...SERVED, count: 1, history: { retentionDays: DATA_RETENTION_DAYS, oldestMs: OLDEST, newestMs: NOW } };
     const v1 = await a.request('/api/v1/adsb/aircraft?recent=15');
     expect(v1.status).toBe(200);
     expect(v1.headers.get('Cache-Control')).toBe('public, max-age=2');

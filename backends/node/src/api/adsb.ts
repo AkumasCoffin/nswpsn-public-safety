@@ -144,7 +144,38 @@ const AdsbSnapshotSchema = z.object({
 });
 assertShape<SameShape<z.infer<typeof AdsbSnapshotSchema>, AdsbSnapshot>>();
 
+const AdsbAircraftOut = AdsbAircraftRecord.extend({
+  seenAt: z
+    .string()
+    .describe(
+      'When the position was heard, ISO 8601; for an estimated one, when its last real fix was. '
+        + 'Count "seconds ago" from this rather than ageSec, which is only true at fetched_at',
+    ),
+});
+
+/** The served aircraft, each with `seenAt`: fetched_at less its age. Memoised
+ *  per snapshot object (the full one changes per poll, the recent one per
+ *  second), so many viewers cost one pass. */
+type AircraftOut = AdsbSnapshot['aircraft'][number] & { seenAt: string };
+const _seenAtMemo = new WeakMap<AdsbSnapshot, AircraftOut[]>();
+function withSeenAt(snap: AdsbSnapshot): Omit<AdsbSnapshot, 'aircraft'> & { aircraft: AircraftOut[] } {
+  let aircraft = _seenAtMemo.get(snap);
+  if (!aircraft) {
+    const at = Date.parse(snap.fetched_at);
+    const base = Number.isFinite(at) ? at : Date.now();
+    aircraft = snap.aircraft.map((a) => ({
+      ...a,
+      seenAt: new Date(base - Math.max(0, a.ageSec) * 1000).toISOString(),
+    }));
+    _seenAtMemo.set(snap, aircraft);
+  }
+  return { ...snap, aircraft };
+}
+
 const AdsbAircraft = AdsbSnapshotSchema.extend({
+  aircraft: z
+    .array(AdsbAircraftOut)
+    .describe('Those with an esTag or emergencySquawk first, then by altitude, lowest first; no altitude (including on the ground) last'),
   history: z
     .object({
       retentionDays: z.number().int().describe('Days of history kept'),
@@ -270,7 +301,7 @@ adsbRouter.get(
     // the full answer must stay uncached for the 15 s refresh.
     if (recent !== null) c.header('Cache-Control', RECENT_CACHE);
     return ok(c, {
-      ...(recent !== null ? adsbRecentAircraft(recent, now) : adsbSnapshot()),
+      ...withSeenAt(recent !== null ? adsbRecentAircraft(recent, now) : adsbSnapshot()),
       history: {
         retentionDays: DATA_RETENTION_DAYS,
         oldestMs: adsbHistoryOldestMs(now),

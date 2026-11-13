@@ -2625,6 +2625,10 @@
                     }
                   ],
                   "description": "When estimated, seconds since the last real fix; otherwise null"
+                },
+                "seenAt": {
+                  "type": "string",
+                  "description": "When the position was heard, ISO 8601; for an estimated one, when its last real fix was. Count \"seconds ago\" from this rather than ageSec, which is only true at fetched_at"
                 }
               },
               "required": [
@@ -2646,7 +2650,8 @@
                 "sourceCount",
                 "sources",
                 "estimated",
-                "estimatedSec"
+                "estimatedSec",
+                "seenAt"
               ],
               "additionalProperties": false
             },

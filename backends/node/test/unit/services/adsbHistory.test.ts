@@ -109,6 +109,13 @@ describe('writing minutes', () => {
     expect(adsbArchivedThroughMs()).toBe(T0 + MIN);
   });
 
+  it('stamps a position with when it was heard, not when the poll saw it', async () => {
+    // Seen by a poll at +40 s, but the aggregator heard it 25 s before that.
+    noteAdsbPositions([ac({ ageSec: 25 })], T0 + 40_000);
+    await _flushAdsbTracksNow(T0 + MIN + 20_000);
+    expect(chunkInserts()[0]!.json.abc123.p.map((p: P) => p[0])).toEqual([15_000]);
+  });
+
   it('only ever inserts — never an UPDATE of history', async () => {
     noteAdsbPositions([ac()], T0 + 10_000);
     await _flushAdsbTracksNow(T0 + 2 * MIN);

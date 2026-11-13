@@ -15213,7 +15213,7 @@ function initPagerHoursFromStorage() {
       // real fix rather than something anyone reported.
       const est = a.estimated
         ? '<div style="color:#fbbf24;font-size:10px;margin-top:3px;">'
-          + 'estimated · no signal ' + Math.round(a.estimatedSec || a.ageSec) + 's</div>'
+          + 'estimated · no signal ' + _adsbHeardAgo(a) + 's</div>'
         : '';
 
       return '<div style="font-family:system-ui,sans-serif;color:#e2e8f0;font-size:11px;'
@@ -15585,21 +15585,32 @@ function initPagerHoursFromStorage() {
     let _adsbTrailFloorMs = 0;
     let _adsbGlideRaf = 0;
 
-    /** When each record's position was actually heard: the response time
-     *  less its age. Compared to keep the newer of two copies. */
+    // How far this device's clock runs ahead of the server's, when it is off
+    // by more than two minutes (a wrong PC clock); otherwise 0. Taken off
+    // Date.now() so "seconds ago" isn't wrong by the clock's error.
+    let _adsbClockSkewMs = 0;
+
+    /** When each record's position was heard (the server's seenAt; for an
+     *  estimated one, its last real fix). Compared to keep the newer of two
+     *  copies, and counted from for "seconds ago". */
     function _adsbStampFix(list, fetchedAt) {
       const base = Date.parse(fetchedAt);
-      // A server time far from this device's clock (a wrong PC clock) would
-      // make every age count from the wrong moment; count from arrival then.
-      const at = (Number.isFinite(base) && Math.abs(Date.now() - base) < 120000) ? base : Date.now();
-      for (const a of list) { a._fixMs = at - (Number(a.ageSec) || 0) * 1000; a._atMs = at; }
+      if (Number.isFinite(base)) {
+        const skew = Date.now() - base;
+        _adsbClockSkewMs = Math.abs(skew) >= 120000 ? skew : 0;
+      }
+      const at = Number.isFinite(base) ? base : Date.now() - _adsbClockSkewMs;
+      for (const a of list) {
+        const seen = Date.parse(a.seenAt);
+        a._fixMs = Number.isFinite(seen) ? seen : at - (Number(a.ageSec) || 0) * 1000;
+      }
     }
 
-    /** Seconds since the record's answer was built, so ages shown in the
-     *  detail card keep counting between updates. 0 in history replay. */
-    function _adsbSinceMs(a) {
-      if (adsbHistoryMode || !a || !Number.isFinite(a._atMs)) return 0;
-      return Math.max(0, Date.now() - a._atMs);
+    /** Seconds since the position was heard, counting up between updates.
+     *  History replay shows the age as recorded. */
+    function _adsbHeardAgo(a) {
+      if (adsbHistoryMode || !Number.isFinite(a._fixMs)) return Math.round(a.estimatedSec || a.ageSec || 0);
+      return Math.max(0, Math.round((Date.now() - _adsbClockSkewMs - a._fixMs) / 1000));
     }
 
     // The detail card's "Position age" and "no signal for" count up every
@@ -15610,11 +15621,8 @@ function initPagerHoursFromStorage() {
       if (!el || !el.classList.contains('open')) return;
       const a = _adsbAircraft.find((x) => x.hex === _adsbPinnedHex);
       if (!a) return;
-      const since = _adsbSinceMs(a) / 1000;
-      const age = el.querySelector('[data-adsb-age]');
-      if (age) age.textContent = Math.round((Number(a.ageSec) || 0) + since) + 's';
-      const est = el.querySelector('[data-adsb-est]');
-      if (est) est.textContent = Math.round((a.estimatedSec || a.ageSec || 0) + since) + 's';
+      const ago = _adsbHeardAgo(a) + 's';
+      for (const n of el.querySelectorAll('[data-adsb-age],[data-adsb-est]')) n.textContent = ago;
     }, 1000);
 
     function _adsbGlideTo(hex, marker, lat, lon) {
@@ -16861,7 +16869,7 @@ function initPagerHoursFromStorage() {
       const estHtml = a.estimated
         ? '<div class="adsb-dc-est"><i class="fa-solid fa-triangle-exclamation"></i> '
           + 'Estimated position — no signal for <span data-adsb-est>'
-          + Math.round((a.estimatedSec || a.ageSec || 0) + _adsbSinceMs(a) / 1000) + 's</span>. '
+          + _adsbHeardAgo(a) + 's</span>. '
           + 'Projected along its last known heading and speed.</div>'
         : '';
 
@@ -16908,7 +16916,7 @@ function initPagerHoursFromStorage() {
               ? '<span style="color:' + (sqBad ? '#f87171' : '#e2e8f0') + ';">' + escapeHtml(a.squawk) + (sqBad ? ' — EMERGENCY' : '') + '</span>'
               : null)
         +   row('Distance', distTxt)
-        +   row('Position age', '<span data-adsb-age>' + Math.round((Number(a.ageSec) || 0) + _adsbSinceMs(a) / 1000) + 's</span>')
+        +   row('Position age', '<span data-adsb-age>' + _adsbHeardAgo(a) + 's</span>')
         +   row('ICAO', escapeHtml(a.hex.toUpperCase()), 'mono')
         + '</div>'
         + infoCredit
