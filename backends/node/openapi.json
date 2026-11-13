@@ -3541,7 +3541,7 @@
                         "essential_future",
                         "ausgrid"
                       ],
-                      "description": "What stored history files it under (/api/v1/history?source=…&source_id=<id> finds its past): endeavour_current for unplanned and endeavour_planned for planned Endeavour Energy outages; essential_current (unplanned), essential_planned (planned, under way) and essential_future (to come) for Essential Energy; ausgrid"
+                      "description": "What stored history files it under (/api/v1/history?source=…&source_id=<id> finds its past): endeavour_current for unplanned and endeavour_planned for planned Endeavour Energy outages; essential_current (unplanned), essential_planned (planned, under way) and essential_future (to come) for Essential Energy; ausgrid for every Ausgrid outage"
                     },
                     "distributor": {
                       "type": "string",
@@ -3601,7 +3601,7 @@
                       ]
                     },
                     "updated_at": {
-                      "description": "When the distributor last updated the outage, ISO 8601 UTC; null when the distributor gives none, or one that cannot be read (then details has it as written); Ausgrid gives none",
+                      "description": "When the distributor last updated the outage, ISO 8601 UTC; null when the distributor gives none, or one that cannot be read (then details has it as written)",
                       "type": [
                         "string",
                         "null"
@@ -3626,7 +3626,7 @@
                         "type": "string"
                       },
                       "additionalProperties": {},
-                      "description": "The distributor's own extra fields, under the per-distributor feed's names (Endeavour Energy: streets, postcode, status; Essential Energy: title)"
+                      "description": "The distributor's own extra fields, under the per-distributor feed's names (Endeavour Energy: streets, postcode, status; Essential Energy: title; Ausgrid: streets, status in words, power_status as Ausgrid writes it, reason)"
                     }
                   },
                   "required": [
@@ -3685,7 +3685,7 @@
                   "description": "Outages from this distributor in this answer, after the filters"
                 },
                 "updated_at": {
-                  "description": "When this server last read all of the distributor's outage feeds (the earliest of their last reads), ISO 8601 UTC; null if one has not been read yet — as for Ausgrid, which is not being read for now",
+                  "description": "When this server last read all of the distributor's outage feeds (the earliest of their last reads), ISO 8601 UTC; null if one has not been read yet or is switched off",
                   "type": [
                     "string",
                     "null"
@@ -9270,7 +9270,7 @@
           "Power outages"
         ],
         "summary": "Every distributor, one feed",
-        "description": "Electricity outages on Endeavour Energy's, Essential Energy's and Ausgrid's networks — unplanned and planned, now and to come — from each distributor's public outage data, in one shape: the common fields every distributor has, plus `details` for each one's own. `kind` says whether an outage is unplanned or planned, and `status` whether the power is off now or the work is still to come; distributor, kind and status narrow the list. Times are UTC; Essential Energy writes its own without a zone, so they are read as Sydney time. `sources` says per distributor how many outages it gave and when this server last read it: Ausgrid's outage map service has stopped answering, so it is not being read for now and gives none. Refreshed every one to five minutes.",
+        "description": "Electricity outages on Endeavour Energy's, Essential Energy's and Ausgrid's networks — unplanned and planned, now and to come — from each distributor's public outage data, in one shape: the common fields every distributor has, plus `details` for each one's own. `kind` says whether an outage is unplanned or planned, and `status` whether the power is off now or the work is still to come; distributor, kind and status narrow the list. Times are UTC; Essential Energy writes its own without a zone, so they are read as Sydney time. `sources` says per distributor how many outages it gave and when this server last read it. Ausgrid's planned work is listed up to 30 days ahead. Refreshed every one to five minutes.",
         "responses": {
           "200": {
             "description": "A GeoJSON FeatureCollection of outages",

@@ -45,10 +45,16 @@ describe('stats router', () => {
     liveStore.set('endeavour_planned', [
       { customersAffected: 1, outageType: 'Future Maintenance' },
     ]);
+    const ahead = new Date(Date.now() + 14 * 86_400_000).toISOString();
+    const earlier = new Date(Date.now() - 3_600_000).toISOString();
     liveStore.set('ausgrid', {
       Markers: [
-        { customersAffected: 2, outageType: 'Unplanned' },
-        { customersAffected: 4, outageType: 'Planned' },
+        { customersAffected: 2, outageType: 'Unplanned', OutageType: 'Unplanned', StartTime: earlier },
+        { customersAffected: 4, outageType: 'Planned', OutageType: 'Planned', StartTime: earlier },
+        // Planned work still to come: listed, but nobody is off yet, so
+        // it is in none of the counts.
+        { customersAffected: 300, outageType: 'Planned', OutageType: 'Planned', StartTime: ahead },
+        { customersAffected: 150, outageType: 'Planned', OutageType: 'Planned', StartTime: ahead },
       ],
       Polygons: [],
     });
@@ -79,6 +85,9 @@ describe('stats router', () => {
     expect(power['ausgrid']?.['planned']).toBe(1);
     expect(power['ausgrid']?.['total']).toBe(2);
     expect(power['ausgrid']?.['customers_affected']).toBe(6);
+    // 3 Endeavour + 2 Ausgrid + 3 Essential; 18 + 6 + 10 customers.
+    expect((power as unknown as Record<string, number>)['total_outages']).toBe(8);
+    expect((power as unknown as Record<string, number>)['total_customers']).toBe(34);
 
     expect(power['essential']?.['unplanned']).toBe(1);
     expect(power['essential']?.['planned']).toBe(2);

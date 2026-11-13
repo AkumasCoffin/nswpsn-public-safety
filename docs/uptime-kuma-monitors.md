@@ -89,10 +89,11 @@ Any other registry source works the same way — use its registry name, subject 
 the same warning. A rollup is available too: `summary.sources_total`,
 `summary.sources_ok` and `summary.sources_unknown`.
 
-**There is no `ausgrid` key.** The two Ausgrid sources do not register at all:
-`AUSGRID_DISABLED` defaults to `'true'` (`backends/node/src/sources/ausgrid.ts:262`)
-because the upstream endpoints have 404'd for months. An expression pointing at
-`checks.sources.ausgrid.ok` does not resolve against the live payload.
+**The `ausgrid` key can be switched off.** The two Ausgrid sources (`ausgrid`,
+`ausgrid_stats`) register by default. With `AUSGRID_DISABLED=true`
+(`backends/node/src/sources/ausgrid.ts:353`) they do not register at all, and
+an expression pointing at `checks.sources.ausgrid.ok` does not resolve against
+the live payload.
 
 ## Notes
 

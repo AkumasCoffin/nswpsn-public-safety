@@ -125,8 +125,16 @@ describe('summariseByState', () => {
     liveStore.set('essential_future', [
       { incidentId: 'ES-2', customersAffected: 50, outageType: 'planned', status: 'scheduled', feedType: 'future' },
     ]);
+    // Ausgrid lists planned work up to 30 days ahead: only what has started counts.
+    liveStore.set('ausgrid', {
+      Markers: [
+        { OutageId: 1, CustomersAffected: 20, OutageType: 'Unplanned', StartTime: new Date(Date.now() - 3_600_000).toISOString() },
+        { OutageId: 2, CustomersAffected: 400, OutageType: 'Planned', StartTime: new Date(Date.now() + 86_400_000).toISOString() },
+      ],
+      Polygons: [],
+    });
 
-    expect(summariseByState()).toEqual({ NSW: { outages: 4, customers: 25 } });
+    expect(summariseByState()).toEqual({ NSW: { outages: 5, customers: 45 } });
   });
 
   it('says 0 outages once a distributor has been read and has none', () => {

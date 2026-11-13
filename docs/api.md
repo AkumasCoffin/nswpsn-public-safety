@@ -230,7 +230,7 @@ unplanned and planned, now and to come, each record in the same shape:
 | `cause` | As the distributor gives it; empty when not given |
 | `start_at`, `restore_at`, `updated_at` | When the power went or goes off, when it is expected back, and the distributor's last update — ISO 8601 UTC, or `null` when not given or not readable (then `details` has it as written) |
 | `polygons` | The outage area's outline, outer rings of `[longitude, latitude]`; empty when the distributor gives none (Essential Energy gives one) |
-| `details` | The distributor's own extra fields under their own names (Endeavour Energy `streets`, `postcode` and its own `status` wording; Essential Energy `title`) |
+| `details` | The distributor's own extra fields under their own names (Endeavour Energy `streets`, `postcode` and its own `status` wording; Essential Energy `title`; Ausgrid `streets`, `status` in words, `power_status` as Ausgrid writes it, and `reason`) |
 
 The geometry is the distributor's marker, or `null` when it gives no position.
 Essential Energy writes its times with no zone; they are NSW time and are read
@@ -239,9 +239,9 @@ as Sydney time. Filters, each a comma list in any case: `distributor=`,
 is a `400 validation_failed` naming it. The collection also carries `sources`,
 one entry per distributor asked for, with how many outages it gave (after the
 filters) and when this server last read all of its feeds (`updated_at`, `null`
-if one has not been read yet). Ausgrid's outage map service stopped answering,
-so it is not being read for now: it gives no outages and its `updated_at` is
-`null`.
+if one has not been read yet). Ausgrid lists planned work up to 30 days ahead,
+so most of its records are `scheduled`; its outages under way are read every
+two minutes and the days ahead every half hour.
 
 ### Stored history
 

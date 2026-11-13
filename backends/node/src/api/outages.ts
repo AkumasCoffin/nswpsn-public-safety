@@ -24,9 +24,9 @@
  * and the common field is null.
  *
  * `sources` says, per distributor, how many outages it gave and when this
- * server last read it, so a distributor that is not being read (Ausgrid, for
- * now — its outage map service stopped answering) shows as not read rather
- * than as no outages.
+ * server last read it, so a distributor that is not being read (one switched
+ * off, or not read yet since a restart) shows as not read rather than as no
+ * outages.
  *
  * Registered at /api/outages and mirrored to /api/v1/ like every other feed;
  * the old path is nobody's and goes when old paths are retired.
@@ -37,7 +37,7 @@ import { describeRoute } from 'hono-openapi';
 import { liveStore } from '../store/live.js';
 import type { EndeavourOutage } from '../sources/endeavour.js';
 import type { EssentialOutage } from '../sources/essential.js';
-import type { AusgridOutage, AusgridOutagesPayload } from '../sources/ausgrid.js';
+import { ausgridScheduled, type AusgridOutage, type AusgridOutagesPayload } from '../sources/ausgrid.js';
 import { sydneyUnixFromNaive } from '../lib/sydneyTime.js';
 import { scoped } from '../services/auth/apiKeyScopes.js';
 import { geo } from './v1/respond.js';
@@ -211,32 +211,50 @@ export function fromEssential(o: EssentialOutage): Outage {
   };
 }
 
-// Ausgrid gives every field twice (PascalCase and camelCase); the camelCase
-// copies are left out of details, and the PascalCase ones mapped are too.
+// Every field of an Ausgrid record is accounted for here, so detailsOf adds
+// nothing but a time that could not be read. The record gives most fields
+// twice (PascalCase and camelCase) and several that Ausgrid never fills
+// (JobId, Postcode, Detail, Classification, Polygons); fromAusgrid writes the
+// ones that say something into details itself, under the names Endeavour's
+// details use where it has the same thing.
 const AUSGRID_MAPPED = new Set([
-  'OutageId', 'Suburb', 'CustomersAffected', 'OutageType', 'Cause', 'EndDateTime', 'Latitude', 'Longitude',
+  'OutageId', 'JobId', 'Suburb', 'StreetName', 'Streets', 'Postcode', 'CustomersAffected', 'OutageType', 'Cause',
+  'Reason', 'Detail', 'StatusText', 'EndDateTime', 'Latitude', 'Longitude', 'Status', 'Classification', 'Polygons',
   'outageId', 'suburb', 'streetName', 'streets', 'postcode', 'customersAffected', 'outageType', 'cause',
   'startTime', 'estRestoration', 'endDateTime', 'latitude', 'longitude',
 ]);
 
-export function fromAusgrid(o: AusgridOutage): Outage {
-  const times = { StartTime: outageUtc(o.StartTime), EstRestoration: outageUtc(o.EstRestoration) };
+export function fromAusgrid(o: AusgridOutage, nowMs: number = Date.now()): Outage {
+  const times = {
+    StartTime: outageUtc(o.StartTime),
+    EstRestoration: outageUtc(o.EstRestoration),
+    WhenUpdated: outageUtc(o.WhenUpdated),
+  };
   return {
     id: str(o.OutageId),
     source: 'ausgrid',
     distributor: 'ausgrid',
     kind: o.OutageType === 'Planned' ? 'planned' : 'unplanned',
-    status: 'active',
+    // Ausgrid lists planned work up to 30 days ahead; until it starts nobody is off.
+    status: ausgridScheduled(o, nowMs) ? 'scheduled' : 'active',
     area: o.Suburb,
     customers_affected: o.CustomersAffected,
     cause: o.Cause,
     start_at: times.StartTime,
     restore_at: times.EstRestoration,
-    updated_at: null,
+    updated_at: times.WhenUpdated,
     lat: num(o.Latitude),
     lon: num(o.Longitude),
     polygons: [],
-    details: detailsOf(o, AUSGRID_MAPPED, times),
+    details: {
+      streets: str(o.Streets),
+      // In words ("Proceeding as scheduled"), as Endeavour's status is.
+      status: str(o.StatusText),
+      // As Ausgrid writes it ("ProceedingAsScheduled"), for a program to match on.
+      power_status: str(o.Status),
+      reason: str(o.Reason),
+      ...detailsOf(o, AUSGRID_MAPPED, times),
+    },
   };
 }
 
@@ -264,7 +282,9 @@ const FEEDS: readonly Feed[] = [
     store: 'ausgrid',
     read: () => {
       const markers = liveStore.getData<AusgridOutagesPayload>('ausgrid')?.Markers;
-      return Array.isArray(markers) ? markers.map(fromAusgrid) : [];
+      if (!Array.isArray(markers)) return [];
+      const now = Date.now();
+      return markers.map((m) => fromAusgrid(m, now));
     },
   },
 ];
@@ -285,7 +305,7 @@ const OutageProperties = z.object({
   id: z.string().describe("The distributor's own id for the outage; unique with source"),
   source: z
     .enum(SOURCES)
-    .describe('What stored history files it under (/api/v1/history?source=…&source_id=<id> finds its past): endeavour_current for unplanned and endeavour_planned for planned Endeavour Energy outages; essential_current (unplanned), essential_planned (planned, under way) and essential_future (to come) for Essential Energy; ausgrid'),
+    .describe('What stored history files it under (/api/v1/history?source=…&source_id=<id> finds its past): endeavour_current for unplanned and endeavour_planned for planned Endeavour Energy outages; essential_current (unplanned), essential_planned (planned, under way) and essential_future (to come) for Essential Energy; ausgrid for every Ausgrid outage'),
   distributor: z.enum(DISTRIBUTORS),
   state: z.literal('NSW').describe('All three distributors are in NSW'),
   kind: z.enum(KINDS).describe('unplanned (a fault) or planned (scheduled work)'),
@@ -295,11 +315,11 @@ const OutageProperties = z.object({
   cause: z.string().describe("The cause, as the distributor gives it (Endeavour Energy's planned work with none: \"Planned maintenance\"); empty when not given"),
   start_at: z.string().nullable().describe(`When the power went or goes off, ${TIME_NOTE}`),
   restore_at: z.string().nullable().describe(`When the power is expected back, ${TIME_NOTE}`),
-  updated_at: z.string().nullable().describe(`When the distributor last updated the outage, ${TIME_NOTE}; Ausgrid gives none`),
+  updated_at: z.string().nullable().describe(`When the distributor last updated the outage, ${TIME_NOTE}`),
   polygons: Rings.describe("The outage area's outline as outer rings of [longitude, latitude]; empty when the distributor gives none (Essential Energy gives one)"),
   details: z
     .record(z.string(), z.unknown())
-    .describe("The distributor's own extra fields, under the per-distributor feed's names (Endeavour Energy: streets, postcode, status; Essential Energy: title)"),
+    .describe("The distributor's own extra fields, under the per-distributor feed's names (Endeavour Energy: streets, postcode, status; Essential Energy: title; Ausgrid: streets, status in words, power_status as Ausgrid writes it, reason)"),
 });
 
 const OutageFeature = feature(PointGeometry.nullable().describe('Where the distributor marks the outage; null when it gives no position'), OutageProperties);
@@ -312,7 +332,7 @@ const DistributorStatus = z.object({
   updated_at: z
     .string()
     .nullable()
-    .describe("When this server last read all of the distributor's outage feeds (the earliest of their last reads), ISO 8601 UTC; null if one has not been read yet — as for Ausgrid, which is not being read for now"),
+    .describe("When this server last read all of the distributor's outage feeds (the earliest of their last reads), ISO 8601 UTC; null if one has not been read yet or is switched off"),
 });
 
 const Outages = featureCollection(OutageFeature, {
@@ -430,8 +450,8 @@ outagesRouter.get(
       "from each distributor's public outage data, in one shape: the common fields every distributor has, plus `details` for each one's own. " +
       '`kind` says whether an outage is unplanned or planned, and `status` whether the power is off now or the work is still to come; ' +
       'distributor, kind and status narrow the list. Times are UTC; Essential Energy writes its own without a zone, so they are read as ' +
-      "Sydney time. `sources` says per distributor how many outages it gave and when this server last read it: Ausgrid's outage map " +
-      'service has stopped answering, so it is not being read for now and gives none. Refreshed every one to five minutes.',
+      "Sydney time. `sources` says per distributor how many outages it gave and when this server last read it. " +
+      "Ausgrid's planned work is listed up to 30 days ahead. Refreshed every one to five minutes.",
     responses: { ...okJson(Outages, 'A GeoJSON FeatureCollection of outages'), ...VALIDATION_ERROR, ...GATED_ERRORS },
   }),
   queryValidator(Query),

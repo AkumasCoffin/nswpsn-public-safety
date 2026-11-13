@@ -97,18 +97,40 @@ const KML = `<?xml version="1.0" encoding="UTF-8"?>
 const [ES_UNPLANNED, ES_PLANNED_NOW] = parseEssentialKml(KML, 'current');
 const ES_FUTURE = parseEssentialKml(KML, 'future').filter((o) => o.outageType === 'planned');
 
+// Ausgrid's own events (sources/ausgrid.ts), times in UTC with a Z.
 const AUSGRID = normaliseAusgridOutage({
-  WebId: 123,
-  Area: 'Ryde',
-  MarkerLocation: { lat: -33.81, lng: 151.1 },
+  EventId: 833006316,
   OutageDisplayType: 'U',
-  Customers: '57',
-  Cause: 'Fallen tree',
-  StartDateTime: '2026-10-28T09:00:00',
-  EstRestTime: '2026-10-28T13:00:00',
-  Status: 1,
-  Polygons: [],
+  PowerStatus: 'InProgress',
+  Cause: 'overhead line damage',
+  Reason: null,
+  Area: ['Ryde', 'West Ryde'],
+  WhenUpdated: '2026-11-02T00:50:09Z',
+  StartDateTime: '2026-11-01T22:45:00Z',
+  EstRestTime: '2026-11-02T03:00:00Z',
+  MarkerLocation: { lat: -33.81, lng: 151.1 },
+  Bounds: { bottomleftlat: -33.82, bottomleftlng: 151.09, toprightlat: -33.8, toprightlng: 151.11 },
+  StreetsAffected: ['Blaxland Rd', 'Victoria Rd'],
+  AffectedCustomers: 57,
 })!;
+const planned = (EventId: number, PowerStatus: string, StartDateTime: string, EstRestTime: string | null) =>
+  normaliseAusgridOutage({
+    EventId,
+    OutageDisplayType: 'P',
+    PowerStatus,
+    Cause: 'upgrading power poles in your area to make your electricity supply more resilient',
+    Reason: null,
+    Area: ['Greta'],
+    WhenUpdated: '2026-10-20T00:13:21Z',
+    StartDateTime,
+    EstRestTime,
+    MarkerLocation: { lat: -32.67, lng: 151.37 },
+    StreetsAffected: ['Bowen St'],
+    AffectedCustomers: 12,
+  })!;
+// Started an hour before NOW; and booked for the end of the month.
+const AUSGRID_PLANNED_NOW = planned(141462, 'InProgress', '2026-11-02T00:00:00Z', '2026-11-02T05:00:00Z');
+const AUSGRID_PLANNED_AHEAD = planned(139733, 'ProceedingAsScheduled', '2026-11-28T21:00:00Z', '2026-11-29T05:00:00Z');
 
 type Props = Record<string, any>;
 type Answer = {
@@ -149,7 +171,7 @@ beforeEach(() => {
   liveStore.set('endeavour_planned', [EN_FUTURE]);
   liveStore.set('essential_current', [ES_UNPLANNED, ES_PLANNED_NOW]);
   liveStore.set('essential_future', ES_FUTURE);
-  // Ausgrid is not being read (AUSGRID_DISABLED): its store is empty.
+  // Ausgrid has not been read yet: its store is empty.
   liveStore.delete('ausgrid');
 });
 afterEach(() => {
@@ -253,7 +275,7 @@ describe('GET /api/v1/outages', () => {
     });
   });
 
-  it('an Ausgrid outage: its PascalCase fields mapped, the camelCase copies left out', async () => {
+  it('an Ausgrid outage: the common fields, and streets, status and reason in details under four keys', async () => {
     liveStore.set('ausgrid', { Markers: [AUSGRID], Polygons: [] });
     const body = await read('/api/v1/outages?distributor=ausgrid');
     expect(body.features).toEqual([
@@ -261,26 +283,55 @@ describe('GET /api/v1/outages', () => {
         type: 'Feature',
         geometry: { type: 'Point', coordinates: [151.1, -33.81] },
         properties: {
-          id: '123',
+          id: '833006316',
           source: 'ausgrid',
           distributor: 'ausgrid',
           state: 'NSW',
           kind: 'unplanned',
           status: 'active',
-          area: 'Ryde',
+          area: 'Ryde, West Ryde',
           customers_affected: 57,
-          cause: 'Fallen tree',
-          start_at: '2026-10-27T22:00:00.000Z',
-          restore_at: '2026-10-28T02:00:00.000Z',
-          updated_at: null,
+          cause: 'overhead line damage',
+          start_at: '2026-11-01T22:45:00.000Z',
+          restore_at: '2026-11-02T03:00:00.000Z',
+          updated_at: '2026-11-02T00:50:09.000Z',
+          // Ausgrid gives a box around the outage, not its outline.
           polygons: [],
-          details: {
-            JobId: '', StreetName: '', Streets: '', Postcode: '', Reason: '', Detail: '', StatusText: '',
-            Status: 1, Classification: null, Polygons: [],
-          },
+          details: { streets: 'Blaxland Rd, Victoria Rd', status: 'In progress', power_status: 'InProgress', reason: '' },
         },
       },
     ]);
+  });
+
+  it("Ausgrid's planned work: under way is active, not yet started is scheduled, and it becomes active when it starts", async () => {
+    liveStore.set('ausgrid', { Markers: [AUSGRID, AUSGRID_PLANNED_NOW, AUSGRID_PLANNED_AHEAD], Polygons: [] });
+    const body = await read('/api/v1/outages?distributor=ausgrid');
+    expect(body.features.map((f) => [f.properties['id'], f.properties['kind'], f.properties['status']])).toEqual([
+      ['833006316', 'unplanned', 'active'],
+      ['141462', 'planned', 'active'],
+      ['139733', 'planned', 'scheduled'],
+    ]);
+    expect(byId(body, '139733').properties).toMatchObject({
+      source: 'ausgrid',
+      start_at: '2026-11-28T21:00:00.000Z',
+      restore_at: '2026-11-29T05:00:00.000Z',
+      updated_at: '2026-10-20T00:13:21.000Z',
+      details: { streets: 'Bowen St', status: 'Proceeding as scheduled', power_status: 'ProceedingAsScheduled', reason: '' },
+    });
+    expect(ids(await read('/api/v1/outages?distributor=ausgrid&status=scheduled'))).toEqual(['139733']);
+    expect(ids(await read('/api/v1/outages?distributor=ausgrid&status=active'))).toEqual(['833006316', '141462']);
+
+    vi.setSystemTime(Date.parse('2026-11-28T21:00:00Z'));
+    expect(ids(await read('/api/v1/outages?distributor=ausgrid&status=scheduled'))).toEqual([]);
+  });
+
+  it('an Ausgrid time that cannot be read stays in details as written', async () => {
+    liveStore.set('ausgrid', { Markers: [{ ...AUSGRID, EstRestoration: 'soon', WhenUpdated: '' }], Polygons: [] });
+    const [f] = (await read('/api/v1/outages?distributor=ausgrid')).features;
+    expect(f!.properties).toMatchObject({ restore_at: null, updated_at: null });
+    expect(f!.properties['details']).toEqual({
+      streets: 'Blaxland Rd, Victoria Rd', status: 'In progress', power_status: 'InProgress', reason: '', EstRestoration: 'soon',
+    });
   });
 
   it('filters by distributor, kind and status (any case), and the sources list follows', async () => {

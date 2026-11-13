@@ -33,7 +33,7 @@ import {
   listSessions,
 } from '../services/activityMode.js';
 import type { EndeavourOutage } from '../sources/endeavour.js';
-import type { AusgridOutagesPayload } from '../sources/ausgrid.js';
+import { ausgridScheduled, type AusgridOutagesPayload } from '../sources/ausgrid.js';
 import type { EssentialOutage } from '../sources/essential.js';
 import type { TrafficSnapshot, TrafficCamerasSnapshot } from '../sources/traffic.js';
 import type { RfsSnapshot } from '../sources/rfs.js';
@@ -195,12 +195,15 @@ export function summarisePower(): PowerSummary {
     total_customers: 0,
   };
 
-  // --- Ausgrid: derived from the markers payload. We don't have the
-  // upstream `GetCurrentOutageStats` aggregate banner here, so we
-  // approximate from the markers themselves: outageType + customers.
+  // --- Ausgrid: counted from the markers themselves. The snapshot also
+  // lists planned work up to 30 days ahead (about 1,300 records); that has
+  // not cut anyone off yet, so only outages under way are counted, as
+  // Endeavour's future bucket is left out of its totals below.
   const ag = liveStore.getData<AusgridOutagesPayload>('ausgrid');
   if (ag && Array.isArray(ag.Markers)) {
+    const now = Date.now();
     for (const m of ag.Markers) {
+      if (ausgridScheduled(m, now)) continue;
       if (m.outageType === 'Planned') power.ausgrid.planned += 1;
       else power.ausgrid.unplanned += 1;
       power.ausgrid.customers_affected += m.customersAffected ?? 0;
