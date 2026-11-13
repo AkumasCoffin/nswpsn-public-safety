@@ -48,7 +48,8 @@ const FUTURE_TIMEOUT_MS = 30_000;
 
 // The endpoints answer a plain GET today. The browser-style headers stay
 // because Ausgrid's CDN has refused requests that look like a bot before.
-const BROWSER_HEADERS = {
+// The network area (outages/boundaries.ts) is read from the same site with them.
+export const BROWSER_HEADERS = {
   'User-Agent':
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36',
   Accept: 'application/json, text/plain, */*',

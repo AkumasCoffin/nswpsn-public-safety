@@ -543,8 +543,12 @@ export interface OutageSourceDef {
   offByDefault?: boolean;
 }
 
-/** <NAME>_DISABLED, read when the source registers: 'true' is off, 'false' is on, anything else the source's default. */
-const switchedOff = (name: string, offByDefault = false): boolean => {
+/**
+ * <NAME>_DISABLED: 'true' is off, 'false' is on, anything else the source's
+ * default. Read when the source registers, and by the network areas
+ * (boundaries.ts) each time they are due, so one switch decides both.
+ */
+export const switchedOff = (name: string, offByDefault = false): boolean => {
   const v = (process.env[`${name.toUpperCase()}_DISABLED`] ?? '').trim().toLowerCase();
   return v === 'true' ? true : v === 'false' ? false : offByDefault;
 };

@@ -346,6 +346,8 @@ const LEGACY_READ_PATHS: ReadonlySet<string> = new Set([
   // at a time, and where /api/v1/ serves them now.
   '/api/fires',
   '/api/outages',
+  // The distributors' supply areas, drawn with the outages: the same feed.
+  '/api/outages/areas',
 ]);
 
 /** Under a prefix above, but camera images: no key reads them. */

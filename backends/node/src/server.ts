@@ -278,6 +278,9 @@ export function createApp() {
     '/api/rfs/incidents',
     '/api/fires',
     '/api/outages',
+    // Sets its own day-long header once every area is read; until then this
+    // short one applies, so an answer missing an area is not kept for a day.
+    '/api/outages/areas',
     '/api/traffic/incidents',
     '/api/traffic/cameras',
     '/api/beachwatch',
@@ -430,7 +433,7 @@ export function createApp() {
   app.route('/', ausgridRouter);
   app.route('/', essentialRouter);
   app.route('/', outagesRouter);
-  mirror(app, outagesRouter, ['/api/outages']);
+  mirror(app, outagesRouter, ['/api/outages', '/api/outages/areas']);
   app.route('/', heartbeatRouter);
   app.route('/', statsRouter);
   // Incidents + editor + users (W5)

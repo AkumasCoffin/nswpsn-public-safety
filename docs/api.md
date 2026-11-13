@@ -107,6 +107,7 @@ request cannot ask for `read`.
 | Weather warnings | `GET /api/v1/bom/warnings` | `warnings:live` |
 | Ambulance | `GET /api/v1/act-ambulance/incidents` | `ambulance:live` |
 | Power outages | `GET /api/v1/outages` — every distributor this server reads, one feed ([below](#outages)) | `outages:live` |
+| Power outages | `GET /api/v1/outages/areas` — each distributor's supply area, as outlines ([below](#outages)) | `outages:live` |
 | Road hazards | `GET /api/v1/traffic/{incidents,roadwork,flood,fire,majorevent,alpine,lga}` ([below](#roads)) and each one's `/raw` · `/traffic/lga-incidents` · `/traffic/all-feeds` | `roads:live` |
 | Public transport | `GET /api/v1/transport/{vehicles,lines,stops,alerts}` · `/transport/shape/{id}` · `/transport/trip/{date}/{tripId}/{instance}` · `/transport/departures/{stopId}` | `transport:live` |
 | Aircraft | `GET /api/v1/adsb/aircraft` · `/adsb/trails` · `/adsb/photo/{hex}` | `aircraft:live` |
@@ -256,6 +257,23 @@ if one has not been read yet or the distributor is switched off — its count of
 each distributor publishes it; Ausgrid lists it up to 30 days ahead, so most
 of its records are `scheduled`. Distributors are read every one to fifteen
 minutes.
+
+`GET /api/v1/outages/areas` is each distributor's supply area — whose outages
+to expect where — as one GeoJSON FeatureCollection, read with the same
+`outages:live` scope. There is one feature per distributor that publishes its
+area (`ausgrid`, `citipower`, `powercor`, `jemena`, and `energex` and `ergon`
+when they are switched on); the others publish none and have no feature. The
+geometry is a `Polygon` or `MultiPolygon` of closed rings of
+`[longitude, latitude]` to four decimals, and the properties are
+`distributor`, `name` and `state`. The outlines are simplified for drawing on
+a map — within about 200 m of the distributor's own, with islets and pockets
+under about 1 km² left out — and are not a statement of who supplies an
+address. `sources` lists the distributors that publish an area, each with its
+`name`, `state` and when this server read the area it is serving
+(`updated_at`, `null` when it has none: not read yet, the read failed, or the
+distributor is switched off — it then has no feature). It takes no parameters.
+Each area is read at most once a day, and the answer may be reused for a day
+(`Cache-Control: private, max-age=86400`) once every area has been read.
 
 ### Stored history
 

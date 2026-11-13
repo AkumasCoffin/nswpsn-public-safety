@@ -36,6 +36,10 @@
  *
  * Registered at /api/outages and mirrored to /api/v1/ like every other feed;
  * the old path is nobody's and goes when old paths are retired.
+ *
+ * GET /api/v1/outages/areas, at the end of this file, is the outline of each
+ * distributor's supply area, for the map to draw behind the outages
+ * (sources/outages/boundaries.ts). The same keys read it.
  */
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -58,6 +62,7 @@ import {
   type Outage,
   type OutageState,
 } from '../sources/outages/common.js';
+import { AREA_SOURCES, networkAreas } from '../sources/outages/boundaries.js';
 import { scoped } from '../services/auth/apiKeyScopes.js';
 import { geo } from './v1/respond.js';
 import {
@@ -482,5 +487,76 @@ outagesRouter.get(
     const { outages, sources } = mergedOutages(c.req.valid('query'));
     const features = outages.map(toFeature);
     return geo(c, { type: 'FeatureCollection', features, count: features.length, sources } satisfies z.infer<typeof Outages>);
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Network areas
+// ---------------------------------------------------------------------------
+
+const AreaGeometry = z.union([
+  z.object({ type: z.literal('Polygon'), coordinates: Rings.describe('The outer ring, then any holes; each ring is closed') }),
+  z.object({
+    type: z.literal('MultiPolygon'),
+    coordinates: z.array(Rings).describe('One entry per polygon: its outer ring, then any holes; each ring is closed'),
+  }),
+]);
+
+const AreaFeature = feature(
+  AreaGeometry.describe("The supply area's outline, [longitude, latitude] to four decimals"),
+  z.object({
+    distributor: z.enum(DISTRIBUTORS),
+    name: z.string().describe("The distributor's name"),
+    state: z.enum(OUTAGE_STATES).describe("The state the distributor's network is in"),
+  }),
+);
+
+const AreaStatus = z.object({
+  distributor: z.enum(DISTRIBUTORS),
+  name: z.string(),
+  state: z.enum(OUTAGE_STATES),
+  updated_at: z
+    .string()
+    .nullable()
+    .describe('When this server read the area it is serving, ISO 8601 UTC; null when it has none (not read yet, the read failed, or the distributor is switched off), and then the distributor has no feature'),
+});
+
+const NetworkAreas = featureCollection(AreaFeature, {
+  sources: z.array(AreaStatus).describe('One entry per distributor that publishes its supply area, in this order'),
+}).meta({ id: 'OutageNetworkAreas' });
+
+/** "Ausgrid (NSW), CitiPower (VIC), …": the distributors that publish an area. */
+const AREA_LIST = AREA_SOURCES.map((s) => `${DISTRIBUTOR_INFO[s.distributor].name} (${DISTRIBUTOR_INFO[s.distributor].state})`).join(', ');
+
+// An area changes when a distributor redraws its map; a day is how often this
+// server looks. `private` as the boundary outlines are (api/boundaries.ts):
+// the answer is given to a credential, so only the asker's own cache keeps it.
+const AREAS_CACHE = 'private, max-age=86400';
+
+outagesRouter.get(
+  '/api/outages/areas',
+  SCOPE_OUTAGES,
+  describeRoute({
+    operationId: 'getOutageNetworkAreas',
+    tags: ['Power outages'],
+    summary: "Each distributor's supply area",
+    description:
+      "The outline of each electricity distributor's supply area — which distributor's outages to expect where — as one GeoJSON FeatureCollection, " +
+      `one Polygon or MultiPolygon feature per distributor, from the area file behind the distributor's own outage map: ${AREA_LIST}. ` +
+      'The other distributors publish no area and have no feature. The outlines are simplified for drawing on a map (within about 200 m of the ' +
+      "distributor's own, islets and pockets under about 1 km² left out) and are not a statement of who supplies an address. " +
+      '`sources` lists the distributors that publish an area and when this server read each; one with a null `updated_at` has no feature ' +
+      '(not read yet, the read failed, or the distributor is switched off). Each area is read at most once a day, and the answer may be ' +
+      'reused for a day (Cache-Control: private, max-age=86400) once every area has been read.',
+    responses: { ...okJson(NetworkAreas, "A GeoJSON FeatureCollection of distributors' supply areas"), ...GATED_ERRORS },
+  }),
+  async (c) => {
+    const { areas, sources, complete } = await networkAreas();
+    const features = areas.map(({ geometry, ...properties }) => ({ type: 'Feature' as const, geometry, properties }));
+    // With an area still missing the header is left to the short default
+    // (server.ts CACHEABLE_PATHS), so the answer without it is asked for again
+    // soon rather than kept for a day.
+    if (complete) c.header('Cache-Control', AREAS_CACHE);
+    return geo(c, { type: 'FeatureCollection', features, count: features.length, sources } satisfies z.infer<typeof NetworkAreas>);
   },
 );

@@ -108,7 +108,9 @@ describe('openapi.json', () => {
     expect(op).toBeDefined();
     expect(op.tags).toEqual(['Power outages']);
     expect(op['x-scopes']).toEqual(['outages:live']);
-    expect(ops(fresh).filter((o) => o.op.tags[0] === 'Power outages').map((o) => o.path)).toEqual(['/api/v1/outages']);
+    // And the distributors' supply areas beside it, read with the same scope.
+    expect(ops(fresh).filter((o) => o.op.tags[0] === 'Power outages').map((o) => o.path)).toEqual(['/api/v1/outages', '/api/v1/outages/areas']);
+    expect(fresh.paths['/api/v1/outages/areas']?.['get']['x-scopes']).toEqual(['outages:live']);
   });
 
   it('the outages feed is described with every distributor it has, and a state filter', () => {
