@@ -1,14 +1,11 @@
-/* Polar-plot dressing for a receiver's tracks map (feeder.html, staff.html).
+/* Polar plot of a receiver's tracks (feeder.html, staff.html).
  *
- * The map stays a Leaflet map, so tracks keep their hover labels and the map
- * still pans and zooms. This makes it read as a plot around the receiver:
- * a navy field, thin range rings at a round step with their distances up the
- * north line, eight faint spokes, N/E/S/W, and a frame centred on the
- * receiver rather than on the traffic. The basemap stays as a faint grey
- * outline for bearings (CSS class "adsb-radar" on the map container).
- *
- * Rings are drawn on the map, not over it, so their distances stay true when
- * the map is zoomed.
+ * It is drawn with Leaflet, so tracks keep their hover labels and distances
+ * stay true, but it is a plot and not a map: no basemap, and it cannot be
+ * dragged or zoomed (MAP_OPTIONS). It is always the receiver in the middle,
+ * out to its outer ring (frame). On a navy field (CSS class "adsb-radar" on
+ * the container): thin range rings at a round step with their distances up
+ * the north line, eight faint spokes, N/E/S/W.
  */
 (function () {
   'use strict';
@@ -85,6 +82,34 @@
     return out;
   }
 
+  /**
+   * Options for L.map: a fixed plot. Nothing moves it, so there are no zoom
+   * buttons, and with no basemap there is nothing to credit. zoomSnap 0 lets
+   * the frame fit the outer ring exactly rather than at the nearest whole
+   * zoom level.
+   */
+  const MAP_OPTIONS = {
+    zoomControl: false, attributionControl: false,
+    dragging: false, scrollWheelZoom: false, doubleClickZoom: false,
+    boxZoom: false, keyboard: false, touchZoom: false,
+    zoomSnap: 0, zoomAnimation: false, fadeAnimation: false,
+  };
+
+  /**
+   * Fit `map` to `bounds` and keep it there: the plot is re-fitted whenever
+   * its box changes size, since nothing else can bring it back to centre.
+   */
+  function frame(map, bounds) {
+    map._adsbFrame = bounds;
+    if (!map._adsbFrameHooked) {
+      map._adsbFrameHooked = true;
+      map.on('resize', () => {
+        if (map._adsbFrame && map._adsbFrame.isValid()) map.fitBounds(map._adsbFrame, { animate: false });
+      });
+    }
+    if (bounds && bounds.isValid()) map.fitBounds(bounds, { animate: false });
+  }
+
   /** Ring step and count for traffic reaching maxKm: three to five rings at a
    *  round distance, so each label is a number worth reading. */
   function rings(maxKm) {
@@ -155,9 +180,7 @@
   // their point through the inner span: Leaflet positions the marker element
   // itself with a transform, so one set on it would be overwritten.
   const css = `
-    .adsb-radar { background: #0b1220; }
-    /* The map is context, not content: a faint grey outline under the plot. */
-    .adsb-radar .leaflet-tile-pane { filter: grayscale(1) brightness(0.9); opacity: 0.28; }
+    .adsb-radar, .adsb-radar.leaflet-container { background: #0b1220; cursor: default; }
     .adsb-radar-lbl { background: none; border: 0; }
     .adsb-radar-lbl span {
       position: absolute; transform: translate(-50%, -50%); white-space: nowrap;
@@ -166,16 +189,6 @@
     }
     .adsb-radar-lbl.adsb-radar-cardinal span { font-size: 10.5px; color: #94a3b8; }
     .adsb-radar-lbl.adsb-radar-km span { transform: translate(5px, -50%); }
-    /* Leaflet's own controls, toned down to sit on the navy field. */
-    .adsb-radar .leaflet-bar a {
-      background: #111a2c; color: #94a3b8; border-bottom-color: rgba(148,163,184,0.18);
-    }
-    .adsb-radar .leaflet-bar a:hover { background: #18243b; color: #e2e8f0; }
-    .adsb-radar .leaflet-bar { border: 1px solid rgba(148,163,184,0.22); box-shadow: none; }
-    .adsb-radar .leaflet-control-attribution {
-      background: rgba(11,18,32,0.7); color: #64748b; font-size: 9px;
-    }
-    .adsb-radar .leaflet-control-attribution a { color: #7c8ba1; }
   `;
   if (!document.getElementById('adsb-radar-css')) {
     const el = document.createElement('style');
@@ -184,5 +197,5 @@
     document.head.appendChild(el);
   }
 
-  window.AdsbRadar = { build, inside };
+  window.AdsbRadar = { build, inside, frame, MAP_OPTIONS };
 })();

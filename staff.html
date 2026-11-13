@@ -5240,7 +5240,7 @@
 
   <script src="config.js"></script>
   <script src="adsb-lightcone.js?v=6"></script>
-  <script src="adsb-radar.js?v=3"></script>
+  <script src="adsb-radar.js?v=4"></script>
   <script src="api-session.js"></script>
   <script src="ui-dialogs.js"></script>
   <script>
@@ -9369,13 +9369,9 @@
       // Build the map lazily: creating it before the panel is visible gives
       // Leaflet a zero-size container and a blank tile grid.
       if (!_nd2TrackMap) {
-        const dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=cb1_29rl_1_764d57ded0436220d836abc9',
-          { subdomains: 'abcd', maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>' });
-        // The wheel zooms. This is a full-page tab, not a card wedged into a
-        // scrolling column, so the map IS what you came to the tab for and
-        // taking its wheel away just makes it unusable.
-        _nd2TrackMap = L.map('nd2-aov-map',
-          { layers: [dark] })
+        // A fixed plot, not a map: no basemap, no drag, no zoom (see
+        // adsb-radar.js).
+        _nd2TrackMap = L.map('nd2-aov-map', window.AdsbRadar.MAP_OPTIONS)
           .setView([d.site ? d.site.lat : -33.8688, d.site ? d.site.lon : 151.2093], 8);
         document.getElementById('nd2-aov-map').classList.add('adsb-radar');
       }
@@ -9426,26 +9422,17 @@
       layer.addTo(_nd2TrackMap);
       _nd2TrackLayer = layer;
 
-      // Frame the coverage, not the whole country.
-      // Frame whichever is larger. The envelope usually is, and framing only
-      // the tracks would crop the coverage ring off the edge of the card.
-      // A scope is centred on the receiver, out to its outer ring.
-      // Framed once per receiver and ring size, not on every refresh: the
-      // refresh used to throw away whatever the viewer had zoomed in on.
-      const frameKey = String(d.nodeId || '') + ':' + (radar ? radar.outerKm : 'tracks');
-      const reframe = _nd2TrackMap._framedKey !== frameKey;
-      _nd2TrackMap._framedKey = frameKey;
-      if (!reframe) { /* keep the viewer's zoom and pan */ }
-      else if (radar) _nd2TrackMap.fitBounds(radar.bounds);
-      else try {
-        const b = L.latLngBounds([]);
-        for (const tr of traces) for (const p of tr.points) b.extend(p);
-        // Framed on the TRACKS, not the envelope. The envelope spans weeks
-        // and would zoom this out until the last eight hours of traffic were
-        // a few pixels across — which is the whole point of this map.
-        if (d.site) b.extend([d.site.lat, d.site.lon]);
-        if (b.isValid()) _nd2TrackMap.fitBounds(b.pad(0.08));
-      } catch (_e) { /* a degenerate bounds is not worth failing the view for */ }
+      // Always the receiver in the middle, out to its outer ring. The plot
+      // cannot be moved, so there is no view of the viewer's to keep.
+      let frameTo = radar ? radar.bounds : null;
+      if (!frameTo) {
+        // No pin yet: fit the tracks themselves.
+        frameTo = L.latLngBounds([]);
+        for (const tr of traces) for (const p of tr.points) frameTo.extend(p);
+        if (frameTo.isValid()) frameTo = frameTo.pad(0.08);
+      }
+      _nd2TrackMap.invalidateSize();
+      window.AdsbRadar.frame(_nd2TrackMap, frameTo);
       setTimeout(() => _nd2TrackMap && _nd2TrackMap.invalidateSize(), 60);
 
       if (note) {

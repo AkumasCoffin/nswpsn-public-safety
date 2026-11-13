@@ -758,7 +758,7 @@
 
   <script src="config.js"></script>
   <script src="adsb-lightcone.js?v=6"></script>
-  <script src="adsb-radar.js?v=3"></script>
+  <script src="adsb-radar.js?v=4"></script>
   <script>
     const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -2514,16 +2514,9 @@
       if (!d || _abNodeId !== nodeId || !document.getElementById('adsb-map')) return;
 
       if (!_abMap) {
-        const dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=cb1_29rl_1_764d57ded0436220d836abc9',
-          { subdomains: 'abcd', maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>' });
-        // The wheel zooms. It was off because this map sits in a scrolling
-        // panel and swallowing the wheel traps you at it — but the trap only
-        // bites when the pointer is over the map, and a tracks map you cannot
-        // zoom is not much of a tracks map. Leaflet re-enables page scrolling
-        // the moment the pointer leaves, so the escape is just moving away.
-        _abMap = L.map('adsb-map', {
-          layers: [dark],
-        }).setView([d.site ? d.site.lat : -33.8688, d.site ? d.site.lon : 151.2093], 8);
+        // A fixed plot, not a map: no basemap, no drag, no zoom (see
+        // adsb-radar.js). The wheel and a touch drag scroll the page.
+        _abMap = L.map('adsb-map', window.AdsbRadar.MAP_OPTIONS).setView([d.site ? d.site.lat : -33.8688, d.site ? d.site.lon : 151.2093], 8);
         document.getElementById('adsb-map').classList.add('adsb-radar');
       }
       if (_abLayer) { _abLayer.remove(); _abLayer = null; }
@@ -2566,23 +2559,17 @@
       layer.addTo(_abMap);
       _abLayer = layer;
 
-      // A scope is centred on the receiver, out to its outer ring.
-      // Framed once per receiver and ring size, not on every refresh: the
-      // refresh used to throw away whatever the viewer had zoomed in on.
-      const frameKey = String(d.nodeId || '') + ':' + (radar ? radar.outerKm : 'tracks');
-      const reframe = _abMap._framedKey !== frameKey;
-      _abMap._framedKey = frameKey;
-      if (!reframe) { /* keep the viewer's zoom and pan */ }
-      else if (radar) _abMap.fitBounds(radar.bounds);
-      else try {
-        const b = L.latLngBounds([]);
-        for (const tr of traces) for (const pt of tr.points) b.extend(pt);
-        // Framed on the TRACKS, not the envelope. The envelope spans weeks
-        // and would zoom this out until the last eight hours of traffic were
-        // a few pixels across — which is the whole point of this map.
-        if (d.site) b.extend([d.site.lat, d.site.lon]);
-        if (b.isValid()) _abMap.fitBounds(b.pad(0.08));
-      } catch (_e) { /* degenerate bounds is not worth failing the view for */ }
+      // Always the receiver in the middle, out to its outer ring. The plot
+      // cannot be moved, so there is no view of the viewer's to keep.
+      let frameTo = radar ? radar.bounds : null;
+      if (!frameTo) {
+        // No pin yet: fit the tracks themselves.
+        frameTo = L.latLngBounds([]);
+        for (const tr of traces) for (const pt of tr.points) frameTo.extend(pt);
+        if (frameTo.isValid()) frameTo = frameTo.pad(0.08);
+      }
+      _abMap.invalidateSize();
+      window.AdsbRadar.frame(_abMap, frameTo);
       setTimeout(() => _abMap && _abMap.invalidateSize(), 60);
 
       if (note) {
