@@ -19,6 +19,7 @@
 import { getPool } from '../db/pool.js';
 import { log } from '../lib/log.js';
 import {
+  summariseByState,
   summariseEmergency,
   summariseEnvironment,
   summarisePower,
@@ -45,6 +46,8 @@ export interface StatsSnapshot {
   traffic: ReturnType<typeof summariseTraffic>;
   emergency: ReturnType<typeof summariseEmergency>;
   environment: ReturnType<typeof summariseEnvironment>;
+  /** Per-state counts; rows written before the dashboard went national have none. */
+  by_state: ReturnType<typeof summariseByState>;
 }
 
 /** Build a snapshot from current LiveStore. Same shape as
@@ -56,6 +59,7 @@ export function buildStatsSnapshot(): StatsSnapshot {
     traffic: summariseTraffic(),
     emergency: summariseEmergency(),
     environment: summariseEnvironment(),
+    by_state: summariseByState(),
   };
 }
 

@@ -78,7 +78,7 @@ type Source = (typeof SOURCES)[number];
 type Props = Record<string, unknown>;
 
 /** One outage in the shared shape, before it becomes a feature. */
-interface Outage {
+export interface Outage {
   id: string;
   source: Source;
   distributor: Distributor;
@@ -364,6 +364,60 @@ function toFeature(o: Outage): OutageFeatureT {
   };
 }
 
+/** What narrows the merged list; nothing given is every distributor's outages. */
+export interface OutagesFilter {
+  distributor?: readonly string[] | undefined;
+  kind?: readonly string[] | undefined;
+  status?: readonly string[] | undefined;
+}
+
+/**
+ * Every distributor's outages in the shared shape, with what each one gave.
+ * Reads the LiveStore only; an outage two feeds both list is in it twice.
+ * `read` says whether any feed has been read at all. /api/outages answers with
+ * it, and the per-state stats (api/stats.ts) count from it.
+ */
+export function mergedOutages(q: OutagesFilter = {}): {
+  outages: Outage[];
+  sources: Array<z.infer<typeof DistributorStatus>>;
+  read: boolean;
+} {
+  const distributors: readonly string[] = q.distributor?.length ? q.distributor : DISTRIBUTORS;
+  const kinds = new Set<string>(q.kind ?? []);
+  const statuses = new Set<string>(q.status ?? []);
+  const outages: Outage[] = [];
+  const sources: Array<z.infer<typeof DistributorStatus>> = [];
+  let read = false;
+  for (const distributor of DISTRIBUTORS) {
+    if (!distributors.includes(distributor)) continue;
+    let count = 0;
+    let oldest: number | null = null;
+    let unread = false;
+    for (const feed of FEEDS) {
+      if (feed.distributor !== distributor) continue;
+      const ts = liveStore.get(feed.store)?.ts;
+      if (!ts) unread = true;
+      else {
+        read = true;
+        oldest = oldest === null ? ts : Math.min(oldest, ts);
+      }
+      for (const o of feed.read()) {
+        if (kinds.size && !kinds.has(o.kind)) continue;
+        if (statuses.size && !statuses.has(o.status)) continue;
+        outages.push(o);
+        count++;
+      }
+    }
+    sources.push({
+      distributor,
+      name: NAMES[distributor],
+      count,
+      updated_at: unread || oldest === null ? null : new Date(oldest * 1000).toISOString(),
+    });
+  }
+  return { outages, sources, read };
+}
+
 outagesRouter.get(
   '/api/outages',
   SCOPE_OUTAGES,
@@ -382,36 +436,8 @@ outagesRouter.get(
   }),
   queryValidator(Query),
   (c) => {
-    const q = c.req.valid('query');
-    const distributors = q.distributor?.length ? q.distributor : DISTRIBUTORS;
-    const kinds = new Set<string>(q.kind ?? []);
-    const statuses = new Set<string>(q.status ?? []);
-    const features: OutageFeatureT[] = [];
-    const sources: Array<z.infer<typeof DistributorStatus>> = [];
-    for (const distributor of DISTRIBUTORS) {
-      if (!distributors.includes(distributor)) continue;
-      let count = 0;
-      let oldest: number | null = null;
-      let unread = false;
-      for (const feed of FEEDS) {
-        if (feed.distributor !== distributor) continue;
-        const ts = liveStore.get(feed.store)?.ts;
-        if (!ts) unread = true;
-        else oldest = oldest === null ? ts : Math.min(oldest, ts);
-        for (const o of feed.read()) {
-          if (kinds.size && !kinds.has(o.kind)) continue;
-          if (statuses.size && !statuses.has(o.status)) continue;
-          features.push(toFeature(o));
-          count++;
-        }
-      }
-      sources.push({
-        distributor,
-        name: NAMES[distributor],
-        count,
-        updated_at: unread || oldest === null ? null : new Date(oldest * 1000).toISOString(),
-      });
-    }
+    const { outages, sources } = mergedOutages(c.req.valid('query'));
+    const features = outages.map(toFeature);
     return geo(c, { type: 'FeatureCollection', features, count: features.length, sources } satisfies z.infer<typeof Outages>);
   },
 );

@@ -356,6 +356,26 @@ const HAZARDS: Array<{
   },
 ];
 
+/** A feed's records: NSW's from the live store, then the other states' of its type. */
+function hazardRecords(h: (typeof HAZARDS)[number]): TrafficFeature[] {
+  // A snapshot saved before records named their state (LiveStore
+  // reloads it from disk on restart) is NSW's all the same.
+  const nsw = trafficHazardSnapshot(h.storeKey).features.map((f) =>
+    f.properties.state ? f : { ...f, properties: { ...f.properties, state: 'NSW' as const, credit: f.properties.credit ?? LIVE_TRAFFIC_CREDIT } },
+  );
+  return h.interstate ? [...nsw, ...interstateRecords(h.interstate)] : nsw;
+}
+
+/**
+ * The records /api/traffic/<path> answers with before ?state= narrows them,
+ * and the LiveStore key of the NSW feed among them, for the per-state stats
+ * (api/stats.ts). Null for a path that is no feed.
+ */
+export function roadFeed(path: string): { store: string; records: TrafficFeature[] } | null {
+  const h = HAZARDS.find((x) => x.path === path);
+  return h ? { store: h.storeKey, records: hazardRecords(h) } : null;
+}
+
 const ROAD_STATES = ['NSW', 'QLD', 'VIC', 'SA', 'ACT'] as const;
 
 const RoadQuery = z.object({
@@ -393,12 +413,7 @@ for (const h of HAZARDS) {
     queryValidator(RoadQuery),
     (c) => {
       const states = new Set<string>(c.req.valid('query').state ?? []);
-      // A snapshot saved before records named their state (LiveStore
-      // reloads it from disk on restart) is NSW's all the same.
-      const nsw = trafficHazardSnapshot(h.storeKey).features.map((f) =>
-        f.properties.state ? f : { ...f, properties: { ...f.properties, state: 'NSW' as const, credit: f.properties.credit ?? LIVE_TRAFFIC_CREDIT } },
-      );
-      const all: TrafficFeature[] = h.interstate ? [...nsw, ...interstateRecords(h.interstate)] : nsw;
+      const all = hazardRecords(h);
       const features = states.size ? all.filter((f) => states.has(f.properties.state)) : all;
       return geo(c, { type: 'FeatureCollection', features, count: features.length });
     },

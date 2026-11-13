@@ -42,6 +42,10 @@ import { log } from '../lib/log.js';
 import { requireRole, isOwner } from '../services/auth/roles.js';
 import type { BomSnapshot } from '../sources/bom.js';
 import type { BeachsafeBeach } from '../sources/beach.js';
+import { INTERSTATE_STORES } from '../sources/interstateRoads.js';
+import { mergedFires } from './fires.js';
+import { mergedOutages } from './outages.js';
+import { roadFeed } from './traffic.js';
 
 export const statsRouter = new Hono();
 
@@ -82,12 +86,49 @@ function unwrapSnapshotData(raw: unknown): Record<string, unknown> {
  *  plus a little headroom. */
 const MAX_HISTORY_ROWS = 2200;
 
+const HISTORY_SQL = `SELECT "timestamp", data FROM (
+         SELECT "timestamp", data FROM stats_snapshots
+          WHERE "timestamp" >= $1
+          ORDER BY "timestamp" DESC
+          LIMIT $2
+       ) recent
+       ORDER BY "timestamp" ASC`;
+
+// One row per step bucket: the newest in each. The same range scan over the
+// "timestamp" index as above (at most the 7 days the table keeps, ~2,000
+// rows); the buckets are then sorted and picked in memory. "timestamp" is a
+// positive BIGINT, so the integer division is the floor.
+const HISTORY_STEP_SQL = `SELECT "timestamp", data FROM (
+         SELECT DISTINCT ON ("timestamp" / $3::bigint) "timestamp", data
+           FROM stats_snapshots
+          WHERE "timestamp" >= $1
+          ORDER BY "timestamp" / $3::bigint DESC, "timestamp" DESC
+          LIMIT $2
+       ) recent
+       ORDER BY "timestamp" ASC`;
+
+const MIN_STEP_MINUTES = 5;
+const MAX_STEP_MINUTES = 1440;
+
+/**
+ * ?step= in minutes: one row per that many minutes. Null when it is absent or
+ * not a whole number, which leaves every row in; otherwise held to 5..1440.
+ */
+export function parseHistoryStep(raw: string | null | undefined): number | null {
+  if (raw == null || !/^\s*-?\d+\s*$/.test(raw)) return null;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n)) return null;
+  return Math.min(MAX_STEP_MINUTES, Math.max(MIN_STEP_MINUTES, n));
+}
+
 statsRouter.get('/api/stats/history', async (c) => {
   const url = new URL(c.req.url);
   const hoursParam = url.searchParams.get('hours');
   let hours = Number.parseInt(hoursParam ?? '1', 10);
   if (!Number.isFinite(hours) || hours <= 0) hours = 1;
   hours = Math.min(hours, 168); // 7-day cap, matches python.
+
+  const stepMinutes = parseHistoryStep(url.searchParams.get('step'));
 
   const pool = await getPool();
   if (!pool) return c.json([]);
@@ -99,16 +140,10 @@ statsRouter.get('/api/stats/history', async (c) => {
     // capped at 7 days and the archiver writes one row per 5 minutes, so an
     // honest request is inside the limit; what the limit stops is a response
     // (and a parse, on a phone) that grows with every extra row in the table.
-    const result = await pool.query<StatsHistoryRow>(
-      `SELECT "timestamp", data FROM (
-         SELECT "timestamp", data FROM stats_snapshots
-          WHERE "timestamp" >= $1
-          ORDER BY "timestamp" DESC
-          LIMIT $2
-       ) recent
-       ORDER BY "timestamp" ASC`,
-      [cutoffMs, MAX_HISTORY_ROWS],
-    );
+    const result =
+      stepMinutes === null
+        ? await pool.query<StatsHistoryRow>(HISTORY_SQL, [cutoffMs, MAX_HISTORY_ROWS])
+        : await pool.query<StatsHistoryRow>(HISTORY_STEP_SQL, [cutoffMs, MAX_HISTORY_ROWS, stepMinutes * 60_000]);
     return c.json(
       result.rows.map((r) => ({
         timestamp: Number(r.timestamp),
@@ -430,6 +465,112 @@ export function summariseEnvironment(): EnvironmentSummary {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// by_state — the same things counted per state, for the national dashboard's
+// trend lines. Counted from the merged lists the public feeds answer with
+// (api/fires.ts, api/traffic.ts, api/outages.ts), so a state's number here is
+// the number of records its feed lists. LiveStore reads only.
+// ---------------------------------------------------------------------------
+
+const STATE_METRICS = [
+  'fires',
+  'fire_warnings',
+  'roads',
+  'roadwork',
+  'road_floods',
+  'major_events',
+  'outages',
+  'customers',
+] as const;
+export type StateMetric = (typeof STATE_METRICS)[number];
+/** Whole numbers; a metric is absent where no feed read so far covers it for the state. */
+export type StateStats = Partial<Record<StateMetric, number>>;
+
+/** The order the states are listed in. */
+const STATE_ORDER = ['NSW', 'QLD', 'VIC', 'SA', 'ACT', 'WA', 'NT', 'TAS'];
+
+/** /api/traffic/<path> → its metric. */
+const ROAD_FEEDS: ReadonlyArray<readonly [string, StateMetric]> = [
+  ['incidents', 'roads'],
+  ['roadwork', 'roadwork'],
+  ['flood', 'road_floods'],
+  ['majorevent', 'major_events'],
+];
+
+/**
+ * Which road metrics each other state's feed can give (the record types
+ * sources/interstateRoads.ts makes for it): SA's has no floods or events,
+ * the ACT's no floods. NSW has a feed of its own for each.
+ */
+const INTERSTATE_ROAD_METRICS: Readonly<Record<keyof typeof INTERSTATE_STORES, readonly StateMetric[]>> = {
+  QLD: ['roads', 'roadwork', 'road_floods', 'major_events'],
+  VIC: ['roads', 'roadwork', 'road_floods', 'major_events'],
+  SA: ['roads', 'roadwork'],
+  ACT: ['roads', 'roadwork', 'major_events'],
+};
+
+export function summariseByState(): Record<string, StateStats> {
+  const acc = new Map<string, StateStats>();
+  /** Adds to a state's metric; n = 0 only says a feed covers it. */
+  const add = (state: string, metric: StateMetric, n = 0): void => {
+    let s = acc.get(state);
+    if (!s) acc.set(state, (s = {}));
+    s[metric] = (s[metric] ?? 0) + n;
+  };
+
+  // Fires: open records only (the merged list leaves closed ones out).
+  const fires = mergedFires();
+  for (const s of fires.sources) {
+    if (s.updated_at) add(s.state, s.kind === 'warning' ? 'fire_warnings' : 'fires');
+  }
+  for (const f of fires.features) {
+    const p = f.properties;
+    if (p.kind === 'warning') add(p.state, 'fire_warnings', 1);
+    else if (p.layer === 'fire') add(p.state, 'fires', 1);
+  }
+
+  // Roads: what /api/traffic/{incidents,roadwork,flood,majorevent} list.
+  for (const [state, store] of Object.entries(INTERSTATE_STORES)) {
+    if (!liveStore.get(store)) continue;
+    for (const metric of INTERSTATE_ROAD_METRICS[state as keyof typeof INTERSTATE_STORES]) add(state, metric);
+  }
+  for (const [path, metric] of ROAD_FEEDS) {
+    const feed = roadFeed(path);
+    if (!feed) continue;
+    if (liveStore.get(feed.store)) add('NSW', metric);
+    for (const f of feed.records) add(f.properties.state, metric, 1);
+  }
+
+  // Power: outages off now. The merged list has an outage once per feed
+  // that lists it (Endeavour's current and maintenance overlap), so an id
+  // counts once, as summarisePower counts it.
+  const power = mergedOutages({ status: ['active'] });
+  if (power.read) {
+    add('NSW', 'outages');
+    add('NSW', 'customers');
+  }
+  const seen = new Set<string>();
+  for (const o of power.outages) {
+    if (o.id) {
+      const key = `${o.distributor}:${o.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+    }
+    add('NSW', 'outages', 1);
+    add('NSW', 'customers', Math.max(0, Math.round(o.customers_affected) || 0));
+  }
+
+  const out: Record<string, StateStats> = {};
+  const states = [...STATE_ORDER.filter((s) => acc.has(s)), ...[...acc.keys()].filter((s) => !STATE_ORDER.includes(s)).sort()];
+  for (const state of states) {
+    const s = acc.get(state)!;
+    const row: StateStats = {};
+    for (const m of STATE_METRICS) if (s[m] !== undefined) row[m] = s[m];
+    out[state] = row;
+  }
+  return out;
+}
+
 statsRouter.get('/api/stats/summary', (c) =>
   c.json({
     timestamp: new Date().toISOString().replace(/\.\d+Z$/, 'Z'),
@@ -437,6 +578,7 @@ statsRouter.get('/api/stats/summary', (c) =>
     traffic: summariseTraffic(),
     emergency: summariseEmergency(),
     environment: summariseEnvironment(),
+    by_state: summariseByState(),
   }),
 );
 
