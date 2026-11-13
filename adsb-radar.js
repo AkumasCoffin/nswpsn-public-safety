@@ -34,6 +34,57 @@
     return [la2 * 180 / Math.PI, ((lo2 * 180 / Math.PI) + 540) % 360 - 180];
   }
 
+  function bearing(a, b) {
+    const la1 = toRad(a[0]), la2 = toRad(b[0]), dLon = toRad(b[1] - a[1]);
+    const y = Math.sin(dLon) * Math.cos(la2);
+    const x = Math.cos(la1) * Math.sin(la2) - Math.sin(la1) * Math.cos(la2) * Math.cos(dLon);
+    return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+  }
+
+  /**
+   * The traces as they should be drawn against the coverage envelope: no
+   * point outside it.
+   *
+   * The envelope (`buckets`: km per bearing bucket, null where nothing was
+   * heard) only counts a distance once it has been seen twice, so that one
+   * bad decode cannot stretch it. A track draws every point. Left alone, a
+   * track could poke past the coverage line it is supposed to be evidence
+   * for: the one point that was not believed for the envelope was still
+   * being drawn. It is measured from `site` as drawn, which is rounded, so
+   * the cut agrees with the picture rather than with the exact pin.
+   *
+   * Each trace comes back with `points` (those inside, flat) and `lines`
+   * (the same points in unbroken runs, so no line is drawn across a gap).
+   * Traces left with no run of two points are dropped. With no site or no
+   * envelope the traces are returned untouched.
+   */
+  function inside(site, traces, buckets) {
+    const list = traces || [];
+    if (!site || !Array.isArray(buckets) || !buckets.some((v) => typeof v === 'number' && v > 0)) return list;
+    const c = [site.lat, site.lon];
+    const n = buckets.length;
+    const step = 360 / n;
+    const within = (p) => {
+      const i = Math.min(n - 1, Math.floor(bearing(c, p) / step));
+      const lim = buckets[i];
+      return typeof lim === 'number' && lim > 0 && distKm(c, p) <= lim;
+    };
+    const out = [];
+    for (const tr of list) {
+      const lines = [];
+      let run = [];
+      for (const p of tr.points || []) {
+        if (within(p)) { run.push(p); continue; }
+        if (run.length >= 2) lines.push(run);
+        run = [];
+      }
+      if (run.length >= 2) lines.push(run);
+      if (!lines.length) continue;
+      out.push(Object.assign({}, tr, { points: lines.flat(), lines }));
+    }
+    return out;
+  }
+
   /** Ring step and count for traffic reaching maxKm: three to five rings at a
    *  round distance, so each label is a number worth reading. */
   function rings(maxKm) {
@@ -133,5 +184,5 @@
     document.head.appendChild(el);
   }
 
-  window.AdsbRadar = { build };
+  window.AdsbRadar = { build, inside };
 })();

@@ -5240,7 +5240,7 @@
 
   <script src="config.js"></script>
   <script src="adsb-lightcone.js?v=6"></script>
-  <script src="adsb-radar.js?v=2"></script>
+  <script src="adsb-radar.js?v=3"></script>
   <script src="api-session.js"></script>
   <script src="ui-dialogs.js"></script>
   <script>
@@ -9382,7 +9382,11 @@
       if (_nd2TrackLayer) { _nd2TrackLayer.remove(); _nd2TrackLayer = null; }
 
       const layer = L.layerGroup();
-      const traces = d.traces || [];
+      // Cut to the coverage envelope, so no track runs past the coverage line
+      // (see AdsbRadar.inside).
+      const traces = (window.AdsbRadar && window.AdsbRadar.inside)
+        ? window.AdsbRadar.inside(d.site, d.traces || [], d.coverage && d.coverage.buckets)
+        : (d.traces || []);
       // Range rings and bearings first, so the tracks draw over them.
       const radar = (d.site && window.AdsbRadar) ? window.AdsbRadar.build(d.site, traces) : null;
       if (radar) radar.layer.addTo(layer);
@@ -9391,7 +9395,7 @@
         const colour = nd2AdsbHexColour(tr.hex);
         _nd2TrackColour[String(tr.hex).toLowerCase()] = colour;
         // interactive, so the path answers a hover.
-        L.polyline(tr.points, { color: colour, weight: 1.4, opacity: 0.75 })
+        L.polyline(tr.lines || tr.points, { color: colour, weight: 1.4, opacity: 0.75 })
           .bindTooltip(nd2AdsbTraceLabel(tr), { sticky: true, direction: 'top' })
           .addTo(layer);
       }

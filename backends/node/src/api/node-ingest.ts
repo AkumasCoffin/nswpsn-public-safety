@@ -1378,7 +1378,14 @@ nodeIngestRouter.post('/api/node-ingest/adsb-upload', async (c) => {
   //    One walk over the aircraft does both jobs: the furthest one (the range
   //    figure) and its bearing (the coverage envelope). Neither costs more
   //    than the trig on a loop that has to run anyway.
-  const rangeKm = foldCoverage(r.nodeId, nodeRow?.lat, nodeRow?.lon, positioned);
+  //    The positions carried between uploads count too. The tracks are drawn
+  //    from them, so an envelope built from the two-second snapshots alone sat
+  //    just inside its own tracks wherever an aircraft was heading outbound.
+  const everyFix = positioned.flatMap((a) => [
+    { lat: a.lat, lon: a.lon },
+    ...(a.positions ?? []).map((p) => ({ lat: p[1], lon: p[2] })),
+  ]);
+  const rangeKm = foldCoverage(r.nodeId, nodeRow?.lat, nodeRow?.lon, everyFix);
   //    Nearest as well as furthest: on its own, "range" moves whenever the
   //    furthest aircraft leaves, so it described the traffic as much as the
   //    receiver. The pair describes the slice of sky actually in view.
