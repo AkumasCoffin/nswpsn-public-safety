@@ -53,11 +53,11 @@ const (
 	maxTrailPerAircraft = 16
 
 	// maxTrailPointsTotal bounds the carried positions across the WHOLE
-	// snapshot, which is what the server's 256 KB body cap actually sees.
+	// snapshot, which is what the server's body cap (512 KB) actually sees.
 	//
-	// At the 500-aircraft schema limit, six positions each would put the
-	// payload within sight of that cap, and a snapshot refused with 413 is a
-	// snapshot lost. Positions are also worth least exactly when there are most
+	// At the 500-aircraft schema limit the aircraft themselves are about
+	// 275 KB with every detail field present, and a snapshot refused with 413
+	// is a snapshot lost. Positions are also worth least exactly when there are most
 	// of them: a map showing five hundred aircraft is not short of detail. So
 	// the busiest sites shed this first and keep sending every position.
 	maxTrailPointsTotal = 2000
@@ -83,6 +83,32 @@ type snapshotAircraft struct {
 	Emerg    string   `json:"emergency,omitempty"`
 	Category string   `json:"category,omitempty"`
 	SeenPos  float64  `json:"seen_pos"`
+
+	// Detail, from 0.1.17: what the aircraft reports beyond its position.
+	// Omitted when the decoder has no value, which is most of them for most
+	// aircraft. Live only on the backend; none of it is stored.
+	AltGeom     *float64 `json:"alt_geom,omitempty"`
+	BaroRate    *float64 `json:"baro_rate,omitempty"`
+	GeomRate    *float64 `json:"geom_rate,omitempty"`
+	IAS         *float64 `json:"ias,omitempty"`
+	TAS         *float64 `json:"tas,omitempty"`
+	Mach        *float64 `json:"mach,omitempty"`
+	TrueHeading *float64 `json:"true_heading,omitempty"`
+	MagHeading  *float64 `json:"mag_heading,omitempty"`
+	Roll        *float64 `json:"roll,omitempty"`
+	NavAltMCP   *float64 `json:"nav_altitude_mcp,omitempty"`
+	NavAltFMS   *float64 `json:"nav_altitude_fms,omitempty"`
+	NavHeading  *float64 `json:"nav_heading,omitempty"`
+	NavQNH      *float64 `json:"nav_qnh,omitempty"`
+	NavModes    []string `json:"nav_modes,omitempty"`
+	Type        string   `json:"type,omitempty"`
+	NIC         *float64 `json:"nic,omitempty"`
+	NACp        *float64 `json:"nac_p,omitempty"`
+	SIL         *float64 `json:"sil,omitempty"`
+	RC          *float64 `json:"rc,omitempty"`
+	Version     *float64 `json:"version,omitempty"`
+	RSSI        *float64 `json:"rssi,omitempty"`
+	Messages    int      `json:"messages,omitempty"`
 
 	// Positions seen since the last upload, oldest first, as
 	// [secondsBeforeAt, lat, lon, altFt]. Relative to the snapshot's own `at`
@@ -324,6 +350,26 @@ func attachTrails(list []snapshotAircraft, byHex map[string][]trailPoint, at tim
 	}
 }
 
+// capModes keeps nav_modes inside what the backend's schema accepts (at most
+// eight, each at most twelve characters), so an unexpected value from a
+// decoder costs that one field and not the aircraft.
+func capModes(modes []string) []string {
+	out := make([]string, 0, len(modes))
+	for _, m := range modes {
+		if m == "" || len(m) > 12 {
+			continue
+		}
+		out = append(out, m)
+		if len(out) == 8 {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // buildAircraft filters the decoder's table down to what the backend can use:
 // records with a position fresh enough to still be accepted.
 func buildAircraft(air *decoderjson.AircraftFile) []snapshotAircraft {
@@ -344,6 +390,29 @@ func buildAircraft(air *decoderjson.AircraftFile) []snapshotAircraft {
 			Emerg:    a.Emerg,
 			Category: a.Category,
 			SeenPos:  *a.SeenPos,
+
+			AltGeom:     a.AltGeom,
+			BaroRate:    a.BaroRate,
+			GeomRate:    a.GeomRate,
+			IAS:         a.IAS,
+			TAS:         a.TAS,
+			Mach:        a.Mach,
+			TrueHeading: a.TrueHeading,
+			MagHeading:  a.MagHeading,
+			Roll:        a.Roll,
+			NavAltMCP:   a.NavAltMCP,
+			NavAltFMS:   a.NavAltFMS,
+			NavHeading:  a.NavHeading,
+			NavQNH:      a.NavQNH,
+			NavModes:    capModes(a.NavModes),
+			Type:        a.PositionType(),
+			NIC:         a.NIC,
+			NACp:        a.NACp,
+			SIL:         a.SIL,
+			RC:          a.RC,
+			Version:     a.Version,
+			RSSI:        a.RSSI,
+			Messages:    a.Messages,
 		}
 		if alt, onGround, ok := a.AltBaroValue(); ok {
 			if onGround {

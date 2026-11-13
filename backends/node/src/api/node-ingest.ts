@@ -1142,9 +1142,11 @@ function normalisePagerDatetime(ts: string | undefined): string {
 // aggregate powering the staff Data tab.
 // ---------------------------------------------------------------------------
 
-// A busy site tracks a few hundred aircraft; 500 records at ~200 bytes each is
-// ~100 KB, so this caps a snapshot at roughly 2.5x the realistic worst case.
-const MAX_ADSB_BYTES = 256 * 1024;
+// A busy site tracks a few hundred aircraft. With the detail fields (agent
+// 0.1.17 on) a fully equipped airliner is about 550 bytes, so the 500-aircraft
+// limit is about 275 KB plus the carried positions (~70 KB at their own cap):
+// this sits clear of that worst case, where 256 KB would have refused it.
+const MAX_ADSB_BYTES = 512 * 1024;
 
 // Per-node rate limit. Snapshots are every 2s = 30/min (agent 0.1.16 on;
 // earlier agents send every 5s); 45 leaves room for a queue draining after a

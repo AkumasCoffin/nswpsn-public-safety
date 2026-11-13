@@ -189,6 +189,27 @@ position arrives, not how many there are. The per-day `snapshots` and
 `positions` counters do count per upload, so they run about 2.5× higher from
 0.1.16 on.
 
+### What each aircraft carries
+
+Up to 0.1.16 an uploaded aircraft was its position and little else: `hex`,
+`flight`, `lat`, `lon`, `alt_baro`, `gs`, `track`, `squawk`, `emergency`,
+`category`, `seen_pos`, and the positions seen between uploads. From **0.1.17**
+it also carries whatever the decoder holds of: `alt_geom`, `baro_rate`,
+`geom_rate`, `ias`, `tas`, `mach`, `true_heading`, `mag_heading`, `roll`,
+`nav_altitude_mcp`, `nav_altitude_fms`, `nav_heading`, `nav_qnh`, `nav_modes`,
+`nic`, `nac_p`, `sil`, `rc`, `version`, `rssi`, `messages`, and `type`.
+
+- Each is omitted when the decoder has no value. Most aircraft send only some.
+- `type` says how the position was obtained, in readsb's words. dump1090-fa has
+  no such field, so the agent works it out: `mlat` when `lat` is listed in the
+  record's `mlat` array, `tisb_icao`/`tisb_other` likewise, else `adsb_icao`.
+- The backend range-checks every value (`detailOf` in `sources/adsb.ts`) and
+  drops what no aircraft could report. It also checks aircraft one at a time,
+  drops any more than 800 km from the receiver's pin, and accepts bodies up to
+  512 KB (`api/node-ingest.ts`).
+- None of it is stored. It is on the live aircraft only
+  (`/api/v1/adsb/aircraft?detail=1` or `?hex=`).
+
 ## Adaptive gain
 
 `internal/autogain` adapts gain to the site. There is no single correct gain for

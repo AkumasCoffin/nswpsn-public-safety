@@ -63,6 +63,62 @@ type Aircraft struct {
 	SeenPos  *float64 `json:"seen_pos"`
 	RSSI     *float64 `json:"rssi"`
 	Messages int      `json:"messages"`
+
+	// What the aircraft says about itself beyond its position. All optional:
+	// each rides in its own message type, and many transponders never send
+	// some of them. Passed through to the backend untouched, which range-
+	// checks them (detailOf in sources/adsb.ts).
+	AltGeom     *float64 `json:"alt_geom"`
+	BaroRate    *float64 `json:"baro_rate"`
+	GeomRate    *float64 `json:"geom_rate"`
+	IAS         *float64 `json:"ias"`
+	TAS         *float64 `json:"tas"`
+	Mach        *float64 `json:"mach"`
+	TrueHeading *float64 `json:"true_heading"`
+	MagHeading  *float64 `json:"mag_heading"`
+	Roll        *float64 `json:"roll"`
+	NavAltMCP   *float64 `json:"nav_altitude_mcp"`
+	NavAltFMS   *float64 `json:"nav_altitude_fms"`
+	NavHeading  *float64 `json:"nav_heading"`
+	NavQNH      *float64 `json:"nav_qnh"`
+	NavModes    []string `json:"nav_modes"`
+	NIC         *float64 `json:"nic"`
+	NACp        *float64 `json:"nac_p"`
+	SIL         *float64 `json:"sil"`
+	RC          *float64 `json:"rc"`
+	Version     *float64 `json:"version"`
+	// The fields that came from MLAT or TIS-B rather than the aircraft's own
+	// ADS-B. dump1090-fa has no single "type" as readsb does; a position is
+	// MLAT when "lat" is listed in MLAT, and so on (see PositionType).
+	MLAT []string `json:"mlat"`
+	TISB []string `json:"tisb"`
+}
+
+// PositionType says how this aircraft's position was obtained, in the words
+// readsb uses for its `type` field, so the backend reads one vocabulary from
+// receivers and aggregators alike.
+func (a *Aircraft) PositionType() string {
+	has := func(list []string) bool {
+		for _, f := range list {
+			if f == "lat" || f == "lon" {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has(a.MLAT):
+		return "mlat"
+	case has(a.TISB):
+		if len(a.Hex) > 0 && a.Hex[0] == '~' {
+			return "tisb_other"
+		}
+		return "tisb_icao"
+	case len(a.Hex) > 0 && a.Hex[0] == '~':
+		return "tisb_other"
+	default:
+		return "adsb_icao"
+	}
 }
 
 // AircraftFile is the top level of aircraft.json.
