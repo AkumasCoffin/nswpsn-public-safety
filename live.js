@@ -11,7 +11,10 @@
   'use strict';
 
   const API = 'https://api.forcequit.xyz';
-  const STATES = ['ALL', 'NSW', 'VIC', 'QLD', 'SA', 'WA', 'ACT', 'NT'];
+  const STATES = ['ALL', 'NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'ACT', 'NT'];
+  // Only for reading the few feeds that still send a Sydney wall-clock time
+  // with no zone. Times are SHOWN in the reader's own zone: the page covers
+  // five time zones, and "6:12 pm" in Sydney time is wrong on a phone in Perth.
   const TZ = 'Australia/Sydney';
 
   // ---------------------------------------------------------------- helpers
@@ -72,12 +75,12 @@
     return guess - (seen - guess);
   }
 
-  const fmtClock = new Intl.DateTimeFormat('en-AU', { timeZone: TZ, hour: 'numeric', minute: '2-digit' });
-  const fmtDay = new Intl.DateTimeFormat('en-AU', { timeZone: TZ, weekday: 'short', day: 'numeric', month: 'short' });
-  const fmtDayKey = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
+  const fmtClock = new Intl.DateTimeFormat('en-AU', { hour: 'numeric', minute: '2-digit' });
+  const fmtDay = new Intl.DateTimeFormat('en-AU', { weekday: 'short', day: 'numeric', month: 'short' });
+  const fmtDayKey = new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' });
   const clock = (ms) => fmtClock.format(new Date(ms)).replace(/\s/g, ' ').toLowerCase();
 
-  /** "6:12 pm" today, "Fri 13 Nov, 6:12 pm" otherwise. Sydney time. */
+  /** "6:12 pm" today, "Fri 13 Nov, 6:12 pm" otherwise. The reader's own time zone. */
   function when(ms) {
     if (ms == null) return '';
     const sameDay = fmtDayKey.format(new Date(ms)) === fmtDayKey.format(new Date());
@@ -126,7 +129,7 @@
    */
   const SOURCES = {
     fires: { label: 'Fire services (all states)', url: '/api/v1/fires', every: 120 },
-    outages: { label: 'Power outages (NSW)', url: '/api/v1/outages', every: 120 },
+    outages: { label: 'Power outages (all distributors)', url: '/api/v1/outages', every: 120 },
     roadIncidents: { label: 'Road incidents', url: '/api/v1/traffic/incidents', every: 120 },
     roadFloods: { label: 'Flooded roads', url: '/api/v1/traffic/flood', every: 180 },
     roadFires: { label: 'Roads closed by fire (NSW)', url: '/api/v1/traffic/fire', every: 180 },
@@ -265,6 +268,14 @@
     }).filter((x) => x.active && inState(x.state));
   }
 
+  // The distributors the feed lists, with the state each is in. Before the
+  // feed carried a state they were all in NSW.
+  const distributors = () => ((store.outages.data && store.outages.data.sources) || [])
+    .map((s) => ({ id: s.distributor, name: s.name || s.distributor, state: s.state || 'NSW', read: !!s.updated_at }));
+  const distributorName = (id) => (distributors().find((d) => d.id === id) || {}).name || tidy(id);
+  // States with a distributor feed. Until the feed has answered, NSW (what it has always had).
+  const powerStates = () => { const st = [...new Set(distributors().map((d) => d.state))]; return st.length ? st : ['NSW']; };
+
   function outages() {
     const seen = new Set();
     const out = [];
@@ -274,7 +285,7 @@
       if (seen.has(key)) continue;
       seen.add(key);
       out.push({
-        id: p.id, distributor: p.distributor, state: p.state || 'NSW',
+        id: p.id, distributor: p.distributor, state: p.state || 'NSW', name: distributorName(p.distributor),
         planned: p.kind === 'planned', active: p.status === 'active',
         area: plain(p.area), streets: plain(d.streets), postcode: plain(d.postcode),
         customers: Number(p.customers_affected) || 0, cause: tidy(p.cause), crew: tidy(d.status),
@@ -417,22 +428,27 @@
     const all = outages();
     const now = all.filter((o) => o.active).sort((a, b) => (a.planned - b.planned) || (b.customers - a.customers) || ((b.start || 0) - (a.start || 0)));
     const later = all.filter((o) => !o.active).sort((a, b) => (a.start || Infinity) - (b.start || Infinity));
-    const srcs = (store.outages.data && store.outages.data.sources) || [];
-    const table = `<div class="lv-table-wrap"><table class="lv-table"><thead><tr><th scope="col">Distributor</th><th scope="col" class="r">Unplanned</th><th scope="col" class="r">Planned, under way</th><th scope="col" class="r">Scheduled</th><th scope="col" class="r">Customers off now</th></tr></thead><tbody>${
+    // One row per distributor in the chosen state(s), in the state filter's order.
+    const srcs = distributors().filter((d) => inState(d.state))
+      .sort((a, b) => (STATES.indexOf(a.state) - STATES.indexOf(b.state)) || a.name.localeCompare(b.name));
+    if (!srcs.length) return set('power', ['outages'], pr.html + `<p class="lv-empty">AusAware has no distributor feed for ${esc(ui.state)}.</p>`);
+    const many = ui.state === 'ALL';
+    const table = `<div class="lv-table-wrap"><table class="lv-table"><thead><tr><th scope="col">Distributor</th>${many ? '<th scope="col">State</th>' : ''}<th scope="col" class="r">Unplanned</th><th scope="col" class="r">Planned, under way</th><th scope="col" class="r">Scheduled</th><th scope="col" class="r">Customers off now</th></tr></thead><tbody>${
       srcs.map((s) => {
-        const mine = all.filter((o) => o.distributor === s.distributor);
-        if (!s.updated_at) return `<tr><td>${esc(s.name)}</td><td colspan="4" class="lv-muted">Not reporting — AusAware is not reading this distributor at the moment</td></tr>`;
+        const mine = all.filter((o) => o.distributor === s.id);
+        const st = many ? `<td>${statePill(s.state)}</td>` : '';
+        if (!s.read) return `<tr><td>${esc(s.name)}</td>${st}<td colspan="4" class="lv-muted">Not reporting — AusAware is not reading this distributor at the moment</td></tr>`;
         const act = mine.filter((o) => o.active);
-        return `<tr><td>${esc(s.name)}</td><td class="r">${num(act.filter((o) => !o.planned).length)}</td><td class="r">${num(act.filter((o) => o.planned).length)}</td><td class="r">${num(mine.length - act.length)}</td><td class="r">${num(act.reduce((n, o) => n + o.customers, 0))}</td></tr>`;
+        return `<tr><td>${esc(s.name)}</td>${st}<td class="r">${num(act.filter((o) => !o.planned).length)}</td><td class="r">${num(act.filter((o) => o.planned).length)}</td><td class="r">${num(mine.length - act.length)}</td><td class="r">${num(act.reduce((n, o) => n + o.customers, 0))}</td></tr>`;
       }).join('')
     }</tbody></table></div>`;
     const cur = ui.tab.power === 'later' ? 'later' : 'now';
     const render = (o) => row({
       cls: o.planned ? 'planned' : '',
       title: o.area || o.streets || 'Area not given',
-      side: [pill(o.planned ? (o.active ? 'Planned' : 'Scheduled') : 'Unplanned', o.planned ? 'planned' : 'state'), o.customers ? `<span class="lv-num">${plural(o.customers, 'customer')}</span>` : ''],
+      side: [pill(o.planned ? (o.active ? 'Planned' : 'Scheduled') : 'Unplanned', o.planned ? 'planned' : 'state'), many ? statePill(o.state) : '', o.customers ? `<span class="lv-num">${plural(o.customers, 'customer')}</span>` : ''],
       meta: [
-        esc(SRC_NAME[o.distributor] || o.distributor), o.area && o.streets ? esc(o.streets) : '', esc(o.cause), esc(o.crew),
+        esc(o.name), o.area && o.streets ? esc(o.streets) : '', esc(o.cause), esc(o.crew),
         o.start ? timeTag(o.start, o.start > Date.now() ? `Starts ${when(o.start)}` : `Since ${when(o.start)}`) : '',
         o.restore ? timeTag(o.restore, o.restore < Date.now() && o.active ? `Was due back ${when(o.restore)}` : `Due back ${when(o.restore)}`) : '',
         mapLink(o.pt),
@@ -446,7 +462,6 @@
       });
     set('power', ['outages'], html);
   }
-  const SRC_NAME = { endeavour: 'Endeavour Energy', essential: 'Essential Energy', ausgrid: 'Ausgrid' };
 
   function renderRoads() {
     const keys = ['roadIncidents', 'roadFloods', 'roadFires', 'roadEvents', 'roadwork'];
@@ -629,6 +644,7 @@
     floods: { label: 'Flooded roads', key: 'road_floods', legacy: (d) => d.traffic && d.traffic.floods },
     roadwork: { label: 'Roadwork', key: 'roadwork', legacy: (d) => d.traffic && d.traffic.roadwork },
     customers: { label: 'Customers without power', key: 'customers', legacy: (d) => d.power && d.power.total_customers },
+    outages: { label: 'Power outages', key: 'outages', legacy: (d) => d.power && d.power.total_outages },
   };
   const charts = {};
 
@@ -721,11 +737,12 @@
     out.push(tile('weather', 'Warnings', figure(['fires'], () => fireWarn + (bom || 0)),
       store.fires.data ? esc([`${fireWarn} fire`, bom == null ? '' : `${bom} weather (NSW)`, bomDown ? 'NSW weather warnings unavailable' : ''].filter(Boolean).join(' · ')) : ''));
 
-    if (covers(['NSW'])) {
+    if (covers(powerStates())) {
       const o = store.outages.data ? outages().filter((x) => x.active) : [];
-      const silent = ((store.outages.data && store.outages.data.sources) || []).filter((s) => !s.updated_at).map((s) => s.name);
+      const silent = distributors().filter((d) => inState(d.state) && !d.read).map((d) => d.name);
+      const quiet = !silent.length ? '' : silent.length > 2 ? `${silent.length} distributors not reporting` : `${silent.join(', ')} not reporting`;
       out.push(tile('power', 'Customers without power', figure(['outages'], () => o.reduce((n, x) => n + x.customers, 0)),
-        store.outages.data ? esc(`${plural(o.length, 'outage')} · NSW${silent.length ? ` · ${silent.join(', ')} not reporting` : ''}`) : ''));
+        store.outages.data ? esc([plural(o.length, 'outage'), quiet].filter(Boolean).join(' · ')) : ''));
     } else out.push(tile('power', 'Customers without power', 'No feed', `No distributor feed for ${ui.state}`));
 
     if (covers(['NSW', 'QLD', 'VIC', 'SA', 'ACT'])) {
@@ -748,7 +765,8 @@
     fires: { keys: ['fires'], render: renderFires, states: null },
     danger: { keys: ['fdr'], render: renderDanger, states: ['NSW'] },
     weather: { keys: ['bom'], render: renderWeather, states: ['NSW'] },
-    power: { keys: ['outages'], render: renderPower, states: ['NSW'] },
+    // Which states have a distributor is read from the feed itself (see renderChrome).
+    power: { keys: ['outages'], render: renderPower, states: ['NSW'], dynamic: powerStates },
     roads: { keys: ['roadIncidents', 'roadFloods', 'roadFires', 'roadEvents', 'roadwork'], render: renderRoads, states: ['NSW', 'QLD', 'VIC', 'SA', 'ACT'] },
     radio: { keys: ['summary'], render: renderRadio, states: ['NSW'] },
     aircraft: { keys: ['aircraft'], render: renderAircraft, states: null },
@@ -780,7 +798,8 @@
     }
     const hidden = [];
     for (const [id, sec] of Object.entries(SECTIONS)) {
-      const show = !sec.states || ui.state === 'ALL' || sec.states.includes(ui.state);
+      const states = sec.dynamic ? sec.dynamic() : sec.states;
+      const show = !states || ui.state === 'ALL' || states.includes(ui.state);
       const el = $(id);
       if (el) el.hidden = !show;
       if (!show && TITLES[id]) hidden.push(TITLES[id]);
