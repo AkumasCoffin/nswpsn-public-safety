@@ -2207,11 +2207,16 @@
     .nd2-polar-card .nd2-polar-legend { font-size: 0.82rem; line-height: 1.9; }
     .nd2-polar-key { display: inline-block; width: 14px; height: 0; margin-right: 6px;
       vertical-align: middle; border-top-width: 2px; border-top-style: solid; }
+    /* A square scope centred on the receiver (see adsb-radar.js), not a
+       letterbox: traffic spreads in every direction from the antenna. */
     #nd2-aov-map {
-      height: 440px;
+      width: 100%;
+      max-width: 640px;
+      aspect-ratio: 1 / 1;
+      margin: 0 auto;
       border-radius: 8px;
       overflow: hidden;
-      border: 1px solid var(--border-subtle, #334155);
+      border: 1px solid rgba(74,222,128,0.28);
     }
     #nd2-aov-map-note { margin-top: 0.55rem; }
     /* The receiver name is the click target in the fleet table; the state line
@@ -5235,6 +5240,7 @@
 
   <script src="config.js"></script>
   <script src="adsb-lightcone.js?v=6"></script>
+  <script src="adsb-radar.js?v=1"></script>
   <script src="api-session.js"></script>
   <script src="ui-dialogs.js"></script>
   <script>
@@ -9371,11 +9377,15 @@
         _nd2TrackMap = L.map('nd2-aov-map',
           { attributionControl: false, layers: [dark] })
           .setView([d.site ? d.site.lat : -33.8688, d.site ? d.site.lon : 151.2093], 8);
+        document.getElementById('nd2-aov-map').classList.add('adsb-radar');
       }
       if (_nd2TrackLayer) { _nd2TrackLayer.remove(); _nd2TrackLayer = null; }
 
       const layer = L.layerGroup();
       const traces = d.traces || [];
+      // Range rings and bearings first, so the tracks draw over them.
+      const radar = (d.site && window.AdsbRadar) ? window.AdsbRadar.build(d.site, traces) : null;
+      if (radar) radar.layer.addTo(layer);
       _nd2TrackColour = {};
       for (const tr of traces) {
         const colour = nd2AdsbHexColour(tr.hex);
@@ -9415,7 +9425,9 @@
       // Frame the coverage, not the whole country.
       // Frame whichever is larger. The envelope usually is, and framing only
       // the tracks would crop the coverage ring off the edge of the card.
-      try {
+      // A scope is centred on the receiver, out to its outer ring.
+      if (radar) _nd2TrackMap.fitBounds(radar.bounds);
+      else try {
         const b = L.latLngBounds([]);
         for (const tr of traces) for (const p of tr.points) b.extend(p);
         // Framed on the TRACKS, not the envelope. The envelope spans weeks

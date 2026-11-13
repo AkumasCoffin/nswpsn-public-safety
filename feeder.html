@@ -495,7 +495,10 @@
     .ab-polar-legend { font-size: 0.72rem; color: var(--text-soft); line-height: 1.7; }
     .ab-polar-key { display: inline-block; width: 14px; height: 0; margin-right: 6px;
       vertical-align: middle; border-top-width: 2px; border-top-style: solid; }
-    .ab-map { height: 320px; border-radius: 10px; overflow: hidden; border: 1px solid var(--border-subtle); }
+    /* A square scope centred on the receiver (see adsb-radar.js), not a
+       letterbox: traffic spreads in every direction from the antenna. */
+    .ab-map { width: 100%; max-width: 560px; aspect-ratio: 1 / 1; margin: 0 auto;
+      border-radius: 10px; overflow: hidden; border: 1px solid rgba(74,222,128,0.28); }
     .ab-note { font-size: 0.7rem; color: var(--text-soft); margin: 0.4rem 0 0.9rem; }
     .ab-scroll { max-height: 34vh; overflow-y: auto; }
     .ab-tbl { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
@@ -755,6 +758,7 @@
 
   <script src="config.js"></script>
   <script src="adsb-lightcone.js?v=6"></script>
+  <script src="adsb-radar.js?v=1"></script>
   <script>
     const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -2519,11 +2523,15 @@
         _abMap = L.map('adsb-map', {
           attributionControl: false, layers: [dark],
         }).setView([d.site ? d.site.lat : -33.8688, d.site ? d.site.lon : 151.2093], 8);
+        document.getElementById('adsb-map').classList.add('adsb-radar');
       }
       if (_abLayer) { _abLayer.remove(); _abLayer = null; }
 
       const layer = L.layerGroup();
       const traces = d.traces || [];
+      // Range rings and bearings first, so the tracks draw over them.
+      const radar = (d.site && window.AdsbRadar) ? window.AdsbRadar.build(d.site, traces) : null;
+      if (radar) radar.layer.addTo(layer);
       // Remembered so "Recently heard" can be tinted to match, whichever of the
       // two responses arrives first.
       _abTrackColour = {};
@@ -2553,7 +2561,9 @@
       layer.addTo(_abMap);
       _abLayer = layer;
 
-      try {
+      // A scope is centred on the receiver, out to its outer ring.
+      if (radar) _abMap.fitBounds(radar.bounds);
+      else try {
         const b = L.latLngBounds([]);
         for (const tr of traces) for (const pt of tr.points) b.extend(pt);
         // Framed on the TRACKS, not the envelope. The envelope spans weeks
