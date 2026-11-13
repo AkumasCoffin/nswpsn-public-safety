@@ -190,6 +190,27 @@
 }
 .lv-problem.stale { color: #fef08a; border-color: rgba(250, 204, 21, 0.4); background: rgba(250, 204, 21, 0.06); margin-bottom: 0.7rem; }
 
+/* ---- status blocks: bars and shares, for the cards that show counts not records ---- */
+.lv-sub { font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); margin: 1.1rem 0 0.5rem; }
+.lv-bars { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.4rem; }
+.lv-bars li { display: grid; grid-template-columns: minmax(7rem, 14rem) minmax(0, 1fr) minmax(4.5rem, auto); gap: 0.75rem; align-items: center; font-size: 13px; }
+.lv-bars-label { overflow-wrap: anywhere; }
+.lv-bars-track { height: 10px; border-radius: 999px; background: rgba(148, 163, 184, 0.12); overflow: hidden; }
+.lv-bars-fill { display: block; height: 100%; border-radius: 999px; background: #cbd5e1; }
+.lv-bars-value { text-align: right; white-space: nowrap; font-weight: 600; }
+.lv-bars-value .lv-soft { font-weight: 400; }
+.lv-stack { display: flex; gap: 2px; height: 14px; border-radius: 999px; overflow: hidden; }
+.lv-stack span { min-width: 3px; }
+.lv-legend { display: flex; flex-wrap: wrap; gap: 0.3rem 1.2rem; margin: 0.55rem 0 0; font-size: 13px; color: var(--text-muted); }
+.lv-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 0.4rem; }
+.lv-legend b { color: var(--text-main); }
+/* Water quality: good and fair are quiet, the two that matter stand out. */
+.is-good { background: var(--lv-ok); }
+.is-fair { background: #94a3b8; }
+.is-poor { background: var(--lv-advice); }
+.is-bad { background: var(--lv-watch); }
+.is-none { background: rgba(148, 163, 184, 0.3); }
+
 /* ---- tables (distributors, fire danger) ---- */
 .lv-table-wrap { overflow-x: auto; }
 .lv-table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -245,6 +266,8 @@
 @media (max-width: 600px) {
   .lv-bar { position: static; margin: 1rem 0; padding: 0; background: none; backdrop-filter: none; -webkit-backdrop-filter: none; border: 0; box-shadow: none; }
   .lv-seg { width: 100%; }
+  .lv-bars li { grid-template-columns: minmax(0, 1fr) auto; }
+  .lv-bars-track { grid-column: 1 / -1; grid-row: 2; }
   .lv-seg button { flex: 1 0 auto; }
   .lv-figs > span { flex: 1 1 6rem; }
   .lv-updated { margin-left: 0; width: 100%; justify-content: space-between; }

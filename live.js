@@ -104,8 +104,8 @@
   function tidy(s) {
     const t = plain(s).replace(/_/g, ' ');
     if (!t || t.toLowerCase() === 'null' || t.toLowerCase() === 'none' || t.toLowerCase() === 'unknown') return '';
-    // Short all-capitals words are acronyms (MVC, AFA) and stay as they are.
-    if (t === t.toUpperCase() && !/\s/.test(t) && t.length <= 5) return t;
+    // All-capitals words of up to three letters are acronyms (MVC, AFA) and stay as they are.
+    if (t === t.toUpperCase() && !/\s/.test(t) && t.length <= 3) return t;
     return (t === t.toUpperCase() || t === t.toLowerCase()) ? t.charAt(0).toUpperCase() + t.slice(1).toLowerCase() : t;
   }
 
@@ -154,7 +154,7 @@
   const ui = {
     state: 'ALL',
     open: {},          // list id -> expanded
-    tab: { fires: 'fires', power: 'now', roads: 'incidents', news: 'all' },
+    tab: { fires: 'fires', news: 'all' },
     trend: { metric: 'fires', period: '6h' },
     actOn: false,
     sourcesOpen: false,
@@ -422,61 +422,94 @@
     set('weather', ['bom'], html);
   }
 
+  // ---- status blocks: these cards show counts and proportions, not records.
+  // The individual outages, incidents, beaches and messages are on the map
+  // and in the logs; this page is for the state of things.
+
+  /** Horizontal bars, longest first as given. rows: [{ label, value, note?, cls? }]. */
+  function bars(title, rows, { unit = '', empty = 'Nothing to show.' } = {}) {
+    const head = `<h3 class="lv-sub">${esc(title)}</h3>`;
+    const live = rows.filter((r) => r.value > 0);
+    if (!live.length) return head + `<p class="lv-empty">${esc(empty)}</p>`;
+    const max = Math.max(...live.map((r) => r.value));
+    return head + `<ul class="lv-bars">${live.map((r) => `<li>
+      <span class="lv-bars-label">${r.html || esc(r.label)}</span>
+      <span class="lv-bars-track" aria-hidden="true"><span class="lv-bars-fill ${r.cls || ''}" style="width:${Math.max(1.5, (r.value / max) * 100).toFixed(1)}%"></span></span>
+      <span class="lv-bars-value lv-num">${num(r.value)}${unit ? ` ${esc(unit)}` : ''}${r.note ? ` <span class="lv-soft">${esc(r.note)}</span>` : ''}</span>
+    </li>`).join('')}</ul>`;
+  }
+
+  /** One bar split into shares, with a legend that carries the numbers. parts: [{ label, value, cls }]. */
+  function stack(title, parts) {
+    const total = parts.reduce((n, x) => n + x.value, 0);
+    if (!total) return '';
+    const live = parts.filter((x) => x.value > 0);
+    return `<h3 class="lv-sub">${esc(title)}</h3>
+      <div class="lv-stack" role="img" aria-label="${esc(live.map((x) => `${x.label} ${x.value}`).join(', '))}">${live.map((x) => `<span class="${x.cls}" style="flex:${x.value} 1 0"></span>`).join('')}</div>
+      <p class="lv-legend">${live.map((x) => `<span><i class="${x.cls}"></i>${esc(x.label)} <b class="lv-num">${num(x.value)}</b> <span class="lv-soft">${Math.round((x.value / total) * 100)}%</span></span>`).join('')}</p>`;
+  }
+
+  const seeMore = (what) => `<p class="lv-note">${esc(what)} are on the <a href="map">map</a> and in the <a href="logs">logs</a>.</p>`;
+
   function renderPower() {
     const pr = problem(['outages'], 'power outages');
     if (pr.block) return set('power', ['outages'], pr.html);
     const all = outages();
-    const now = all.filter((o) => o.active).sort((a, b) => (a.planned - b.planned) || (b.customers - a.customers) || ((b.start || 0) - (a.start || 0)));
-    const later = all.filter((o) => !o.active).sort((a, b) => (a.start || Infinity) - (b.start || Infinity));
     // One row per distributor in the chosen state(s), in the state filter's order.
     const srcs = distributors().filter((d) => inState(d.state))
       .sort((a, b) => (STATES.indexOf(a.state) - STATES.indexOf(b.state)) || a.name.localeCompare(b.name));
     if (!srcs.length) return set('power', ['outages'], pr.html + `<p class="lv-empty">AusAware has no distributor feed for ${esc(ui.state)}.</p>`);
     const many = ui.state === 'ALL';
+    const rows = srcs.map((d) => {
+      const mine = all.filter((o) => o.distributor === d.id);
+      const act = mine.filter((o) => o.active);
+      return { d, unplanned: act.filter((o) => !o.planned).length, planned: act.filter((o) => o.planned).length, scheduled: mine.length - act.length, customers: act.reduce((n, o) => n + o.customers, 0) };
+    });
+    const read = rows.filter((r) => r.d.read);
+    const sum = (k) => read.reduce((n, r) => n + r[k], 0);
     const table = `<div class="lv-table-wrap"><table class="lv-table"><thead><tr><th scope="col">Distributor</th>${many ? '<th scope="col">State</th>' : ''}<th scope="col" class="r">Unplanned</th><th scope="col" class="r">Planned, under way</th><th scope="col" class="r">Scheduled</th><th scope="col" class="r">Customers off now</th></tr></thead><tbody>${
-      srcs.map((s) => {
-        const mine = all.filter((o) => o.distributor === s.id);
-        const st = many ? `<td>${statePill(s.state)}</td>` : '';
-        if (!s.read) return `<tr><td>${esc(s.name)}</td>${st}<td colspan="4" class="lv-muted">Not reporting — AusAware is not reading this distributor at the moment</td></tr>`;
-        const act = mine.filter((o) => o.active);
-        return `<tr><td>${esc(s.name)}</td>${st}<td class="r">${num(act.filter((o) => !o.planned).length)}</td><td class="r">${num(act.filter((o) => o.planned).length)}</td><td class="r">${num(mine.length - act.length)}</td><td class="r">${num(act.reduce((n, o) => n + o.customers, 0))}</td></tr>`;
+      rows.map((r) => {
+        const st = many ? `<td>${statePill(r.d.state)}</td>` : '';
+        if (!r.d.read) return `<tr><td>${esc(r.d.name)}</td>${st}<td colspan="4" class="lv-muted">Not reporting — AusAware is not reading this distributor at the moment</td></tr>`;
+        return `<tr><td>${esc(r.d.name)}</td>${st}<td class="r">${num(r.unplanned)}</td><td class="r">${num(r.planned)}</td><td class="r">${num(r.scheduled)}</td><td class="r">${num(r.customers)}</td></tr>`;
       }).join('')
     }</tbody></table></div>`;
-    const cur = ui.tab.power === 'later' ? 'later' : 'now';
-    const render = (o) => row({
-      cls: o.planned ? 'planned' : '',
-      title: o.area || o.streets || 'Area not given',
-      side: [pill(o.planned ? (o.active ? 'Planned' : 'Scheduled') : 'Unplanned', o.planned ? 'planned' : 'state'), many ? statePill(o.state) : '', o.customers ? `<span class="lv-num">${plural(o.customers, 'customer')}</span>` : ''],
-      meta: [
-        esc(o.name), o.area && o.streets ? esc(o.streets) : '', esc(o.cause), esc(o.crew),
-        o.start ? timeTag(o.start, o.start > Date.now() ? `Starts ${when(o.start)}` : `Since ${when(o.start)}`) : '',
-        o.restore ? timeTag(o.restore, o.restore < Date.now() && o.active ? `Was due back ${when(o.restore)}` : `Due back ${when(o.restore)}`) : '',
-        mapLink(o.pt),
-      ],
-    });
-    const html = pr.html + table
-      + `<div style="margin-top:0.9rem">${tabs('power', [['now', 'Off now', now.length], ['later', 'Scheduled', later.length]])}</div>`
-      + list(`power-${cur}`, cur === 'now' ? now : later, render, {
-        first: 6, noun: 'outage',
-        empty: cur === 'now' ? 'No outages under way are listed by the distributors that are reporting.' : 'No scheduled outages are listed.',
-      });
+    const html = pr.html
+      + figs([[sum('customers'), 'customers off now'], [sum('unplanned'), 'unplanned outages'], [sum('planned'), 'planned, under way'], [sum('scheduled'), 'scheduled']])
+      + bars('Customers without power, by distributor', read.slice().sort((a, b) => b.customers - a.customers)
+        .map((r) => ({ label: r.d.name, value: r.customers, note: many ? r.d.state : '' })), { empty: 'No customers are reported without power.' })
+      + `<h3 class="lv-sub">By distributor</h3>` + table
+      + seeMore('Individual outages');
     set('power', ['outages'], html);
   }
 
+  const ROAD_STATES = ['NSW', 'QLD', 'VIC', 'SA', 'ACT'];
+  const ROAD_COLS = [['incidents', 'Incidents'], ['closures', 'Floods and fire closures'], ['events', 'Major events'], ['roadwork', 'Roadwork']];
   function renderRoads() {
     const keys = ['roadIncidents', 'roadFloods', 'roadFires', 'roadEvents', 'roadwork'];
-    const cur = ROAD_KINDS[ui.tab.roads] ? ui.tab.roads : 'incidents';
-    const pr = problem(ROAD_KINDS[cur], 'this road feed');
-    const count = (k) => (ROAD_KINDS[k].every((s) => store[s].data) ? roads(k).length : null);
-    const head = tabs('roads', [['incidents', 'Incidents', count('incidents')], ['closures', 'Floods and fire closures', count('closures')], ['events', 'Major events', count('events')], ['roadwork', 'Roadwork', count('roadwork')]]);
-    if (pr.block) return set('roads', keys, head + pr.html);
-    const items = roads(cur);
-    const html = head + pr.html + list(`roads-${cur}`, items, (x) => row({
-      cls: x.planned ? 'planned' : (x.major ? 'watch' : ''), title: x.title,
-      side: [x.major ? pill('Major', 'watch') : '', pill(x.cat, x.planned ? 'planned' : ''), statePill(x.state)],
-      meta: [esc(x.roads), x.time ? timeTag(x.time, `Updated ${ago(x.time)}`) : '', mapLink(x.pt)],
-      text: x.advice,
-    }), { first: 8, cap: 100, noun: 'record', empty: ui.state === 'ALL' ? 'None listed right now.' : `None listed for ${ui.state} right now.` });
+    const pr = problem(keys, 'the road feeds');
+    if (pr.block) return set('roads', keys, pr.html);
+    // A kind whose feed has not answered has no count: a dash, never a zero.
+    const have = (k) => ROAD_KINDS[k].every((key) => store[key].data);
+    const by = {};
+    for (const [k] of ROAD_COLS) by[k] = have(k) ? roads(k) : null;
+    const n = (k, st) => (by[k] ? by[k].filter((x) => !st || x.state === st).length : null);
+    const cell = (v) => (v == null ? '<span class="lv-muted">—</span>' : num(v));
+    const states = ROAD_STATES.filter(inState);
+    const table = `<div class="lv-table-wrap"><table class="lv-table"><thead><tr><th scope="col">State</th>${ROAD_COLS.map(([, label]) => `<th scope="col" class="r">${esc(label)}</th>`).join('')}</tr></thead><tbody>${
+      states.map((st) => `<tr><td>${statePill(st)}</td>${ROAD_COLS.map(([k]) => `<td class="r">${cell(n(k, st))}</td>`).join('')}</tr>`).join('')
+    }</tbody></table></div>`;
+    const cats = {};
+    for (const x of by.incidents || []) { const c = x.cat || 'Other'; cats[c] = (cats[c] || 0) + 1; }
+    const top = Object.entries(cats).sort((a, b) => b[1] - a[1]).slice(0, 6);
+    const major = (by.incidents || []).filter((x) => x.major).length;
+    const html = pr.html
+      + figs([by.incidents ? [by.incidents.length, 'incidents'] : null, by.incidents ? [major, 'marked major'] : null, by.closures ? [by.closures.length, 'flood or fire closures'] : null,
+        by.events ? [by.events.length, 'major events'] : null, by.roadwork ? [by.roadwork.length, 'roadwork'] : null])
+      + (states.length > 1 ? bars('Incidents by state', states.map((st) => ({ label: st, value: n('incidents', st) || 0 })).sort((a, b) => b.value - a.value), { empty: 'No incidents are listed.' }) : '')
+      + bars('Incidents by kind', top.map(([label, value]) => ({ label, value })), { empty: ui.state === 'ALL' ? 'No incidents are listed.' : `No incidents are listed for ${ui.state}.` })
+      + `<h3 class="lv-sub">By state</h3>` + table
+      + seeMore('Individual incidents and roadwork');
     set('roads', keys, html);
   }
 
@@ -540,13 +573,24 @@
     if (pr.block) return set('pager', ['pager'], pr.html);
     const items = feats('pager').map((f) => {
       const p = f.properties || {};
-      return { msg: plain(p.message), type: tidy(p.type), stop: p.is_stop === true, time: toMs(p.timestamp) || toMs(p.fetched_at), pt: pointOf(f) || (Number.isFinite(p.lat) && Number.isFinite(p.lon) ? { lat: p.lat, lon: p.lon } : null) };
-    }).sort((a, b) => (b.time || 0) - (a.time || 0));
-    const html = pr.html + list('pager', items, (x) => row({
-      title: x.type || 'Pager message', side: [x.stop ? pill('Stop message') : ''],
-      meta: [timeTag(x.time, ago(x.time)), mapLink(x.pt)], text: x.msg,
-    }), { first: 5, cap: 60, noun: 'message', empty: 'No located pager messages in the last three hours.' });
-    set('pager', ['pager'], html + '<p class="lv-note">Only messages that could be placed on the map, from the last three hours.</p>');
+      return { type: tidy(p.type), stop: p.is_stop === true, time: toMs(p.timestamp) || toMs(p.fetched_at) };
+    });
+    // Six half-hour steps back from now, oldest first.
+    const HALF = 1_800_000, now = Date.now();
+    const slots = Array.from({ length: 6 }, (_, i) => ({ from: now - (6 - i) * HALF, n: 0 }));
+    for (const x of items) {
+      if (x.time == null) continue;
+      const i = Math.floor((x.time - (now - 6 * HALF)) / HALF);
+      if (i >= 0 && i < 6) slots[i].n += 1;
+    }
+    const types = {};
+    for (const x of items) { const t = x.stop ? 'Stop message' : (x.type || 'Type not read'); types[t] = (types[t] || 0) + 1; }
+    const html = pr.html
+      + figs([[items.length, 'located messages, last 3 hours'], [items.filter((x) => x.stop).length, 'stop messages']])
+      + bars('Messages by half hour', slots.map((sl) => ({ label: `${clock(sl.from)} – ${clock(sl.from + HALF)}`, value: sl.n })), { empty: 'No located pager messages in the last three hours.' })
+      + bars('By type', Object.entries(types).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([label, value]) => ({ label, value })), { empty: 'No located pager messages in the last three hours.' })
+      + '<p class="lv-note">Counts only the messages that could be placed on the map. The messages themselves are on the <a href="map">map</a> and in the <a href="logs">logs</a>.</p>';
+    set('pager', ['pager'], html);
   }
 
   function renderTransport() {
@@ -591,21 +635,22 @@
     if (pr.block) return set('beaches', ['beachwatch', 'beachsafe'], pr.html);
     const bs = feats('beachwatch').map((f) => {
       const p = f.properties || {};
-      return { name: plain(p.siteName), result: tidy(p.latestResult), forecast: tidy(p.pollutionForecast), sampled: toMs(p.latestResultObservationDate), pt: pointOf(f) };
+      return { result: tidy(p.latestResult).toLowerCase(), forecast: tidy(p.pollutionForecast) };
     });
-    const bad = (b) => /^(bad|poor)$/i.test(b.result);
-    const likely = (b) => /likely/i.test(b.forecast) && !/unlikely/i.test(b.forecast);
-    const flagged = bs.filter((b) => bad(b) || likely(b)).sort((a, b) => (bad(b) - bad(a)) || a.name.localeCompare(b.name));
+    const rated = (r) => bs.filter((b) => b.result === r).length;
+    const known = ['good', 'fair', 'poor', 'bad'];
+    const likely = bs.filter((b) => /likely/i.test(b.forecast) && !/unlikely/i.test(b.forecast)).length;
     const safe = Array.isArray(store.beachsafe.data) ? store.beachsafe.data : null;
     const patrolled = safe ? safe.filter((b) => b.isPatrolledToday || b.patrolled).length : null;
     const html = pr.html
-      + figs([[bs.length, 'beaches sampled'], [bs.filter(bad).length, 'rated Poor or Bad'], [bs.filter(likely).length, 'pollution likely today'],
+      + figs([[bs.length, 'beaches sampled'], [rated('poor') + rated('bad'), 'rated Poor or Bad'], [likely, 'pollution likely today'],
         patrolled == null ? (stateOf('beachsafe') === 'loading' ? null : ['—', 'patrol data unavailable']) : [patrolled, 'patrolled today']])
-      + list('beaches', flagged, (b) => row({
-        cls: bad(b) ? 'watch' : 'advice', title: b.name,
-        side: [bad(b) ? pill(b.result, 'watch') : pill(b.result), likely(b) ? pill('Pollution likely', 'advice') : ''],
-        meta: [b.sampled ? timeTag(b.sampled, `Sampled ${fmtDay.format(new Date(b.sampled))}`) : '', mapLink(b.pt)],
-      }), { first: 6, noun: 'beach', empty: 'No sampled beach is rated Poor or Bad, and none has pollution forecast as likely.' });
+      + stack('Latest water quality result', [
+        { label: 'Good', value: rated('good'), cls: 'is-good' }, { label: 'Fair', value: rated('fair'), cls: 'is-fair' },
+        { label: 'Poor', value: rated('poor'), cls: 'is-poor' }, { label: 'Bad', value: rated('bad'), cls: 'is-bad' },
+        { label: 'No result', value: bs.filter((b) => !known.includes(b.result)).length, cls: 'is-none' },
+      ])
+      + '<p class="lv-note">Each beach and its result are on the <a href="map">map</a>.</p>';
     set('beaches', ['beachwatch', 'beachsafe'], html);
   }
 
