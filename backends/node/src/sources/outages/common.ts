@@ -92,10 +92,15 @@ export const OUTAGE_SOURCES = [
 ] as const;
 export type OutageSource = (typeof OUTAGE_SOURCES)[number];
 
-/** Each distributor's name as people know it, and the state its network is in. */
-export const DISTRIBUTOR_INFO: Readonly<Record<Distributor, { name: string; state: OutageState }>> = {
+/**
+ * Each distributor's name as people know it, and the state its network is in.
+ * `also` is any other state the network reaches into: Essential Energy is a
+ * NSW distributor that supplies towns in southern Queensland, so its outages
+ * there are QLD's, and a request for QLD has to read it.
+ */
+export const DISTRIBUTOR_INFO: Readonly<Record<Distributor, { name: string; state: OutageState; also?: readonly OutageState[] }>> = {
   endeavour: { name: 'Endeavour Energy', state: 'NSW' },
-  essential: { name: 'Essential Energy', state: 'NSW' },
+  essential: { name: 'Essential Energy', state: 'NSW', also: ['QLD'] },
   ausgrid: { name: 'Ausgrid', state: 'NSW' },
   ausnet: { name: 'AusNet', state: 'VIC' },
   citipower: { name: 'CitiPower', state: 'VIC' },

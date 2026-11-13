@@ -602,9 +602,12 @@ export function summariseByState(): Record<string, StateStats> {
   // absent, which is not the same as no outages.
   const power = outagesUnderWay();
   for (const distributor of power.read) {
-    const { state } = DISTRIBUTOR_INFO[distributor];
-    add(state, 'outages');
-    add(state, 'customers');
+    // Its own state, and any other its network reaches into (Essential, QLD).
+    const info = DISTRIBUTOR_INFO[distributor];
+    for (const state of [info.state, ...(info.also ?? [])]) {
+      add(state, 'outages');
+      add(state, 'customers');
+    }
   }
   for (const o of power.outages) {
     add(o.state, 'outages', 1);

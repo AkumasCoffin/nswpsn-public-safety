@@ -455,8 +455,10 @@
     const pr = problem(['outages'], 'power outages');
     if (pr.block) return set('power', ['outages'], pr.html);
     const all = outages();
-    // One row per distributor in the chosen state(s), in the state filter's order.
-    const srcs = distributors().filter((d) => inState(d.state))
+    // One row per distributor in the chosen state(s), in the state filter's order,
+    // and any other with an outage there: Essential Energy is a NSW distributor
+    // whose network reaches into southern Queensland.
+    const srcs = distributors().filter((d) => inState(d.state) || all.some((o) => o.distributor === d.id))
       .sort((a, b) => (STATES.indexOf(a.state) - STATES.indexOf(b.state)) || a.name.localeCompare(b.name));
     if (!srcs.length) return set('power', ['outages'], pr.html + `<p class="lv-empty">AusAware has no distributor feed for ${esc(ui.state)}.</p>`);
     const many = ui.state === 'ALL';

@@ -135,7 +135,9 @@ describe('summariseByState', () => {
       Polygons: [],
     });
 
-    expect(summariseByState()).toEqual({ NSW: { outages: 5, customers: 45 } });
+    // Essential's network reaches into Queensland, so once it is read QLD has
+    // the two measures as well: none there now, which is not "not known".
+    expect(summariseByState()).toEqual({ NSW: { outages: 5, customers: 45 }, QLD: { outages: 0, customers: 0 } });
   });
 
   it('says 0 outages once a distributor has been read and has none', () => {

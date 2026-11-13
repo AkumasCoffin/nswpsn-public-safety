@@ -45,6 +45,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { describeRoute } from 'hono-openapi';
 import { liveStore } from '../store/live.js';
+import { stateForPoint } from '../lib/stateMask.js';
 import type { EndeavourOutage } from '../sources/endeavour.js';
 import type { EssentialOutage } from '../sources/essential.js';
 import { ausgridScheduled, type AusgridOutage, type AusgridOutagesPayload } from '../sources/ausgrid.js';
@@ -161,11 +162,19 @@ const ESSENTIAL_MAPPED = new Set([
 
 export function fromEssential(o: EssentialOutage): Outage {
   const times = { timeOff: outageUtc(o.timeOff), estTimeOn: outageUtc(o.estTimeOn), lastUpdated: outageUtc(o.lastUpdated) };
+  // Essential Energy is a NSW distributor whose network crosses the border:
+  // it supplies towns in southern Queensland. An outage there is in QLD, and
+  // is listed under QLD, wherever its distributor has its office. Anything
+  // that is not placed in Queensland stays NSW (no location, or a point that
+  // falls a hair outside the state outlines).
+  const lat = num(o.latitude);
+  const lon = num(o.longitude);
+  const state = lat !== null && lon !== null && stateForPoint(lon, lat) === 'QLD' ? 'QLD' : 'NSW';
   return {
     id: o.incidentId,
     source: o.source,
     distributor: 'essential',
-    state: 'NSW',
+    state,
     kind: o.outageType,
     status: o.status,
     area: o.suburb,
@@ -175,9 +184,9 @@ export function fromEssential(o: EssentialOutage): Outage {
     start_at: times.timeOff,
     restore_at: times.estTimeOn,
     updated_at: times.lastUpdated,
-    lat: num(o.latitude),
-    lon: num(o.longitude),
-    polygons: o.polygon && o.polygon.length >= 3 ? [o.polygon.map(([lon, lat]) => [lon, lat])] : [],
+    lat,
+    lon,
+    polygons: o.polygon && o.polygon.length >= 3 ? [o.polygon.map(([x, y]) => [x, y])] : [],
     details: detailsOf(o, ESSENTIAL_MAPPED, times),
   };
 }
@@ -415,8 +424,9 @@ export interface OutagesFilter {
  * future feed, filed under a different `source` in each. What counts outages
  * counts a distributor's id once.
  *
- * A state filter keeps the distributors of those states, so `sources` lists
- * only them. `read` holds the distributors with at least one feed read so
+ * A state filter keeps the distributors whose network is in, or reaches into,
+ * those states, so `sources` lists only them; each outage is kept by its own
+ * state. `read` holds the distributors with at least one feed read so
  * far; `sources[].updated_at` is stricter (every feed read).
  */
 export function mergedOutages(q: OutagesFilter = {}): {
@@ -434,7 +444,7 @@ export function mergedOutages(q: OutagesFilter = {}): {
   for (const distributor of DISTRIBUTORS) {
     if (!distributors.includes(distributor)) continue;
     const info = DISTRIBUTOR_INFO[distributor];
-    if (states.size && !states.has(info.state)) continue;
+    if (states.size && !states.has(info.state) && !(info.also ?? []).some((st) => states.has(st))) continue;
     let count = 0;
     let oldest: number | null = null;
     let unread = false;

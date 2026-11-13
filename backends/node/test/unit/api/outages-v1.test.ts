@@ -25,7 +25,7 @@ vi.mock('../../../src/db/pool.js', () => ({
 }));
 
 import { liveStore } from '../../../src/store/live.js';
-import { outagesRouter, outageUtc } from '../../../src/api/outages.js';
+import { outagesRouter, outageUtc, fromEssential } from '../../../src/api/outages.js';
 import { mirror } from '../../../src/api/v1/mirror.js';
 import { notFound, onError } from '../../../src/api/v1/respond.js';
 import { requireApiKey } from '../../../src/services/auth/apiKey.js';
@@ -315,6 +315,21 @@ describe('GET /api/v1/outages', () => {
     });
   });
 
+  it("an Essential Energy outage across the border is Queensland's, and a request for QLD finds it", async () => {
+    // Goondiwindi, on the Queensland side of the Macintyre.
+    const over = { ...ES_UNPLANNED, incidentId: 'ES-QLD-1', latitude: -28.546, longitude: 150.307 };
+    expect(fromEssential(over).state).toBe('QLD');
+    expect(fromEssential(ES_UNPLANNED).state).toBe('NSW');
+    // No location: it stays with the distributor's own state.
+    expect(fromEssential({ ...ES_UNPLANNED, latitude: null, longitude: null } as typeof ES_UNPLANNED).state).toBe('NSW');
+
+    liveStore.set('essential_current', [ES_UNPLANNED, over]);
+    const qld = await read('/api/v1/outages?state=QLD');
+    expect(ids(qld)).toEqual(['ES-QLD-1']);
+    expect(qld.features[0]!.properties).toMatchObject({ distributor: 'essential', state: 'QLD' });
+    expect(ids(await read('/api/v1/outages?state=NSW&distributor=essential'))).not.toContain('ES-QLD-1');
+  });
+
   it('an Ausgrid outage: the common fields, and streets, status and reason in details under four keys', async () => {
     liveStore.set('ausgrid', { Markers: [AUSGRID], Polygons: [] });
     const body = await read('/api/v1/outages?distributor=ausgrid');
@@ -445,10 +460,13 @@ describe('GET /api/v1/outages', () => {
     // A state and a distributor of another state have nothing in common.
     const none = await read('/api/v1/outages?state=QLD&distributor=ausnet');
     expect(none).toMatchObject({ count: 0, features: [], sources: [] });
-    // Read, with nothing: Queensland's are not read yet.
-    expect((await read('/api/v1/outages?state=qld')).sources).toEqual([
-      { distributor: 'energex', name: 'Energex', state: 'QLD', count: 0, updated_at: null },
-      { distributor: 'ergon', name: 'Ergon Energy', state: 'QLD', count: 0, updated_at: null },
+    // Queensland's own two are not read yet. Essential Energy, a NSW
+    // distributor whose network reaches into southern Queensland, is asked
+    // too: it is listed, with none of its outages there just now.
+    const qld = await read('/api/v1/outages?state=qld');
+    expect(qld.count).toBe(0);
+    expect(qld.sources.map((s) => [s.distributor, s.state, s.count, s.updated_at === null])).toEqual([
+      ['essential', 'NSW', 0, false], ['energex', 'QLD', 0, true], ['ergon', 'QLD', 0, true],
     ]);
   });
 
@@ -481,7 +499,10 @@ describe('GET /api/v1/outages', () => {
     ]);
     // Every distributor, in order, each under its name and state; the ones with no source yet are not read.
     expect(body.sources.map((s) => s.distributor)).toEqual([...DISTRIBUTORS]);
-    for (const s of body.sources) expect(s, s.distributor).toMatchObject(DISTRIBUTOR_INFO[s.distributor as keyof typeof DISTRIBUTOR_INFO]);
+    for (const s of body.sources) {
+      const info = DISTRIBUTOR_INFO[s.distributor as keyof typeof DISTRIBUTOR_INFO];
+      expect(s, s.distributor).toMatchObject({ name: info.name, state: info.state });
+    }
     expect(body.sources.slice(3).map((s) => [s.distributor, s.count, s.updated_at])).toEqual([
       ['ausnet', 0, null], ['citipower', 0, null], ['powercor', 0, null], ['jemena', 0, null], ['energex', 0, null], ['ergon', 0, null],
       ['sapn', 0, READ_AT], ['westernpower', 0, null], ['horizon', 0, null],
