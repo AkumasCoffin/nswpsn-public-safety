@@ -1909,8 +1909,8 @@
         params.set('state', stateFilter);
       }
       
-      if (dateFrom) params.set('date_from', dateFrom);
-      if (dateTo) params.set('date_to', dateTo);
+      if (dateFrom) params.set('date_from', localInputToUtc(dateFrom));
+      if (dateTo) params.set('date_to', localInputToUtc(dateTo));
       if (search) params.set('search', search);
       
       // Apply quick filter if no custom date set (-1 = all time, no filter)
@@ -4365,6 +4365,16 @@
     // the distributors outside NSW. NSW's three keep their own older shapes.
     const MERGED_OUTAGE_SOURCES = new Set(['ausnet', 'citipower', 'powercor', 'jemena', 'energex', 'ergon', 'sapn', 'westernpower', 'horizon']);
 
+    // The From and To boxes hold a time on the reader's own clock, with no
+    // zone. Sent as typed, the backend reads a zoneless time as Sydney time,
+    // so someone in Perth asking for 2 pm got Sydney's 2 pm, three hours
+    // early. Sent as UTC it is the instant they meant, wherever they are; the
+    // results are shown back on their own clock (formatDateTime).
+    function localInputToUtc(value) {
+      const d = new Date(value);
+      return isNaN(d.getTime()) ? value : d.toISOString();
+    }
+
     function formatDateTime(str) {
       // Format ISO date strings to human-readable format
       if (!str) return '';
@@ -4662,8 +4672,8 @@
           }
         }
         if (alertLevel) params.set('severity', alertLevel);
-        if (dateFrom) params.set('date_from', dateFrom);
-        if (dateTo) params.set('date_to', dateTo);
+        if (dateFrom) params.set('date_from', localInputToUtc(dateFrom));
+        if (dateTo) params.set('date_to', localInputToUtc(dateTo));
         if (search) params.set('search', search);
         
         // Apply quick filter (-1 = all time, no filter)
