@@ -2514,14 +2514,14 @@
 
       if (!_abMap) {
         const dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=cb1_29rl_1_764d57ded0436220d836abc9',
-          { subdomains: 'abcd', maxZoom: 19, attribution: '© CartoDB' });
+          { subdomains: 'abcd', maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>' });
         // The wheel zooms. It was off because this map sits in a scrolling
         // panel and swallowing the wheel traps you at it — but the trap only
         // bites when the pointer is over the map, and a tracks map you cannot
         // zoom is not much of a tracks map. Leaflet re-enables page scrolling
         // the moment the pointer leaves, so the escape is just moving away.
         _abMap = L.map('adsb-map', {
-          attributionControl: false, layers: [dark],
+          layers: [dark],
         }).setView([d.site ? d.site.lat : -33.8688, d.site ? d.site.lon : 151.2093], 8);
         document.getElementById('adsb-map').classList.add('adsb-radar');
       }
@@ -2863,7 +2863,7 @@
     function _locInitMap(center, zoomed) {
       if (_loc.map) { setTimeout(() => _loc.map.invalidateSize(), 40); return; }
       const dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=cb1_29rl_1_764d57ded0436220d836abc9',
-        { subdomains: 'abcd', maxZoom: 19, attribution: '© CartoDB' });
+        { subdomains: 'abcd', maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>' });
       const sat = L.tileLayer('https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
         { subdomains: ['mt0', 'mt1', 'mt2', 'mt3'], maxZoom: 21, maxNativeZoom: 19, attribution: '© Google' });
       const map = L.map('loc-map', { layers: [dark] }).setView(center, zoomed ? 14 : 10);

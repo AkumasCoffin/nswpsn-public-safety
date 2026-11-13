@@ -937,28 +937,11 @@
         </div>
         <div class="card-body">
           <p style="margin-bottom:0.6rem;">Live aircraft positions across the whole of Australia, merged from five community ADS-B networks — adsb.lol, adsb.fi, airplanes.live, adsb.one and FlyItalyADSB (over NSW) — for the widest feeder coverage. Powers the aircraft layer on the incident map, refreshing roughly every 15 seconds. Emergency squawks (7500 hijack, 7600 radio failure, 7700 general emergency) are highlighted.</p>
-          <p><strong>Data:</strong> Position, altitude, ground speed, heading, callsign/registration, aircraft type, transponder squawk &amp; emergency status</p>
-          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap:0.7rem; margin-top:1rem;">
-            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
-              <strong style="color:#3b82f6;">Commercial</strong><br>
-              <span style="font-size:0.8rem; color:#94a3b8;">Airliners &amp; freight</span>
-            </div>
-            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
-              <strong style="color:#22c55e;">General Aviation</strong><br>
-              <span style="font-size:0.8rem; color:#94a3b8;">Light &amp; private aircraft</span>
-            </div>
-            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
-              <strong style="color:#a855f7;">Rotary</strong><br>
-              <span style="font-size:0.8rem; color:#94a3b8;">Helicopters, rescue &amp; HEMS</span>
-            </div>
-            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
-              <strong style="color:#ef4444;">Emergency</strong><br>
-              <span style="font-size:0.8rem; color:#94a3b8;">7500 / 7600 / 7700 squawks</span>
-            </div>
-          </div>
+          <p><strong>Data:</strong> Position, altitude, ground speed, heading, callsign/registration, aircraft type, transponder squawk &amp; emergency status. Select an aircraft for what else it reports: vertical rate, GPS altitude, airspeeds, selected altitude and QNH, how its position was obtained and how exact it is, and signal strength. Aircraft are coloured by altitude; police, rescue, firefighting, ambulance and military aircraft have their own colours.</p>
           <p style="margin-top:0.8rem;"><strong>Source:</strong> <a href="https://adsb.lol/" target="_blank">adsb.lol</a> · <a href="https://adsb.fi/" target="_blank">adsb.fi</a> · <a href="https://airplanes.live/" target="_blank">airplanes.live</a> · <a href="https://adsb.one/" target="_blank">adsb.one</a> · <a href="https://flyitalyadsb.com/" target="_blank" rel="noopener">FlyItalyADSB</a></p>
           <p style="margin-top:0.4rem;"><strong>Aircraft details:</strong> photos from <a href="https://www.planespotters.net/" target="_blank" rel="noopener">Planespotters.net</a>, or <a href="https://airport-data.com/" target="_blank" rel="noopener">airport-data.com</a> when Planespotters has none, each credited to its photographer · maker, operator and the callsign's usual route from <a href="https://www.adsbdb.com/" target="_blank" rel="noopener">adsbdb.com</a> (aircraft data from PlaneBase; route data by David Taylor and Jim Mason), also served on the public API at <code>/api/v1/adsb/info/{hex}</code></p>
-          <p style="margin-top:0.4rem; font-size:0.85rem; color:#94a3b8;"><strong>Licence:</strong> Flight data: FlyItalyADSB (<a href="https://flyitalyadsb.com/" target="_blank" rel="noopener">flyitalyadsb.com</a>), <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener">CC BY-SA 4.0</a> — see their <a href="https://flyitalyadsb.com/data/products/using-the-data/#licence" target="_blank" rel="noopener">licence and credit terms</a>.</p>
+          <p style="margin-top:0.4rem;"><strong>Airspace, airports &amp; navaids:</strong> the optional chart overlays on the aircraft layer are from <a href="https://www.openaip.net/" target="_blank" rel="noopener">openAIP</a>, <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a>. Not for navigation.</p>
+          <p style="margin-top:0.4rem; font-size:0.85rem; color:#94a3b8;"><strong>Licence:</strong> adsb.lol data is made available under the <a href="https://opendatacommons.org/licenses/odbl/1-0/" target="_blank" rel="noopener">Open Database License (ODbL)</a>. Flight data: FlyItalyADSB (<a href="https://flyitalyadsb.com/" target="_blank" rel="noopener">flyitalyadsb.com</a>), <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener">CC BY-SA 4.0</a> — see their <a href="https://flyitalyadsb.com/data/products/using-the-data/#licence" target="_blank" rel="noopener">licence and credit terms</a>.</p>
         </div>
       </article>
 

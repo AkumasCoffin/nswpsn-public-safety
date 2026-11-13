@@ -9370,12 +9370,12 @@
       // Leaflet a zero-size container and a blank tile grid.
       if (!_nd2TrackMap) {
         const dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=cb1_29rl_1_764d57ded0436220d836abc9',
-          { subdomains: 'abcd', maxZoom: 19, attribution: '© CartoDB' });
+          { subdomains: 'abcd', maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>' });
         // The wheel zooms. This is a full-page tab, not a card wedged into a
         // scrolling column, so the map IS what you came to the tab for and
         // taking its wheel away just makes it unusable.
         _nd2TrackMap = L.map('nd2-aov-map',
-          { attributionControl: false, layers: [dark] })
+          { layers: [dark] })
           .setView([d.site ? d.site.lat : -33.8688, d.site ? d.site.lon : 151.2093], 8);
         document.getElementById('nd2-aov-map').classList.add('adsb-radar');
       }
@@ -11638,7 +11638,7 @@
       document.body.appendChild(overlay);
       if (!isAdsbNode) { _locEditLoadLgas(node.state || 'NSW'); _locEditWireDd(); }
       const c = [node.lat, node.lon];
-      const dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=cb1_29rl_1_764d57ded0436220d836abc9', { subdomains: 'abcd', maxZoom: 19, attribution: '© CartoDB' });
+      const dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=cb1_29rl_1_764d57ded0436220d836abc9', { subdomains: 'abcd', maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>' });
       const sat = L.tileLayer('https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', { subdomains: ['mt0', 'mt1', 'mt2', 'mt3'], maxZoom: 21, maxNativeZoom: 19, attribution: '© Google' });
       const map = L.map('loc-view-map', { attributionControl: false, layers: [dark] }).setView(c, 15);
       L.control.layers({ 'Dark': dark, 'Satellite': sat }, {}, { position: 'topright' }).addTo(map);
