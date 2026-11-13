@@ -9,7 +9,7 @@ A Discord bot that provides real-time alerts for NSW emergency services, BOM war
 - 🔥 **RFS Incidents** - Bush fire alerts from NSW Rural Fire Service
 - ⛈️ **BOM Warnings** - Weather warnings (severe weather, marine, and general)
 - 🚗 **Traffic Alerts** - Incidents, roadwork, floods, fires, and major events
-- ⚡ **Power Outages** - Endeavour Energy and Ausgrid outages
+- ⚡ **Power Outages** - Endeavour Energy, Ausgrid and Essential Energy (NSW), AusNet, CitiPower, Powercor and Jemena (Victoria), SA Power Networks and Western Power outages
 - 📟 **Pager Feed** - Real-time pager messages with capcode filtering
 
 ## Commands
@@ -115,19 +115,24 @@ _Generated from `shared/alert-catalog.json` by `gen_readme_alert_types.py` — d
 | ACT Ambulance | `act_ambulance` | ACT Ambulance Service | ACT Ambulance |
 | Bureau of Meteorology | `bom_land` | Bureau of Meteorology | BOM Land Warnings |
 | Bureau of Meteorology | `bom_marine` | Bureau of Meteorology | BOM Marine Warnings |
-| LiveTraffic NSW | `traffic_incident` | Transport for NSW | Traffic Incidents |
-| LiveTraffic NSW | `traffic_roadwork` | Transport for NSW | Traffic Roadwork |
-| LiveTraffic NSW | `traffic_flood` | Transport for NSW | Flood Hazards |
-| LiveTraffic NSW | `traffic_fire` | Transport for NSW | Traffic Fires |
-| LiveTraffic NSW | `traffic_majorevent` | Transport for NSW | Major Events |
-| LiveTraffic NSW | `traffic_alpine` | Transport for NSW | Alpine Conditions |
-| LiveTraffic NSW | `traffic_lga` | Transport for NSW | Council Roads |
-| LiveTraffic NSW | `traffic_works` | Transport for NSW | Roadwork & Works |
+| Roads (NSW, QLD, VIC, SA, ACT) | `traffic_incident` | NSW, QLD, VIC, SA and ACT road agencies | Traffic Incidents |
+| Roads (NSW, QLD, VIC, SA, ACT) | `traffic_roadwork` | NSW, QLD, VIC, SA and ACT road agencies | Traffic Roadwork |
+| Roads (NSW, QLD, VIC, SA, ACT) | `traffic_flood` | NSW, QLD, VIC, SA and ACT road agencies | Flood Hazards |
+| Roads (NSW, QLD, VIC, SA, ACT) | `traffic_fire` | Transport for NSW | Traffic Fires |
+| Roads (NSW, QLD, VIC, SA, ACT) | `traffic_majorevent` | NSW, QLD, VIC, SA and ACT road agencies | Major Events |
+| Roads (NSW, QLD, VIC, SA, ACT) | `traffic_alpine` | Transport for NSW | Alpine Conditions |
+| Roads (NSW, QLD, VIC, SA, ACT) | `traffic_lga` | Transport for NSW | Council Roads |
 | Endeavour Energy | `endeavour_current` | Endeavour Energy | Endeavour Current Outages |
 | Endeavour Energy | `endeavour_planned` | Endeavour Energy | Endeavour Planned Outages |
 | Ausgrid | `ausgrid` | Ausgrid | Ausgrid Outages |
 | Essential Energy | `essential_unplanned` | Essential Energy | Essential Energy Unplanned Outages |
 | Essential Energy | `essential_future` | Essential Energy | Essential Energy Future Outages |
+| AusNet | `ausnet` | AusNet | AusNet Outages |
+| CitiPower | `citipower` | CitiPower | CitiPower Outages |
+| Powercor | `powercor` | Powercor | Powercor Outages |
+| Jemena | `jemena` | Jemena | Jemena Outages |
+| SA Power Networks | `sapn` | SA Power Networks | SA Power Networks Outages |
+| Western Power | `westernpower` | Western Power | Western Power Outages |
 | User Submissions | `user_incident` | User Submissions | User Incidents |
 | Radio Scanner | `radio_summary` | Radio Scanner | Radio Summary |
 | The Wire | `wire_article` | The Wire | Wire Articles |
@@ -173,6 +178,7 @@ This bot uses the AusAware API which aggregates data from:
 - Bureau of Meteorology (BOM)
 - Live Traffic NSW
 - Endeavour Energy / Ausgrid / Essential Energy
+- AusNet / CitiPower / Powercor / Jemena (Victoria), SA Power Networks, Western Power
 - VicEmergency (CFA/DEECA), QLD Fire Department, DFES (WA), SA CFS/MFS, NT Fire & Rescue
 - The Wire (AusAware's own reporting: articles + fleet)
 - User-submitted incidents & the radio scanner

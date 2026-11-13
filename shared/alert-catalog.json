@@ -21,6 +21,12 @@
     "/api/v1/ wraps a body that is not GeoJSON in {data: ...}, so itemsPath",
     "is a dotted path into it ('data.warnings'; 'data' for a bare list).",
     "",
+    "feedShape outage_v1 is the merged outage feed (/api/v1/outages), one type",
+    "per distributor outside NSW. Its endpoint asks for status=active only:",
+    "the bot announces every record it has not seen, and a distributor lists",
+    "hundreds of planned jobs that have not started. Planned work is announced",
+    "when it starts.",
+    "",
     "state is the one state every record of a type is in (NSW, VIC, QLD, SA,",
     "WA, TAS, NT or ACT), for a preset's States filter. Leave it off a type",
     "whose records span states (BOM, FIRMS, shark reports, pager, The Wire):",
@@ -81,6 +87,12 @@
     { "key": "endeavour",   "label": "Endeavour Energy",       "icon": "bolt",          "color": "#fbbf24" },
     { "key": "ausgrid",     "label": "Ausgrid",                "icon": "plug",          "color": "#f59e0b" },
     { "key": "essential",   "label": "Essential Energy",       "icon": "bolt",          "color": "#06b6d4" },
+    { "key": "ausnet",      "label": "AusNet",                 "icon": "bolt",          "color": "#fbbf24" },
+    { "key": "citipower",   "label": "CitiPower",              "icon": "bolt",          "color": "#fbbf24" },
+    { "key": "powercor",    "label": "Powercor",               "icon": "bolt",          "color": "#fbbf24" },
+    { "key": "jemena",      "label": "Jemena",                 "icon": "bolt",          "color": "#fbbf24" },
+    { "key": "sapn",        "label": "SA Power Networks",      "icon": "bolt",          "color": "#fbbf24" },
+    { "key": "westernpower","label": "Western Power",          "icon": "bolt",          "color": "#fbbf24" },
     { "key": "user",        "label": "User Submissions",       "icon": "user",          "color": "#a855f7" },
     { "key": "rdio",        "label": "Radio Scanner",          "icon": "radio",         "color": "#10b981" },
     { "key": "wire",        "label": "The Wire",               "icon": "newspaper",     "color": "#f97316" },
@@ -322,6 +334,49 @@
       "archiveSource": "essential_future", "endpoint": "/api/essential/future", "itemsPath": "outages",
       "aliases": ["essential_planned"],
       "color": "#0891b2", "icon": "📅", "severityScale": null, "subtypeAware": false
+    },
+
+    {
+      "key": "ausnet", "provider": "ausnet", "label": "Outages", "botLabel": "AusNet Outages",
+      "agency": "AUSNET", "agencyLabel": "AusNet", "state": "VIC",
+      "feedShape": "outage_v1",
+      "archiveSource": "ausnet", "endpoint": "/api/v1/outages?distributor=ausnet&status=active", "itemsPath": "features",
+      "color": "#e67e22", "icon": "⚡", "severityScale": null, "subtypeAware": false
+    },
+    {
+      "key": "citipower", "provider": "citipower", "label": "Outages", "botLabel": "CitiPower Outages",
+      "agency": "CITIPOWER", "agencyLabel": "CitiPower", "state": "VIC",
+      "feedShape": "outage_v1",
+      "archiveSource": "citipower", "endpoint": "/api/v1/outages?distributor=citipower&status=active", "itemsPath": "features",
+      "color": "#e67e22", "icon": "⚡", "severityScale": null, "subtypeAware": false
+    },
+    {
+      "key": "powercor", "provider": "powercor", "label": "Outages", "botLabel": "Powercor Outages",
+      "agency": "POWERCOR", "agencyLabel": "Powercor", "state": "VIC",
+      "feedShape": "outage_v1",
+      "archiveSource": "powercor", "endpoint": "/api/v1/outages?distributor=powercor&status=active", "itemsPath": "features",
+      "color": "#e67e22", "icon": "⚡", "severityScale": null, "subtypeAware": false
+    },
+    {
+      "key": "jemena", "provider": "jemena", "label": "Outages", "botLabel": "Jemena Outages",
+      "agency": "JEMENA", "agencyLabel": "Jemena", "state": "VIC",
+      "feedShape": "outage_v1",
+      "archiveSource": "jemena", "endpoint": "/api/v1/outages?distributor=jemena&status=active", "itemsPath": "features",
+      "color": "#e67e22", "icon": "⚡", "severityScale": null, "subtypeAware": false
+    },
+    {
+      "key": "sapn", "provider": "sapn", "label": "Outages", "botLabel": "SA Power Networks Outages",
+      "agency": "SAPN", "agencyLabel": "SA Power Networks", "state": "SA",
+      "feedShape": "outage_v1",
+      "archiveSource": "sapn", "endpoint": "/api/v1/outages?distributor=sapn&status=active", "itemsPath": "features",
+      "color": "#e67e22", "icon": "⚡", "severityScale": null, "subtypeAware": false
+    },
+    {
+      "key": "westernpower", "provider": "westernpower", "label": "Outages", "botLabel": "Western Power Outages",
+      "agency": "WESTERNPOWER", "agencyLabel": "Western Power", "state": "WA",
+      "feedShape": "outage_v1",
+      "archiveSource": "westernpower", "endpoint": "/api/v1/outages?distributor=westernpower&status=active", "itemsPath": "features",
+      "color": "#e67e22", "icon": "⚡", "severityScale": null, "subtypeAware": false
     },
 
     {

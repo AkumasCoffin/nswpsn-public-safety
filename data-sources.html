@@ -680,7 +680,7 @@
         <h2 style="font-size: 1.1rem; color: #fbbf24; margin: 0; display: flex; align-items: center; gap: 0.5rem;">
           <span><i class="fa-solid fa-bolt"></i></span> Power &amp; Utilities
         </h2>
-        <p style="font-size: 0.85rem; color: #94a3b8; margin: 0.3rem 0 0 0;">Electricity network outages across NSW</p>
+        <p style="font-size: 0.85rem; color: #94a3b8; margin: 0.3rem 0 0 0;">Electricity network outages in NSW, Victoria, South Australia and Western Australia. The data is each distributor's own, shown as published. Energex, Ergon Energy and Horizon Power are not shown because their sites do not allow automated reading.</p>
       </div>
 
       <article class="card">
@@ -689,8 +689,8 @@
           <div class="card-tag">Power</div>
         </div>
         <div class="card-body">
-          <p style="margin-bottom:0.6rem;">Power outage data from the Ausgrid network, covering Sydney, the Central Coast and the Hunter.</p>
-          <p><strong>Data:</strong> Outage counts (planned/unplanned), affected customers</p>
+          <p style="margin-bottom:0.6rem;">Power outages on the Ausgrid network, covering Sydney, the Central Coast and the Hunter. Read from Ausgrid's outage map: unplanned outages, and planned work up to 30 days ahead.</p>
+          <p><strong>Data:</strong> Outage locations, streets, affected customers, cause, status, estimated restoration, outage counts</p>
           <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:0.6rem; margin-top:1rem;">
             <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
               <strong style="color:#fbbf24;">Sydney</strong><br>
@@ -705,7 +705,7 @@
               <span style="font-size:0.8rem; color:#94a3b8;">Newcastle &amp; Hunter</span>
             </div>
           </div>
-          <p style="margin-top:0.8rem;"><strong>Source:</strong> <a href="https://www.ausgrid.com.au/" target="_blank">ausgrid.com.au</a></p>
+          <p style="margin-top:0.8rem;"><strong>Source:</strong> <a href="https://www.ausgrid.com.au/Outages/View-current-outages" target="_blank">ausgrid.com.au outage map</a></p>
         </div>
       </article>
 
@@ -778,6 +778,130 @@
             </div>
           </div>
           <p style="margin-top:0.8rem;"><strong>Source:</strong> <a href="https://www.essentialenergy.com.au/" target="_blank">essentialenergy.com.au</a></p>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title"><i class="fa-solid fa-bolt"></i> AusNet</div>
+          <div class="card-tag">Power</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Power outages on the AusNet network in Victoria, covering outer northern and eastern Melbourne and eastern Victoria. Shows unplanned outages and the planned work AusNet publishes.</p>
+          <p><strong>Data:</strong> Outage area, affected customers, cause, status, start time, estimated restoration</p>
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:0.6rem; margin-top:1rem;">
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#fbbf24;">Outer Melbourne</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Northern and eastern suburbs</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#22c55e;">Eastern Victoria</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Regional network</span>
+            </div>
+          </div>
+          <p style="margin-top:0.8rem;"><strong>Source:</strong> <a href="https://www.outagetracker.com.au/" target="_blank">outagetracker.com.au</a></p>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title"><i class="fa-solid fa-bolt"></i> CitiPower</div>
+          <div class="card-tag">Power</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Power outages on the CitiPower network in Victoria, covering the Melbourne CBD and inner suburbs. Shows current outages.</p>
+          <p><strong>Data:</strong> Outage area, streets, affected customers, cause, crew status, start time, estimated restoration</p>
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:0.6rem; margin-top:1rem;">
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#fbbf24;">Melbourne CBD</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">City centre</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#38bdf8;">Inner suburbs</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Inner Melbourne</span>
+            </div>
+          </div>
+          <p style="margin-top:0.8rem;"><strong>Source:</strong> <a href="https://www.citipower.com.au/" target="_blank">citipower.com.au</a></p>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title"><i class="fa-solid fa-bolt"></i> Powercor</div>
+          <div class="card-tag">Power</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Power outages on the Powercor network in Victoria, covering outer western Melbourne and western Victoria. Shows current outages.</p>
+          <p><strong>Data:</strong> Outage area, streets, affected customers, cause, crew status, start time, estimated restoration</p>
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:0.6rem; margin-top:1rem;">
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#fbbf24;">Outer Melbourne</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Western suburbs</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#22c55e;">Western Victoria</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Regional network</span>
+            </div>
+          </div>
+          <p style="margin-top:0.8rem;"><strong>Source:</strong> <a href="https://www.powercor.com.au/outages" target="_blank">powercor.com.au/outages</a></p>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title"><i class="fa-solid fa-bolt"></i> Jemena</div>
+          <div class="card-tag">Power</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Power outages on the Jemena electricity network in Victoria, covering north-west Melbourne. Shows current outages.</p>
+          <p><strong>Data:</strong> Outage area, streets, affected customers, cause, status, start time, estimated restoration</p>
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:0.6rem; margin-top:1rem;">
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#fbbf24;">North-west Melbourne</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Metro network</span>
+            </div>
+          </div>
+          <p style="margin-top:0.8rem;"><strong>Source:</strong> <a href="https://poweroutages.jemena.com.au/" target="_blank">poweroutages.jemena.com.au</a></p>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title"><i class="fa-solid fa-bolt"></i> SA Power Networks</div>
+          <div class="card-tag">Power</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Power outages on the SA Power Networks network, covering South Australia. Shows unplanned outages and the planned work SA Power Networks publishes.</p>
+          <p><strong>Data:</strong> Outage area and outline, postcodes, affected customers, cause, status, start time, estimated restoration</p>
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:0.6rem; margin-top:1rem;">
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#fbbf24;">South Australia</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Adelaide and regional SA</span>
+            </div>
+          </div>
+          <p style="margin-top:0.8rem;"><strong>Source:</strong> <a href="https://www.sapowernetworks.com.au/" target="_blank">sapowernetworks.com.au</a></p>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-header">
+          <div class="card-title"><i class="fa-solid fa-bolt"></i> Western Power</div>
+          <div class="card-tag">Power</div>
+        </div>
+        <div class="card-body">
+          <p style="margin-bottom:0.6rem;">Power outages on the Western Power network in Western Australia, covering Perth and the south west of the state. Shows unplanned outages and the planned work Western Power publishes.</p>
+          <p><strong>Data:</strong> Outage area, affected customers, start time, estimated restoration</p>
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:0.6rem; margin-top:1rem;">
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#fbbf24;">Perth</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Metro network</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.03); border-radius:6px; padding:0.6rem 0.8rem;">
+              <strong style="color:#22c55e;">South west WA</strong><br>
+              <span style="font-size:0.8rem; color:#94a3b8;">Regional network</span>
+            </div>
+          </div>
+          <p style="margin-top:0.8rem;"><strong>Source:</strong> <a href="https://www.westernpower.com.au/" target="_blank">westernpower.com.au</a></p>
         </div>
       </article>
 
@@ -1302,7 +1426,7 @@
             <div>
               <h4 style="font-size:0.85rem; color:#eab308; margin-bottom:0.5rem;"><i class="fa-solid fa-circle" style="color:#eab308;"></i> Frequent (~2-5 minutes)</h4>
               <ul style="margin-left:1rem; line-height:1.7; font-size:0.88rem;">
-                <li>Ausgrid & Endeavour Energy Outages</li>
+                <li>Power Outages (Ausgrid, Endeavour Energy, Essential Energy, AusNet, CitiPower, Powercor, Jemena, SA Power Networks, Western Power)</li>
                 <li>Roadwork, Major Events</li>
                 <li>BOM Weather Warnings</li>
                 <li>RFS Fire Danger Ratings</li>

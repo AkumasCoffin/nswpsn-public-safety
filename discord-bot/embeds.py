@@ -1676,6 +1676,8 @@ class EmbedBuilder:
               or alert_type == 'ausgrid'
               or alert_type.startswith('essential_')):
             return self.build_power_container(data, alert_type)
+        elif alert_type in self._OUTAGE_V1_TYPES:
+            return self.build_outage_container(data, alert_type)
         elif alert_type == 'wire_article':
             return self.build_wire_article_container(data)
         elif alert_type == 'wire_fleet':
@@ -2421,6 +2423,93 @@ class EmbedBuilder:
             map_url = build_map_url(lat, lon, label=f"{type_text} Outage - {suburb}", layer="outages")
             footer_bits.append(f"[🗺️ Map]({map_url})")
         self._append_container_footer(container, footer_bits, source="Ausgrid")
+        return container
+
+    # ---- The merged outage feed (every distributor outside NSW) --
+    _OUTAGE_V1_TYPES = frozenset(alert_catalog.keys_with_shape('outage_v1'))
+
+    def build_outage_container(self, data: Dict[str, Any], alert_type: str):
+        """Components V2 container for an outage from the merged feed
+        (/api/v1/outages): AusNet, CitiPower, Powercor, Jemena, SA Power
+        Networks and Western Power, all in one record shape.
+
+        `data` is a GeoJSON Feature. Its properties are the feed's common
+        fields; `details` holds the distributor's own, and what is in it
+        differs by distributor, so each is shown only when it is there.
+        """
+        props = data.get('properties') or {}
+        details = props.get('details') if isinstance(props.get('details'), dict) else {}
+        t = alert_catalog.type_def(alert_type) or {}
+        distributor = t.get('agencyLabel') or alert_catalog.label(alert_type)
+        state = props.get('state') or t.get('state') or ''
+
+        area = strip_html(str(props.get('area') or '')) or 'Unknown'
+        is_planned = props.get('kind') == 'planned'
+        type_text = 'Planned' if is_planned else 'Unplanned'
+        title_prefix = "🔧" if is_planned else "⚡"
+        customers = props.get('customers_affected') or 0
+        cause = strip_html(str(props.get('cause') or ''))
+        status = strip_html(str(details.get('status') or ''))
+        streets = details.get('streets')
+        if isinstance(streets, (list, tuple)):
+            streets = ', '.join(str(s) for s in streets if s)
+        streets = strip_html(str(streets or ''))
+        postcode = details.get('postcode') or details.get('postcodes') or ''
+        if isinstance(postcode, (list, tuple)):
+            postcode = ', '.join(str(p) for p in postcode if p)
+
+        container = discord.ui.Container(
+            accent_colour=self.COLORS.get(alert_type, self.COLORS['ausgrid'])
+        )
+        container.add_item(discord.ui.TextDisplay(
+            content=self._clip_text(f"### {title_prefix} {type_text} Outage — {area}")
+        ))
+        container.add_item(discord.ui.TextDisplay(
+            content=f"{distributor} · {state}" if state else str(distributor)
+        ))
+
+        loc_bits = []
+        if is_valid_value(streets):
+            loc_bits.append(f"📍 {streets[:1500]}")
+        if is_valid_value(postcode):
+            loc_bits.append(f"Postcode: {str(postcode)[:200]}")
+        if loc_bits:
+            container.add_item(discord.ui.TextDisplay(
+                content=self._clip_text('\n'.join(loc_bits))
+            ))
+
+        meta_bits = []
+        try:
+            customers = int(customers)
+        except (TypeError, ValueError):
+            customers = 0
+        if customers > 0:
+            meta_bits.append(f"👥 **{customers:,}**")
+        if is_valid_value(status):
+            meta_bits.append(status)
+        if meta_bits:
+            container.add_item(discord.ui.TextDisplay(
+                content=self._clip_text(' · '.join(meta_bits))
+            ))
+
+        if is_valid_value(cause):
+            container.add_item(discord.ui.TextDisplay(
+                content=self._clip_text(f"Cause: {cause}")
+            ))
+
+        footer_bits = []
+        formatted_start = format_timestamp(props.get('start_at') or '')
+        if formatted_start:
+            footer_bits.append(f"started {formatted_start}")
+        formatted_restoration = format_timestamp(props.get('restore_at') or '')
+        if formatted_restoration:
+            footer_bits.append(f"ETA: {formatted_restoration}")
+        geom = data.get('geometry')
+        coords = geom.get('coordinates') if isinstance(geom, dict) else None
+        if isinstance(coords, (list, tuple)) and len(coords) >= 2 and coords[0] and coords[1]:
+            map_url = build_map_url(coords[1], coords[0], label=f"{type_text} Outage - {area}", layer="outages")
+            footer_bits.append(f"[🗺️ Map]({map_url})")
+        self._append_container_footer(container, footer_bits, source=distributor)
         return container
 
     # ---- Essential Energy --------------------------------------

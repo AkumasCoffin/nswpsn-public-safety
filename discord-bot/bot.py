@@ -213,8 +213,15 @@ _FEATURE_ALERT_TYPES = alert_catalog.keys_with_shape(
 # scoped-only type whose coordinates cannot be read would satisfy the gate
 # and then pass every geofilter unconditionally — the opposite of what
 # requiring a region is for.
+#
+# outage_v1 (the merged outage feed's distributors) is a Feature too, with a
+# point or a null geometry.
 _GEO_POINT_ALERT_TYPES = _FEATURE_ALERT_TYPES | alert_catalog.keys_with_shape(
-    'geo_traffic', 'geo_point')
+    'geo_traffic', 'geo_point', 'outage_v1')
+
+# The distributors read from the merged outage feed (/api/v1/outages): one
+# record shape for all of them, under `properties`.
+_OUTAGE_V1_ALERT_TYPES = alert_catalog.keys_with_shape('outage_v1')
 
 
 def _alert_text_haystack(alert_type: str, alert_data: dict) -> str:
@@ -274,6 +281,14 @@ def _alert_text_haystack(alert_type: str, alert_data: dict) -> str:
         for k in ('suburb', 'Suburb', 'streets', 'cause', 'status',
                   'outageType'):
             _push(alert_data.get(k))
+    elif canon in _OUTAGE_V1_ALERT_TYPES:
+        props = alert_data.get('properties') or {}
+        for k in ('area', 'cause', 'kind'):
+            _push(props.get(k))
+        details = props.get('details')
+        if isinstance(details, dict):
+            for k in ('streets', 'status', 'postcode', 'region', 'reason'):
+                _push(details.get(k))
     elif canon == 'pager':
         # alert_data here is the pager msg dict.
         for k in ('capcode', 'type', 'category', 'alias', 'agency',
@@ -4957,7 +4972,8 @@ _HELP_CATEGORIES: Dict[str, Dict[str, Any]] = {
             "Real-time alerts for emergencies, traffic, weather warnings, "
             "pager messages and The Wire — sourced from NSW RFS, CFA, DEECA, "
             "QFD, DFES, SA CFS/MFS, NT Fire & Rescue, NASA FIRMS, BOM, TfNSW, "
-            "Ausgrid, Endeavour, Essential Energy, our radio scanner and "
+            "Ausgrid, Endeavour, Essential Energy, AusNet, CitiPower, Powercor, "
+            "Jemena, SA Power Networks, Western Power, our radio scanner and "
             "AusAware's own reporting.",
             "",
             f"🌐 Website: [nswpsn.forcequit.xyz]({WEBSITE_URL})",

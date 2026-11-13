@@ -370,6 +370,12 @@ describe('the feeds stay aligned with the alert catalog', () => {
     endeavour: ['outages'],
     ausgrid: ['outages'],
     essential: ['outages'],
+    ausnet: ['outages'],
+    citipower: ['outages'],
+    powercor: ['outages'],
+    jemena: ['outages'],
+    sapn: ['outages'],
+    westernpower: ['outages'],
     rdio: ['summaries'],
     dorsal: ['beaches'],
   };
@@ -396,8 +402,9 @@ describe('the feeds stay aligned with the alert catalog', () => {
   });
 
   it('every source the merged outage feed files a record under is readable through outages history', () => {
-    // Not in the alert catalog until the bot alerts on them, so the test above
-    // does not reach the other states' distributors.
+    // The catalog names only the distributors the bot alerts on (Energex,
+    // Ergon Energy and Horizon Power are not read), so the test above does
+    // not reach every one of the other states' distributors.
     for (const source of OUTAGE_SOURCES) expect(HISTORY_SOURCES[source], source).toBe('outages');
     for (const store of OUTAGE_STORES) expect(FEEDS.outages.covers, store).toContain(DISTRIBUTOR_INFO[store].name);
   });
