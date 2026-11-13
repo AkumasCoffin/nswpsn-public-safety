@@ -1135,7 +1135,7 @@ function normalisePagerDatetime(ts: string | undefined): string {
 // POST /api/node-ingest/adsb-upload
 //
 // One aircraft snapshot from an ADS-B feeder node: everything its decoder can
-// currently see, plus that decoder's own statistics. Sent every ~5s, so each
+// currently see, plus that decoder's own statistics. Sent every ~2s, so each
 // upload SUPERSEDES the last — nothing here is a durable record of individual
 // positions, and nothing needs to be. What is durable is the per-node daily
 // aggregate powering the staff Data tab.
@@ -1145,12 +1145,12 @@ function normalisePagerDatetime(ts: string | undefined): string {
 // ~100 KB, so this caps a snapshot at roughly 2.5x the realistic worst case.
 const MAX_ADSB_BYTES = 256 * 1024;
 
-// Per-node rate limit. Snapshots are every 5s = 12/min; 20 leaves room for a
-// queue draining after a network blip without letting a compromised node
-// hammer the merge. Excess is ACK'd and dropped, never 429'd: a stale snapshot
+// Per-node rate limit. Snapshots are every 2s = 30/min (agent 0.1.16 on;
+// earlier agents send every 5s); 45 leaves room for a queue draining after a
+// network blip without letting a compromised node hammer the merge. Excess is ACK'd and dropped, never 429'd: a stale snapshot
 // is superseded by the next one, so making the agent retry it would waste both
 // ends' effort on data that is already worthless.
-const adsbRateOk = makeNodeRateLimiter(20, 60_000);
+const adsbRateOk = makeNodeRateLimiter(45, 60_000);
 
 const AdsbAircraftSchema = z.object({
   // Lowercase ICAO hex; readsb/dump1090 prefix non-ICAO TIS-B ids with '~'.

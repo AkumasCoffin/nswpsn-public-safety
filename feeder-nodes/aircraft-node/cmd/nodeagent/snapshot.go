@@ -22,12 +22,14 @@ import (
 const (
 	// snapshotInterval is how often the receiver reports.
 	//
-	// Three times fresher than the public aggregators' ~15s effective cadence,
-	// which is much of the point of running our own hardware. Well inside the
-	// queue's 90s age bound, so a network blip of ~18 snapshots still drains
-	// rather than expiring. And 12 uploads/min, comfortably under the server's
-	// 20/min limiter.
-	snapshotInterval = 5 * time.Second
+	// Several times fresher than the public aggregators' ~15-20s effective
+	// cadence, which is much of the point of running our own hardware: the map
+	// polls the aircraft we hear every few seconds and moves them, so this is
+	// what sets how far behind the real aircraft a marker sits. Well inside the
+	// queue's 90s age bound, so a network blip of ~45 snapshots still drains
+	// rather than expiring. And 30 uploads/min, under the server's 45/min
+	// limiter. The same data in total as at 5s, in smaller pieces.
+	snapshotInterval = 2 * time.Second
 
 	// sampleInterval is how often aircraft.json is READ, as against how often a
 	// snapshot is sent.
@@ -45,7 +47,7 @@ const (
 	// older than this, so shipping them would be pure waste.
 	maxPositionAge = 60.0
 
-	// maxTrailPerAircraft bounds the carried positions per upload. Five reads
+	// maxTrailPerAircraft bounds the carried positions per upload. Two reads
 	// fit in an interval; the slack absorbs a slow read without letting a
 	// stalled uploader accumulate without bound.
 	maxTrailPerAircraft = 16
@@ -171,7 +173,7 @@ func (t *positionTrail) take() map[string][]trailPoint {
 
 // runSnapshotLoop polls the decoder's JSON output until ctx is cancelled.
 func runSnapshotLoop(ctx context.Context, m *aircraftManager, q *queue.Queue) {
-	// Two rates from one ticker: read every second, send every fifth read. The
+	// Two rates from one ticker: read every second, send every second read. The
 	// reads are what give a track its shape; the sends are what cost requests.
 	t := time.NewTicker(sampleInterval)
 	defer t.Stop()
@@ -183,8 +185,8 @@ func runSnapshotLoop(ctx context.Context, m *aircraftManager, q *queue.Queue) {
 	trail := newPositionTrail()
 
 	// warnedNotReady / warnedStale keep the "nothing written yet" and "nothing
-	// written lately" messages to one line per outage instead of one every 5
-	// seconds.
+	// written lately" messages to one line per outage instead of one every
+	// upload.
 	warnedNotReady := false
 	warnedStale := false
 

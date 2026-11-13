@@ -21,6 +21,8 @@ const m = vi.hoisted(() => ({
   trails: null as unknown,
   /** How far the track archive has written (null: nothing yet this run). */
   through: null as number | null,
+  /** The `recent` values the handlers asked the source for. */
+  recentAsked: [] as Array<[string, number]>,
 }));
 
 vi.mock('../../../src/sources/shared/http.js', async (orig) => ({
@@ -44,7 +46,20 @@ vi.mock('../../../src/sources/adsb.js', async (orig) => ({
   ...(await orig<typeof import('../../../src/sources/adsb.js')>()),
   adsbSnapshot: () => m.snapshot,
   adsbTrailsSnapshot: () => m.trails,
+  adsbRecentAircraft: (sec: number) => {
+    m.recentAsked.push(['aircraft', sec]);
+    return { ...(m.snapshot as object), count: 1 };
+  },
+  adsbRecentTrails: (sec: number) => {
+    m.recentAsked.push(['trails', sec]);
+    return RECENT_TRAILS;
+  },
 }));
+
+const RECENT_TRAILS = {
+  trails: { '7c6b2d': [[-33.85, 151.2, 1400, 1_800_000_000_000], [-33.86, 151.21, null, 1_800_000_001_000]] },
+  fetched_at: '2026-10-28T04:00:00.000Z',
+};
 
 const IN_SCOPE = ['/api/adsb/aircraft', '/api/adsb/history', '/api/adsb/trails', '/api/adsb/photo/:hex', '/api/adsb/info/:hex'];
 
@@ -107,6 +122,7 @@ beforeEach(() => {
   m.snapshot = SNAPSHOT;
   m.trails = TRAILS;
   m.through = null;
+  m.recentAsked = [];
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -138,6 +154,41 @@ describe('GET /api/adsb/trails and /api/v1/adsb/trails', () => {
     const v1 = await a.request('/api/v1/adsb/trails');
     expect(v1.status).toBe(200);
     expect(await v1.text()).toBe(JSON.stringify({ data: TRAILS }));
+  });
+});
+
+describe('?recent= on the live aircraft and trails', () => {
+  it('serves the recent aircraft, cached for 2 s, on both paths', async () => {
+    const a = await app();
+    const body = { ...SNAPSHOT, count: 1, history: { retentionDays: DATA_RETENTION_DAYS, oldestMs: OLDEST, newestMs: NOW } };
+    const v1 = await a.request('/api/v1/adsb/aircraft?recent=15');
+    expect(v1.status).toBe(200);
+    expect(v1.headers.get('Cache-Control')).toBe('public, max-age=2');
+    expect(await v1.text()).toBe(JSON.stringify({ data: body }));
+    const old = await a.request('/api/adsb/aircraft?recent=15');
+    expect(await old.text()).toBe(JSON.stringify(body));
+    expect(m.recentAsked).toEqual([['aircraft', 15], ['aircraft', 15]]);
+  });
+
+  it('serves the recent trail points with their times, cached for 2 s', async () => {
+    const a = await app();
+    const v1 = await a.request('/api/v1/adsb/trails?recent=15');
+    expect(v1.status).toBe(200);
+    expect(v1.headers.get('Cache-Control')).toBe('public, max-age=2');
+    expect(await v1.text()).toBe(JSON.stringify({ data: RECENT_TRAILS }));
+    expect(m.recentAsked).toEqual([['trails', 15]]);
+  });
+
+  it('ignores a recent that is not a whole number in range, and serves the full answer', async () => {
+    const a = await app();
+    for (const bad of ['abc', '0', '61', '2.5', '']) {
+      const res = await a.request(`/api/v1/adsb/aircraft?recent=${bad}`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('Cache-Control')).toBeNull();
+      const t = await a.request(`/api/v1/adsb/trails?recent=${bad}`);
+      expect(await t.text()).toBe(JSON.stringify({ data: TRAILS }));
+    }
+    expect(m.recentAsked).toEqual([]);
   });
 });
 

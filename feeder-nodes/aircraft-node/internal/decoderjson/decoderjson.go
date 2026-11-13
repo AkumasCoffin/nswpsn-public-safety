@@ -215,7 +215,7 @@ var ErrStale = fmt.Errorf("decoder json is stale: %w", ErrNotReady)
 
 // MaxStaleness is how long since the decoder last rewrote a file before it
 // counts as a leftover. The agent launches dump1090 with --write-json-every 1,
-// so ten seconds is two whole upload intervals of slack: long enough to ride
+// so ten seconds is ten missed rewrites (five upload intervals): long enough to ride
 // out a slow filesystem or a scheduler hiccup, short enough that a stopped
 // decoder stops producing map pins almost immediately.
 const MaxStaleness = 10 * time.Second

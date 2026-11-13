@@ -53,8 +53,8 @@ const (
 	// storm of data the backend is guaranteed to discard.
 	maxItemAge = 90 * time.Second
 	tmpExt     = ".tmp"
-	// Bounds sized for snapshots, not audio. At 5s cadence, 50 items is ~4
-	// minutes of backlog — well past the age bound above, so the age check is
+	// Bounds sized for snapshots, not audio. At 2s cadence, 50 items is ~100
+	// seconds of backlog — well past the age bound above, so the age check is
 	// what actually trims the queue and these are just a hard ceiling. A
 	// snapshot is ~100 KB at worst, so 32 MiB covers the count with room over.
 	defaultMaxBytes = 32 << 20 // 32 MiB

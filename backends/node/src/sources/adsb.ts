@@ -1113,6 +1113,7 @@ export function ingestNodeTrailPoints(
     buf.push(...merged);
   }
   trimTrail(buf, nowMs);
+  _trailsDirty = true;
 }
 
 function updateTrails(aircraft: AdsbAircraft[], nowMs: number): void {
@@ -1155,17 +1156,117 @@ function updateTrails(aircraft: AdsbAircraft[], nowMs: number): void {
     }
   }
   // Prebuild the served snapshot once per poll — requests do zero work.
+  rebuildTrailsSnapshot(nowMs);
+}
+
+const r5 = (v: number): number => Math.round(v * 1e5) / 1e5;
+
+/** Rebuild the served trails from `_trails`. Reads nothing else and changes
+ *  nothing else, so it is safe to run between polls. */
+function rebuildTrailsSnapshot(nowMs: number): void {
   const out: AdsbTrailsSnapshot['trails'] = {};
-  const r5 = (v: number): number => Math.round(v * 1e5) / 1e5;
   for (const [hex, buf] of _trails) {
     if (buf.length < 2) continue;
     out[hex] = buf.map((p) => [r5(p[1]), r5(p[2]), p[3]]);
   }
   _trailsSnapshot = { trails: out, fetched_at: new Date(nowMs).toISOString() };
+  _trailsDirty = false;
+  _trailsBuiltMs = nowMs;
 }
 
-export function adsbTrailsSnapshot(): AdsbTrailsSnapshot {
+/**
+ * Receiver uploads add points between polls. Without this the served trails
+ * only caught up when the next poll finished — every 16-23 s — so a receiver's
+ * one-second points reached the map as coarsely as an aggregator's. Rebuilt on
+ * read, at most every TRAIL_REBUILD_MIN_MS, so many readers cost one build.
+ */
+const TRAIL_REBUILD_MIN_MS = 2_000;
+let _trailsDirty = false;
+let _trailsBuiltMs = 0;
+
+export function adsbTrailsSnapshot(nowMs: number = Date.now()): AdsbTrailsSnapshot {
+  if (_trailsDirty && nowMs - _trailsBuiltMs >= TRAIL_REBUILD_MIN_MS) rebuildTrailsSnapshot(nowMs);
   return _trailsSnapshot;
+}
+
+// ---------------------------------------------------------------------
+// "Recent" reads: what changed in the last few seconds.
+//
+// The full snapshot is rebuilt when the aggregator sweep finishes, every
+// 16-23 s, and that is as fast as aggregator positions change anyway. Our own
+// receivers upload every couple of seconds, so for the aircraft they hear there
+// is fresher data sitting in the node store and the trail buffer. These reads
+// hand out only that fresh part, so a client can poll it often and cheaply.
+//
+// Pure reads. They deliberately do NOT go through fetchAdsbAircraft: its side
+// effects (missed-aircraft counts, the history archive, the holdover clock)
+// are per poll and would be skewed by running more often.
+
+/** Upper bound for `recent`, seconds. Past a minute it is the full snapshot. */
+export const ADSB_RECENT_MAX_SEC = 60;
+
+export interface AdsbRecentTrails {
+  /** hex → [[lat, lon, altFt|null, epochMs], ...] oldest→newest. */
+  trails: Record<string, Array<[number, number, number | null, number]>>;
+  fetched_at: string;
+}
+
+const _recentAircraftMemo = new Map<string, AdsbSnapshot>();
+const _recentTrailsMemo = new Map<string, AdsbRecentTrails>();
+
+/** Memoised per second: any number of readers cost one build a second. */
+function memo<T>(cache: Map<string, T>, key: string, build: () => T): T {
+  const hit = cache.get(key);
+  if (hit) return hit;
+  if (cache.size > 16) cache.clear();
+  const v = build();
+  cache.set(key, v);
+  return v;
+}
+
+/**
+ * Aircraft whose position is no older than `recentSec`, in the snapshot shape.
+ *
+ * The snapshot's records are aged by how long the snapshot has been held, then
+ * every receiver record is merged over them (freshest position wins, metadata
+ * fills in from the other), exactly as the poll merges them.
+ */
+export function adsbRecentAircraft(recentSec: number, nowMs: number = Date.now()): AdsbSnapshot {
+  const sec = Math.max(1, Math.min(ADSB_RECENT_MAX_SEC, Math.round(recentSec)));
+  return memo(_recentAircraftMemo, `${sec}|${Math.floor(nowMs / 1000)}`, () => {
+    const snap = adsbSnapshot();
+    const fetchedMs = Date.parse(snap.fetched_at);
+    const held = Number.isFinite(fetchedMs) ? Math.max(0, (nowMs - fetchedMs) / 1000) : 0;
+    const aged = snap.aircraft
+      .filter((a) => !a.estimated)
+      .map((a) => ({ ...a, ageSec: a.ageSec + held }));
+    const merged = mergeAircraft([...aged, ...nodeAdsbRecords(nowMs)])
+      .filter((a) => a.ageSec <= sec && !a.estimated && inAuBbox(a.lat, a.lon));
+    return {
+      ...snap,
+      aircraft: merged,
+      count: merged.length,
+      emergency_count: merged.filter((a) => a.esTag !== null).length,
+      fetched_at: new Date(nowMs).toISOString(),
+    };
+  });
+}
+
+/** Trail points from the last `recentSec`, each with the time of its fix. */
+export function adsbRecentTrails(recentSec: number, nowMs: number = Date.now()): AdsbRecentTrails {
+  const sec = Math.max(1, Math.min(ADSB_RECENT_MAX_SEC, Math.round(recentSec)));
+  return memo(_recentTrailsMemo, `${sec}|${Math.floor(nowMs / 1000)}`, () => {
+    const cutoff = nowMs - sec * 1000;
+    const out: AdsbRecentTrails['trails'] = {};
+    for (const [hex, buf] of _trails) {
+      // Newest last, so walk back only as far as the window reaches.
+      let i = buf.length;
+      while (i > 0 && buf[i - 1]![0] >= cutoff) i -= 1;
+      if (i === buf.length) continue;
+      out[hex] = buf.slice(i).map((p) => [r5(p[1]), r5(p[2]), p[3], Math.round(p[0])]);
+    }
+    return { trails: out, fetched_at: new Date(nowMs).toISOString() };
+  });
 }
 
 /** One aircraft's raw, timestamped trail. */
@@ -1195,6 +1296,10 @@ export function adsbTrailsForArchive(): ArchivableTrack[] {
 export function _resetAdsbTrailsForTests(): void {
   _trails.clear();
   _trailsSnapshot = { trails: {}, fetched_at: new Date(0).toISOString() };
+  _trailsDirty = false;
+  _trailsBuiltMs = 0;
+  _recentAircraftMemo.clear();
+  _recentTrailsMemo.clear();
 }
 
 /**

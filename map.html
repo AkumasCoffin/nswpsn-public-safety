@@ -14523,6 +14523,11 @@ function initPagerHoursFromStorage() {
     let _adsbAircraft = [];
     const _adsbMarkers = new Map(); // hex → { marker, iconKey }
     let adsbRefreshInterval = null;
+    // The fast poll for aircraft our own receivers hear: see adsbFastTick.
+    let adsbFastInterval = null;
+    // Markers gliding to a newer fix: hex → { marker, from, to, t0 }.
+    // Declared up here because _rebuildAdsb reads it.
+    const _adsbGlides = new Map();
     // Search box in the floating Aircraft list panel — filters both the
     // list and the map markers (same behaviour as the AIS search).
     let _adsbListSearch = '';
@@ -15309,7 +15314,9 @@ function initPagerHoursFromStorage() {
         const key = _adsbIconKey(a);
         const existing = _adsbMarkers.get(a.hex);
         if (existing) {
-          existing.marker.setLatLng([a.lat, a.lon]);
+          const glide = _adsbGlides.get(a.hex);
+          if (glide) glide.to = [a.lat, a.lon];
+          else existing.marker.setLatLng([a.lat, a.lon]);
           if (existing.iconKey !== key) {
             existing.marker.setIcon(buildAircraftIcon(a));
             existing.iconKey = key;
@@ -15362,7 +15369,16 @@ function initPagerHoursFromStorage() {
         // map already makes, so the date picker has its bounds before anyone
         // opens it.
         if (data.history) _adsbHistWindow = data.history;
-        _adsbAircraft = aircraft;
+        // The full list is as old as the server's last aggregator sweep; the
+        // fast poll may already hold a newer fix for an aircraft our
+        // receivers hear. Keep whichever is newer, or the marker would jump
+        // back along its track every 15 s.
+        _adsbStampFix(aircraft, data.fetched_at);
+        const held = new Map(_adsbAircraft.map((x) => [x.hex, x]));
+        _adsbAircraft = aircraft.map((x) => {
+          const h = held.get(x.hex);
+          return (h && h._fixMs > x._fixMs) ? h : x;
+        });
         _rebuildAdsb();
         // Altitude, speed and position age all move on every poll.
         if (_adsbPinnedHex) adsbRenderDetailCard();
@@ -15408,6 +15424,13 @@ function initPagerHoursFromStorage() {
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = (await res.json()).data;
         _adsbTrails = data.trails || {};
+        _adsbTrailTailMs = {};
+        // The fast poll may only add what is newer than this build (with a
+        // little slack for receiver points that arrived just after it): an
+        // older point missing from these trails would land at the end, out
+        // of order, and draw the line back on itself.
+        const builtMs = Date.parse(data.fetched_at);
+        _adsbTrailFloorMs = Number.isFinite(builtMs) ? builtMs - 3000 : 0;
         _rebuildAdsbTrails();
         // The trend arrow and track summary are both derived from the trail,
         // so the card is incomplete until this lands.
@@ -15541,6 +15564,160 @@ function initPagerHoursFromStorage() {
       saveMapPrefs();
     };
 
+    // ---------- Fast updates where our receivers hear an aircraft ----------
+    // The full aircraft list and trails only change when the server finishes
+    // a sweep of the public aggregators (16-23 s), and come here every 15 s
+    // and 30 s. Our own receivers report every couple of seconds, so every
+    // ADSB_FAST_MS this asks for just what changed in the last
+    // ADSB_RECENT_SEC (`?recent=` on the same endpoints): in practice the
+    // aircraft a receiver hears, with their one-second track points. Those
+    // markers glide to each new fix and their trails grow as they fly;
+    // everything else keeps the normal refresh.
+    const ADSB_FAST_MS = 3000;
+    const ADSB_RECENT_SEC = 15;
+    const ADSB_GLIDE_MS = 1000;
+    // A jump this far is a gap in reception, not motion: snap, don't glide.
+    const ADSB_GLIDE_MAX_M = 5000;
+    let _adsbFastBusy = false;
+    // hex → epoch ms of the newest fast-poll trail point already applied.
+    let _adsbTrailTailMs = {};
+    // Nothing older than this is appended: see loadAdsbTrails.
+    let _adsbTrailFloorMs = 0;
+    let _adsbGlideRaf = 0;
+
+    /** When each record's position was actually heard: the response time
+     *  less its age. Compared to keep the newer of two copies. */
+    function _adsbStampFix(list, fetchedAt) {
+      const base = Date.parse(fetchedAt);
+      const at = Number.isFinite(base) ? base : Date.now();
+      for (const a of list) a._fixMs = at - (Number(a.ageSec) || 0) * 1000;
+    }
+
+    function _adsbGlideTo(hex, marker, lat, lon) {
+      const from = marker.getLatLng();
+      if (document.hidden || map.distance(from, [lat, lon]) > ADSB_GLIDE_MAX_M) {
+        _adsbGlides.delete(hex);
+        marker.setLatLng([lat, lon]);
+        return;
+      }
+      _adsbGlides.set(hex, { marker, from: [from.lat, from.lng], to: [lat, lon], t0: performance.now() });
+      if (!_adsbGlideRaf) _adsbGlideRaf = requestAnimationFrame(_adsbGlideStep);
+    }
+
+    function _adsbGlideStep(now) {
+      let pinnedLanded = false;
+      for (const [hex, g] of _adsbGlides) {
+        const k = Math.min(1, Math.max(0, (now - g.t0) / ADSB_GLIDE_MS));
+        g.marker.setLatLng([
+          g.from[0] + (g.to[0] - g.from[0]) * k,
+          g.from[1] + (g.to[1] - g.from[1]) * k,
+        ]);
+        if (k >= 1) {
+          _adsbGlides.delete(hex);
+          if (hex === _adsbPinnedHex) pinnedLanded = true;
+        }
+      }
+      if (_adsbGlides.size) {
+        _adsbGlideRaf = requestAnimationFrame(_adsbGlideStep);
+        return;
+      }
+      _adsbGlideRaf = 0;
+      // Trails are redrawn once the markers have arrived: each trail ends at
+      // its marker, and is trimmed back to it, so drawing mid-glide would
+      // cut off the points the aircraft is about to reach.
+      _rebuildAdsbTrails();
+      if (pinnedLanded && _adsbFollowActive) {
+        const followed = _adsbMarkers.get(_adsbPinnedHex);
+        if (followed) panToMarkerClearingUi(followed.marker, 0.8);
+      }
+    }
+
+    /** Fold a `recent` aircraft answer into the list and move the markers. */
+    function _adsbApplyRecent(data) {
+      const recs = Array.isArray(data && data.aircraft) ? data.aircraft : [];
+      if (!recs.length) return;
+      _adsbStampFix(recs, data.fetched_at);
+      const index = new Map(_adsbAircraft.map((x, i) => [x.hex, i]));
+      const moved = [];
+      let added = false;
+      for (const r of recs) {
+        const i = index.get(r.hex);
+        if (i === undefined) {
+          _adsbAircraft.push(r);
+          added = true;
+          continue;
+        }
+        if (!(r._fixMs > (_adsbAircraft[i]._fixMs || 0))) continue;
+        _adsbAircraft[i] = r;
+        moved.push(r);
+      }
+      for (const a of moved) {
+        const e = _adsbMarkers.get(a.hex);
+        if (!e) continue;
+        const key = _adsbIconKey(a);
+        if (e.iconKey !== key) {
+          e.marker.setIcon(buildAircraftIcon(a));
+          e.iconKey = key;
+        }
+        e.marker.setTooltipContent(buildAdsbTooltipHtml(a));
+        _adsbGlideTo(a.hex, e.marker, a.lat, a.lon);
+      }
+      // A newly heard aircraft has no marker yet; the rebuild applies every
+      // filter and the render cap. After the glides are set, so it retargets
+      // them rather than snapping the markers.
+      if (added) _rebuildAdsb();
+      if (_adsbPinnedHex && (added || moved.some((a) => a.hex === _adsbPinnedHex))) adsbRenderDetailCard();
+    }
+
+    /** Extend the held trails with a `recent` trails answer. Points carry
+     *  their time; a point already held (the full trails include the same
+     *  points, rounded the same way) is recognised by position. */
+    function _adsbApplyRecentTrails(trails) {
+      let changed = false;
+      for (const hex of Object.keys(trails || {})) {
+        const add = trails[hex];
+        if (!Array.isArray(add) || !add.length) continue;
+        const pts = _adsbTrails[hex] || (_adsbTrails[hex] = []);
+        const tail = Math.max(_adsbTrailTailMs[hex] || 0, _adsbTrailFloorMs);
+        const held = new Set(pts.slice(-40).map((q) => q[0] + ',' + q[1]));
+        let newest = tail;
+        for (const q of add) {
+          if (!(q[3] > tail)) continue;
+          if (q[3] > newest) newest = q[3];
+          const key = q[0] + ',' + q[1];
+          if (held.has(key)) continue;
+          held.add(key);
+          pts.push([q[0], q[1], q[2]]);
+          changed = true;
+        }
+        _adsbTrailTailMs[hex] = newest;
+      }
+      return changed;
+    }
+
+    async function adsbFastTick() {
+      if (adsbHistoryMode || document.hidden || !map.hasLayer(adsbLayer)) return;
+      if (_adsbFastBusy) return;   // a slow answer is not stacked on
+      _adsbFastBusy = true;
+      try {
+        const wantTrails = adsbTrailsEnabled || !!_adsbPinnedHex;
+        const [ra, rt] = await Promise.all([
+          apiFetch(`${PROXY_BASE}/api/v1/adsb/aircraft?recent=${ADSB_RECENT_SEC}`),
+          wantTrails ? apiFetch(`${PROXY_BASE}/api/v1/adsb/trails?recent=${ADSB_RECENT_SEC}`) : null,
+        ]);
+        if (adsbHistoryMode) return;
+        let trailsChanged = false;
+        if (rt && rt.ok) trailsChanged = _adsbApplyRecentTrails(((await rt.json()).data || {}).trails);
+        if (ra && ra.ok) _adsbApplyRecent((await ra.json()).data);
+        // Mid-glide, the glide's end redraws the trails.
+        if (trailsChanged && !_adsbGlides.size) _rebuildAdsbTrails();
+      } catch (e) {
+        // Quiet: the 15 s refresh carries on regardless.
+      } finally {
+        _adsbFastBusy = false;
+      }
+    }
+
     function startAdsbRefresh() {
       if (adsbRefreshInterval) return;
       adsbRefreshInterval = setInterval(() => {
@@ -15552,10 +15729,15 @@ function initPagerHoursFromStorage() {
         _adsbTrailTickFlip = !_adsbTrailTickFlip;
         if (_adsbTrailTickFlip) loadAdsbTrails();
       }, 15000);
+      if (!adsbFastInterval) adsbFastInterval = setInterval(adsbFastTick, ADSB_FAST_MS);
       loadAdsbTrails();
-      console.log('✈️ ADS-B refresh started (15s)');
+      console.log('✈️ ADS-B refresh started (15s, receiver-heard aircraft every 3s)');
     }
     function stopAdsbRefresh() {
+      if (adsbFastInterval) {
+        clearInterval(adsbFastInterval);
+        adsbFastInterval = null;
+      }
       if (adsbRefreshInterval) {
         clearInterval(adsbRefreshInterval);
         adsbRefreshInterval = null;

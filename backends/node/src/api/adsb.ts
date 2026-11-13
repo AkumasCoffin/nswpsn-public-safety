@@ -37,6 +37,10 @@ import { describeRoute, resolver } from 'hono-openapi';
 import {
   adsbSnapshot,
   adsbTrailsSnapshot,
+  adsbRecentAircraft,
+  adsbRecentTrails,
+  ADSB_RECENT_MAX_SEC,
+  type AdsbRecentTrails,
   type AdsbSnapshot,
   type AdsbTrailsSnapshot,
 } from '../sources/adsb.js';
@@ -194,6 +198,29 @@ const AdsbHistoryQuery = z.object({
     .describe(`Minutes of track before the instant, 0 to 30 (rounded, and held to that range). Default ${HISTORY_TRAIL_DEFAULT_MIN}.`),
 });
 
+// `recent` on the live aircraft and trails: only what changed in the last few
+// seconds, for a client that polls often. Never refused — anything that is not
+// a whole number in range is simply absent, and the full answer is served.
+const RECENT_CACHE = 'public, max-age=2';
+const AdsbRecentQuery = z.object({
+  recent: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(ADSB_RECENT_MAX_SEC)
+    .optional()
+    .catch(undefined)
+    .describe(
+      `Seconds, 1 to ${ADSB_RECENT_MAX_SEC}. Only what was heard in that many seconds: positions no older, or track points no older. AusAware's own receivers report every couple of seconds, so for the aircraft they hear this is how to follow them closely; aggregator positions change about every 15 seconds. Cached for 2 seconds.`,
+    ),
+});
+/** The query's `recent`, or null when absent or invalid. */
+function recentOf(raw: string | undefined): number | null {
+  if (raw === undefined || raw === '') return null;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 1 && n <= ADSB_RECENT_MAX_SEC ? n : null;
+}
+
 const AdsbTrails = z
   .object({
     trails: z
@@ -206,6 +233,18 @@ const AdsbTrails = z
   .meta({ id: 'AdsbTrails' });
 assertShape<SameShape<z.infer<typeof AdsbTrails>, AdsbTrailsSnapshot>>();
 
+const AdsbRecentTrailsSchema = z
+  .object({
+    trails: z
+      .record(z.string(), z.array(z.tuple([z.number(), z.number(), z.number().nullable(), z.number()])))
+      .describe(
+        'With `recent`: by aircraft hex, the track points heard in that window, oldest first, each [latitude, longitude, altitude in feet or null, unix milliseconds of the fix]. Aircraft with none are left out.',
+      ),
+    fetched_at: z.string().describe('When this answer was built, ISO 8601'),
+  })
+  .meta({ id: 'AdsbRecentTrails' });
+assertShape<SameShape<z.infer<typeof AdsbRecentTrailsSchema>, AdsbRecentTrails>>();
+
 adsbRouter.get(
   '/api/adsb/aircraft',
   SCOPE_AIRCRAFT,
@@ -214,19 +253,24 @@ adsbRouter.get(
     tags: ['Aircraft'],
     summary: 'Aircraft over Australia',
     description:
-      "Aircraft over Australia now, merged from public ADS-B aggregators (adsb.lol, adsb.fi, airplanes.live, ADSB One, and FlyItalyADSB over NSW) and AusAware's own receivers, one record per ICAO address. Records whose `sources` include `flyitaly` carry flight data from FlyItalyADSB (flyitalyadsb.com), CC BY-SA 4.0, which must be credited where you show them. Polled about every 15 seconds. An aircraft that stops reporting is held at its last position for a while; one in flight with a known heading and speed is then projected forward, marked `estimated`, until its last real fix is three minutes old.",
+      "Aircraft over Australia now, merged from public ADS-B aggregators (adsb.lol, adsb.fi, airplanes.live, ADSB One, and FlyItalyADSB over NSW) and AusAware's own receivers, one record per ICAO address. Records whose `sources` include `flyitaly` carry flight data from FlyItalyADSB (flyitalyadsb.com), CC BY-SA 4.0, which must be credited where you show them. Polled about every 15 seconds. An aircraft that stops reporting is held at its last position for a while; one in flight with a known heading and speed is then projected forward, marked `estimated`, until its last real fix is three minutes old. With `recent`, only aircraft whose position is no older than that many seconds, merged the same way: for aircraft AusAware's receivers hear, that is a position a couple of seconds old.",
     responses: {
       ...okJson(envelope(AdsbAircraft), 'Every aircraft, with how each source fared and the history window'),
       ...GATED_ERRORS,
     },
   }),
+  queryValidator(AdsbRecentQuery),
   (c) => {
     // The history block rides along on the live poll rather than getting its own
     // endpoint: the map already fetches this every 15s, and the date picker
     // needs the window bounds before it can offer a first scrub.
     const now = Date.now();
+    const recent = recentOf(c.req.query('recent'));
+    // Set here, not left to CACHEABLE_PATHS: that list ignores the query, and
+    // the full answer must stay uncached for the 15 s refresh.
+    if (recent !== null) c.header('Cache-Control', RECENT_CACHE);
     return ok(c, {
-      ...adsbSnapshot(),
+      ...(recent !== null ? adsbRecentAircraft(recent, now) : adsbSnapshot()),
       history: {
         retentionDays: DATA_RETENTION_DAYS,
         oldestMs: adsbHistoryOldestMs(now),
@@ -367,13 +411,21 @@ adsbRouter.get(
     tags: ['Aircraft'],
     summary: 'Aircraft tracks',
     description:
-      'The track each aircraft has flown while tracked, rebuilt after every poll of the live aircraft. A track ends ten minutes after its aircraft was last seen.',
+      'The track each aircraft has flown while tracked, kept up to date as positions arrive (within a couple of seconds for aircraft AusAware receivers hear). A track ends ten minutes after its aircraft was last seen. With `recent`, only the points from the last few seconds, each with the time it was heard, for a client extending tracks it already holds.',
     responses: {
-      ...okJson(envelope(AdsbTrails), 'A track per aircraft'),
+      ...okJson(envelope(z.union([AdsbTrails, AdsbRecentTrailsSchema])), 'A track per aircraft; with `recent`, only the newest points, each with its time'),
       ...GATED_ERRORS,
     },
   }),
-  (c) => ok(c, adsbTrailsSnapshot()),
+  queryValidator(AdsbRecentQuery),
+  (c) => {
+    const recent = recentOf(c.req.query('recent'));
+    if (recent === null) return ok(c, adsbTrailsSnapshot());
+    // Overrides the 30 s CACHEABLE_PATHS default, which would otherwise apply
+    // because that list ignores the query.
+    c.header('Cache-Control', RECENT_CACHE);
+    return ok(c, adsbRecentTrails(recent));
+  },
 );
 
 interface PlanespottersPhoto {

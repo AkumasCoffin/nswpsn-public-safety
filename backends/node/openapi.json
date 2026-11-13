@@ -2942,6 +2942,53 @@
         ],
         "additionalProperties": false
       },
+      "AdsbRecentTrails": {
+        "type": "object",
+        "properties": {
+          "trails": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "items": false,
+                "minItems": 4,
+                "maxItems": 4
+              }
+            },
+            "description": "With `recent`: by aircraft hex, the track points heard in that window, oldest first, each [latitude, longitude, altitude in feet or null, unix milliseconds of the fix]. Aircraft with none are left out."
+          },
+          "fetched_at": {
+            "type": "string",
+            "description": "When this answer was built, ISO 8601"
+          }
+        },
+        "required": [
+          "trails",
+          "fetched_at"
+        ],
+        "additionalProperties": false
+      },
       "AdsbPhoto": {
         "type": "object",
         "properties": {
@@ -8541,7 +8588,7 @@
           "Aircraft"
         ],
         "summary": "Aircraft over Australia",
-        "description": "Aircraft over Australia now, merged from public ADS-B aggregators (adsb.lol, adsb.fi, airplanes.live, ADSB One, and FlyItalyADSB over NSW) and AusAware's own receivers, one record per ICAO address. Records whose `sources` include `flyitaly` carry flight data from FlyItalyADSB (flyitalyadsb.com), CC BY-SA 4.0, which must be credited where you show them. Polled about every 15 seconds. An aircraft that stops reporting is held at its last position for a while; one in flight with a known heading and speed is then projected forward, marked `estimated`, until its last real fix is three minutes old.",
+        "description": "Aircraft over Australia now, merged from public ADS-B aggregators (adsb.lol, adsb.fi, airplanes.live, ADSB One, and FlyItalyADSB over NSW) and AusAware's own receivers, one record per ICAO address. Records whose `sources` include `flyitaly` carry flight data from FlyItalyADSB (flyitalyadsb.com), CC BY-SA 4.0, which must be credited where you show them. Polled about every 15 seconds. An aircraft that stops reporting is held at its last position for a while; one in flight with a known heading and speed is then projected forward, marked `estimated`, until its last real fix is three minutes old. With `recent`, only aircraft whose position is no older than that many seconds, merged the same way: for aircraft AusAware's receivers hear, that is a position a couple of seconds old.",
         "responses": {
           "200": {
             "description": "Every aircraft, with how each source fared and the history window",
@@ -8603,6 +8650,18 @@
             }
           }
         },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "recent",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60
+            },
+            "description": "Seconds, 1 to 60. Only what was heard in that many seconds: positions no older, or track points no older. AusAware's own receivers report every couple of seconds, so for the aircraft they hear this is how to follow them closely; aggregator positions change about every 15 seconds. Cached for 2 seconds."
+          }
+        ],
         "security": [
           {
             "ApiKey": []
@@ -8737,17 +8796,24 @@
           "Aircraft"
         ],
         "summary": "Aircraft tracks",
-        "description": "The track each aircraft has flown while tracked, rebuilt after every poll of the live aircraft. A track ends ten minutes after its aircraft was last seen.",
+        "description": "The track each aircraft has flown while tracked, kept up to date as positions arrive (within a couple of seconds for aircraft AusAware receivers hear). A track ends ten minutes after its aircraft was last seen. With `recent`, only the points from the last few seconds, each with the time it was heard, for a client extending tracks it already holds.",
         "responses": {
           "200": {
-            "description": "A track per aircraft",
+            "description": "A track per aircraft; with `recent`, only the newest points, each with its time",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
                     "data": {
-                      "$ref": "#/components/schemas/AdsbTrails"
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/AdsbTrails"
+                        },
+                        {
+                          "$ref": "#/components/schemas/AdsbRecentTrails"
+                        }
+                      ]
                     }
                   },
                   "required": [
@@ -8799,6 +8865,18 @@
             }
           }
         },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "recent",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60
+            },
+            "description": "Seconds, 1 to 60. Only what was heard in that many seconds: positions no older, or track points no older. AusAware's own receivers report every couple of seconds, so for the aircraft they hear this is how to follow them closely; aggregator positions change about every 15 seconds. Cached for 2 seconds."
+          }
+        ],
         "security": [
           {
             "ApiKey": []
