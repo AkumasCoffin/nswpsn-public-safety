@@ -125,6 +125,58 @@ const RATE_LIMIT_PARK_MS = 120_000;
 // would get the same body; a quarter of an hour is soon enough to notice a fix.
 const BAD_BODY_PARK_MS = 900_000;
 
+/**
+ * A FeedMessage read one top-level field at a time: the header, then each
+ * entity decoded on its own, so an entity that will not decode is skipped
+ * instead of failing the message. Reading stops at a zero tag (padding or
+ * the start of garbage) or at a field running past the end. Null when there
+ * is no header or not one entity survived — then it is not a feed at all.
+ */
+export function decodeFeedLeniently(
+  buf: Uint8Array,
+): { message: GtfsRealtimeBindings.transit_realtime.FeedMessage; skipped: number } | null {
+  let pos = 0;
+  const varint = (): number | null => {
+    let out = 0;
+    for (let shift = 0; shift < 64; shift += 7) {
+      if (pos >= buf.length) return null;
+      const b = buf[pos++]!;
+      // Multiplication, not a shift: lengths here fit a double, not 32 bits.
+      out += (b & 0x7f) * 2 ** shift;
+      if ((b & 0x80) === 0) return out;
+    }
+    return null;
+  };
+  let header: GtfsRealtimeBindings.transit_realtime.FeedHeader | null = null;
+  const entity: GtfsRealtimeBindings.transit_realtime.FeedEntity[] = [];
+  let skipped = 0;
+  while (pos < buf.length) {
+    const tag = varint();
+    if (tag === null) break;
+    const field = Math.floor(tag / 8);
+    const wire = tag % 8;
+    if (field === 0) break;
+    if (wire === 2) {
+      const len = varint();
+      if (len === null || pos + len > buf.length) break;
+      const part = buf.subarray(pos, pos + len);
+      pos += len;
+      try {
+        if (field === 1) header = rt.FeedHeader.decode(part);
+        else if (field === 2) entity.push(rt.FeedEntity.decode(part));
+      } catch {
+        if (field === 2) skipped += 1;
+      }
+    } else if (wire === 0) {
+      if (varint() === null) break;
+    } else if (wire === 1) pos += 8;
+    else if (wire === 5) pos += 4;
+    else break; // groups and anything unknown: not in this schema
+  }
+  if (!header || entity.length === 0) return null;
+  return { message: rt.FeedMessage.create({ header, entity }), skipped };
+}
+
 /** What a body that would not decode looks like, for the one log line it gets. */
 function describeBody(buf: Uint8Array): string {
   if (buf.length === 0) return 'empty';
@@ -164,6 +216,15 @@ async function fetchFeed(path: string): Promise<GtfsRealtimeBindings.transit_rea
     try {
       return rt.FeedMessage.decode(buf);
     } catch (decodeErr) {
+      // One bad entity fails the whole strict decode. TfNSW's combined alerts
+      // feed has had one (a 450 KB message with a good header that stops at
+      // "illegal tag: field number 0" part-way through), which hid every
+      // alert in it. Read it entity by entity and keep the ones that decode.
+      const salvaged = decodeFeedLeniently(buf);
+      if (salvaged) {
+        quietWarn(`tfnsw: ${path} decoded leniently`, new Error(`${salvaged.skipped} of ${salvaged.skipped + salvaged.message.entity.length} entities skipped (${(decodeErr as Error).message})`));
+        return salvaged.message;
+      }
       // A 200 whose body is not the message. Parked, and said once in one
       // line with what the body was: this used to be retried on every request
       // and logged with a stack trace each time, which said nothing about why.
