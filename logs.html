@@ -1064,8 +1064,6 @@
       'citipower': { icon: 'bolt', color: '#fbbf24' },
       'powercor': { icon: 'bolt', color: '#fbbf24' },
       'jemena': { icon: 'bolt', color: '#fbbf24' },
-      'energex': { icon: 'bolt', color: '#fbbf24' },
-      'ergon': { icon: 'bolt', color: '#fbbf24' },
       'sapn': { icon: 'bolt', color: '#fbbf24' },
       'westernpower': { icon: 'bolt', color: '#fbbf24' },
       'horizon': { icon: 'bolt', color: '#fbbf24' },
@@ -3531,8 +3529,6 @@
         'citipower': 'CitiPower',
         'powercor': 'Powercor',
         'jemena': 'Jemena',
-        'energex': 'Energex',
-        'ergon': 'Ergon Energy',
         'sapn': 'SA Power Networks',
         'westernpower': 'Western Power',
         'horizon': 'Horizon Power',
@@ -3627,8 +3623,6 @@
         'citipower': { primary: '#eab308', secondary: '#facc15' },
         'powercor': { primary: '#eab308', secondary: '#facc15' },
         'jemena': { primary: '#eab308', secondary: '#facc15' },
-        'energex': { primary: '#eab308', secondary: '#facc15' },
-        'ergon': { primary: '#eab308', secondary: '#facc15' },
         'sapn': { primary: '#eab308', secondary: '#facc15' },
         'westernpower': { primary: '#eab308', secondary: '#facc15' },
         'horizon': { primary: '#eab308', secondary: '#facc15' },
@@ -4209,8 +4203,6 @@
         'citipower': '<i class="fas fa-plug" style="color:#facc15"></i>',
         'powercor': '<i class="fas fa-plug" style="color:#facc15"></i>',
         'jemena': '<i class="fas fa-plug" style="color:#facc15"></i>',
-        'energex': '<i class="fas fa-plug" style="color:#facc15"></i>',
-        'ergon': '<i class="fas fa-plug" style="color:#facc15"></i>',
         'sapn': '<i class="fas fa-plug" style="color:#facc15"></i>',
         'westernpower': '<i class="fas fa-plug" style="color:#facc15"></i>',
         'horizon': '<i class="fas fa-plug" style="color:#facc15"></i>',
@@ -4363,7 +4355,7 @@
     
     // Outage sources stored in the merged feed's shape (/api/v1/outages):
     // the distributors outside NSW. NSW's three keep their own older shapes.
-    const MERGED_OUTAGE_SOURCES = new Set(['ausnet', 'citipower', 'powercor', 'jemena', 'energex', 'ergon', 'sapn', 'westernpower', 'horizon']);
+    const MERGED_OUTAGE_SOURCES = new Set(['ausnet', 'citipower', 'powercor', 'jemena', 'sapn', 'westernpower', 'horizon']);
 
     // The From and To boxes hold a time on the reader's own clock, with no
     // zone. Sent as typed, the backend reads a zoneless time as Sydney time,

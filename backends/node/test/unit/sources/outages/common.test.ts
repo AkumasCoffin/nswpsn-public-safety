@@ -41,10 +41,10 @@ import { liveStore } from '../../../../src/store/live.js';
 const NOW = Date.UTC(2026, 10, 13, 2, 0, 0); // 2026-11-13T02:00:00Z
 
 describe('the distributors', () => {
-  it('twelve of them, NSW first, each with a name and a state', () => {
+  it('ten of them, NSW first, each with a name and a state', () => {
     expect(DISTRIBUTORS).toEqual([
-      'endeavour', 'essential', 'ausgrid', 'ausnet', 'citipower', 'powercor', 'jemena', 'energex', 'ergon', 'sapn',
-      'westernpower', 'horizon',
+      'endeavour', 'essential', 'ausgrid', 'ausnet', 'citipower', 'powercor', 'jemena', 'sapn', 'westernpower',
+      'horizon',
     ]);
     expect(Object.keys(DISTRIBUTOR_INFO)).toEqual([...DISTRIBUTORS]);
     expect(Object.fromEntries(DISTRIBUTORS.map((d) => [d, `${DISTRIBUTOR_INFO[d].name} / ${DISTRIBUTOR_INFO[d].state}`]))).toEqual({
@@ -55,8 +55,6 @@ describe('the distributors', () => {
       citipower: 'CitiPower / VIC',
       powercor: 'Powercor / VIC',
       jemena: 'Jemena / VIC',
-      energex: 'Energex / QLD',
-      ergon: 'Ergon Energy / QLD',
       sapn: 'SA Power Networks / SA',
       westernpower: 'Western Power / WA',
       horizon: 'Horizon Power / WA',
@@ -64,7 +62,7 @@ describe('the distributors', () => {
   });
 
   it('the ones that store the shared shape archive under their own names', () => {
-    expect(OUTAGE_STORES).toEqual(['ausnet', 'citipower', 'powercor', 'jemena', 'energex', 'ergon', 'sapn', 'westernpower', 'horizon']);
+    expect(OUTAGE_STORES).toEqual(['ausnet', 'citipower', 'powercor', 'jemena', 'sapn', 'westernpower', 'horizon']);
     for (const store of OUTAGE_STORES) {
       expect(DISTRIBUTORS).toContain(store);
       expect(OUTAGE_SOURCES).toContain(store);
@@ -133,15 +131,6 @@ describe('zonedUtc', () => {
   it('CitiPower and Powercor: the clock, then day-month-year', () => {
     expect(zonedUtc('15:53 13-11-2026', MEL)).toBe('2026-11-13T04:53:00.000Z');
     expect(zonedUtc('00:05 01-07-2026', MEL)).toBe('2026-06-30T14:05:00.000Z');
-  });
-
-  it('Energex and Ergon: the clock, then the day, the month by name and the year', () => {
-    const BNE = 'Australia/Brisbane';
-    expect(zonedUtc('5:50PM 13 Nov 2026', BNE)).toBe('2026-11-13T07:50:00.000Z');
-    expect(zonedUtc('12:00AM 1 Jan 2027', BNE)).toBe('2026-12-31T14:00:00.000Z');
-    expect(zonedUtc('11:59 pm 28 February 2027', BNE)).toBe('2027-02-28T13:59:00.000Z');
-    expect(zonedUtc('5:50PM 13 Sept 2026', BNE)).toBe('2026-09-13T07:50:00.000Z');
-    expect(zonedUtc('5:50PM 13 Nod 2026', BNE)).toBeNull();
   });
 
   it("each state's zone, in summer and in winter", () => {
@@ -317,7 +306,7 @@ describe('outageOf, isScheduled and withStatus', () => {
 
   it('withStatus: decided by the clock each time, not kept from the last time', () => {
     const start = new Date(NOW + 3_600_000).toISOString();
-    const planned = outageOf('energex', { id: 'P1', kind: 'planned', start_at: start });
+    const planned = outageOf('ausnet', { id: 'P1', kind: 'planned', start_at: start });
     const before = withStatus(planned, NOW);
     expect(before.status).toBe('scheduled');
     // The stored record says scheduled; an hour on it is under way all the same.
@@ -325,11 +314,11 @@ describe('outageOf, isScheduled and withStatus', () => {
     expect(withStatus(before, NOW + 3_600_000)).toEqual({ ...planned, status: 'active' });
     // A source's own word does not outrank a start time that was read.
     expect(withStatus({ ...planned, status: 'active' }, NOW).status).toBe('scheduled');
-    expect(withStatus(outageOf('energex', { id: 'U1', kind: 'unplanned', start_at: start, status: 'scheduled' }), NOW).status).toBe('active');
+    expect(withStatus(outageOf('ausnet', { id: 'U1', kind: 'unplanned', start_at: start, status: 'scheduled' }), NOW).status).toBe('active');
   });
 
   it('withStatus: planned work with no readable start keeps what the source said', () => {
-    const noStart = (status?: 'active' | 'scheduled') => outageOf('ergon', { id: 'P2', kind: 'planned', ...(status ? { status } : {}) });
+    const noStart = (status?: 'active' | 'scheduled') => outageOf('jemena', { id: 'P2', kind: 'planned', ...(status ? { status } : {}) });
     expect(withStatus(noStart('scheduled'), NOW).status).toBe('scheduled');
     expect(withStatus(noStart('active'), NOW).status).toBe('active');
     expect(withStatus(noStart(), NOW).status).toBe('active');
@@ -523,40 +512,40 @@ describe('keepParts', () => {
   };
 
   it('answers with every part, in the order given', async () => {
-    expect(await keepParts('energex', [['unplanned', async () => ['u1', 'u2']], ['planned', async () => ['p1']], ['future', async () => []]])).toEqual(['u1', 'u2', 'p1']);
+    expect(await keepParts('ausnet', [['unplanned', async () => ['u1', 'u2']], ['planned', async () => ['p1']], ['future', async () => []]])).toEqual(['u1', 'u2', 'p1']);
   });
 
   it("a part that fails answers with its last good records, and the others with today's", async () => {
-    await keepParts('energex', [['unplanned', async () => ['old-u']], ['planned', async () => ['old-p']]]);
+    await keepParts('ausnet', [['unplanned', async () => ['old-u']], ['planned', async () => ['old-p']]]);
     vi.setSystemTime(NOW + 5 * 60_000);
-    expect(await keepParts('energex', [['unplanned', async () => ['new-u']], ['planned', fails]])).toEqual(['new-u', 'old-p']);
+    expect(await keepParts('ausnet', [['unplanned', async () => ['new-u']], ['planned', fails]])).toEqual(['new-u', 'old-p']);
     // Every part failing is still an answer while something is held.
-    expect(await keepParts('energex', [['unplanned', fails], ['planned', fails]])).toEqual(['new-u', 'old-p']);
+    expect(await keepParts('ausnet', [['unplanned', fails], ['planned', fails]])).toEqual(['new-u', 'old-p']);
   });
 
   it('what is held is let go of after half an hour', async () => {
-    await keepParts('energex', [['unplanned', async () => ['u']], ['planned', async () => ['old-p']]]);
+    await keepParts('ausnet', [['unplanned', async () => ['u']], ['planned', async () => ['old-p']]]);
     vi.setSystemTime(NOW + PART_KEEP_MS - 1);
-    expect(await keepParts('energex', [['unplanned', async () => ['u']], ['planned', fails]])).toEqual(['u', 'old-p']);
+    expect(await keepParts('ausnet', [['unplanned', async () => ['u']], ['planned', fails]])).toEqual(['u', 'old-p']);
     vi.setSystemTime(NOW + PART_KEEP_MS);
-    expect(await keepParts('energex', [['unplanned', async () => ['u']], ['planned', fails]])).toEqual(['u']);
+    expect(await keepParts('ausnet', [['unplanned', async () => ['u']], ['planned', fails]])).toEqual(['u']);
     // A good answer starts the half hour again.
-    await keepParts('energex', [['unplanned', async () => ['u']], ['planned', async () => ['new-p']]]);
+    await keepParts('ausnet', [['unplanned', async () => ['u']], ['planned', async () => ['new-p']]]);
     vi.setSystemTime(NOW + PART_KEEP_MS + 20 * 60_000);
-    expect(await keepParts('energex', [['unplanned', fails], ['planned', fails]])).toEqual(['u', 'new-p']);
+    expect(await keepParts('ausnet', [['unplanned', fails], ['planned', fails]])).toEqual(['u', 'new-p']);
   });
 
   it('throws the first error when every part fails and nothing is held', async () => {
-    await expect(keepParts('ergon', [['unplanned', fails], ['planned', async () => { throw new Error('timeout'); }]])).rejects.toThrow('HTTP 403');
+    await expect(keepParts('jemena', [['unplanned', fails], ['planned', async () => { throw new Error('timeout'); }]])).rejects.toThrow('HTTP 403');
     // Held, but too old: the same.
-    await keepParts('ergon', [['unplanned', async () => ['u']]]);
+    await keepParts('jemena', [['unplanned', async () => ['u']]]);
     vi.setSystemTime(NOW + PART_KEEP_MS + 1);
-    await expect(keepParts('ergon', [['unplanned', fails]])).rejects.toThrow('HTTP 403');
+    await expect(keepParts('jemena', [['unplanned', fails]])).rejects.toThrow('HTTP 403');
   });
 
   it("one distributor's parts are not another's", async () => {
-    await keepParts('energex', [['unplanned', async () => ['energex-u']]]);
-    await expect(keepParts('ergon', [['unplanned', fails]])).rejects.toThrow('HTTP 403');
+    await keepParts('ausnet', [['unplanned', async () => ['ausnet-u']]]);
+    await expect(keepParts('jemena', [['unplanned', fails]])).rejects.toThrow('HTTP 403');
   });
 
   it('a part that answers something that is not a list has failed', async () => {

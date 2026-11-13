@@ -55,8 +55,6 @@ const SOURCE_THRESHOLDS: Record<string, ThresholdEntry> = {
   citipower:         { soft: 900,  hard: 2700, label: 'CitiPower outages' },
   powercor:          { soft: 900,  hard: 2700, label: 'Powercor outages' },
   jemena:            { soft: 900,  hard: 2700, label: 'Jemena outages' },
-  energex:           { soft: 900,  hard: 2700, label: 'Energex outages' },
-  ergon:             { soft: 900,  hard: 2700, label: 'Ergon Energy outages' },
   sapn:              { soft: 900,  hard: 2700, label: 'SA Power Networks outages' },
   westernpower:      { soft: 900,  hard: 2700, label: 'Western Power outages' },
   horizon:           { soft: 900,  hard: 2700, label: 'Horizon Power outages' },

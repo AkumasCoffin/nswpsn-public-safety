@@ -10782,14 +10782,12 @@
       ausgrid_stats:        'chart-line',
       essential_current:    'plug',
       essential_future:     'clock',
-      // The other states' distributors, one source each. Energex, Ergon
-      // Energy and Horizon Power are switched off and only show if turned on.
+      // The other states' distributors, one source each. Horizon Power is
+      // switched off and only shows if turned on.
       ausnet:               'bolt',
       citipower:            'bolt',
       powercor:             'bolt',
       jemena:               'bolt',
-      energex:              'bolt',
-      ergon:                'bolt',
       sapn:                 'bolt',
       westernpower:         'bolt',
       horizon:              'bolt',
@@ -10958,7 +10956,7 @@
       const _sourceGroups = [
         { label: 'Traffic — LiveTraffic', names: ['traffic_incidents', 'traffic_roadwork', 'traffic_flood', 'traffic_fire', 'traffic_majorevent', 'traffic_cameras'] },
         { label: 'Fire & emergency', names: ['rfs_incidents', 'firms_hotspots', 'pager'] },
-        { label: 'Power outages', names: ['endeavour_current', 'endeavour_planned', 'endeavour_maintenance', 'ausgrid', 'ausgrid_stats', 'essential_current', 'essential_future', 'ausnet', 'citipower', 'powercor', 'jemena', 'energex', 'ergon', 'sapn', 'westernpower', 'horizon'] },
+        { label: 'Power outages', names: ['endeavour_current', 'endeavour_planned', 'endeavour_maintenance', 'ausgrid', 'ausgrid_stats', 'essential_current', 'essential_future', 'ausnet', 'citipower', 'powercor', 'jemena', 'sapn', 'westernpower', 'horizon'] },
         { label: 'Weather', names: ['bom_warnings', 'weather_current'] },
         { label: 'Beach & marine', names: ['beachwatch', 'beachsafe', 'dorsal_reports'] },
         { label: 'Aviation', names: ['aviation_cameras', 'adsb_aircraft'] },

@@ -147,7 +147,7 @@ describe('summariseByState', () => {
 
   it("counts another state's outages under that state, and only once its distributor has been read", () => {
     const now = Date.now();
-    const outage = (distributor: 'ausnet' | 'jemena' | 'energex' | 'westernpower', fields: Partial<Parameters<typeof outageOf>[1]>) =>
+    const outage = (distributor: 'ausnet' | 'jemena' | 'sapn' | 'westernpower', fields: Partial<Parameters<typeof outageOf>[1]>) =>
       withStatus(outageOf(distributor, { id: 'x', kind: 'unplanned', ...fields }), now);
     liveStore.set('endeavour_current', [{ id: 'INCD-1', customersAffected: 10, outageType: 'Unplanned' }]);
     liveStore.set('ausnet', [
@@ -160,7 +160,7 @@ describe('summariseByState', () => {
     liveStore.set('jemena', [outage('jemena', { id: 'J1', customers_affected: 7 })]);
     // Read, and nothing off.
     liveStore.set('westernpower', []);
-    // Queensland's, South Australia's and Horizon Power's have not been read.
+    // South Australia's and Horizon Power's have not been read.
 
     expect(summariseByState()).toEqual({
       NSW: { outages: 1, customers: 10 },
@@ -169,8 +169,8 @@ describe('summariseByState', () => {
     });
 
     // A state appears when one of its distributors is read, with or without outages.
-    liveStore.set('energex', [outage('energex', { id: 'E1', customers_affected: 2 })]);
-    expect(summariseByState()['QLD']).toEqual({ outages: 1, customers: 2 });
+    liveStore.set('sapn', [outage('sapn', { id: 'S1', customers_affected: 2 })]);
+    expect(summariseByState()['SA']).toEqual({ outages: 1, customers: 2 });
     liveStore.delete('westernpower');
     expect(summariseByState()['WA']).toBeUndefined();
   });

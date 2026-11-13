@@ -77,8 +77,6 @@ const SOURCE_TO_FAMILY: Record<string, ArchiveTable> = {
   citipower: 'archive_power',
   powercor: 'archive_power',
   jemena: 'archive_power',
-  energex: 'archive_power',
-  ergon: 'archive_power',
   sapn: 'archive_power',
   westernpower: 'archive_power',
   horizon: 'archive_power',

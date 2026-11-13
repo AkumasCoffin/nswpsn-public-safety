@@ -72,7 +72,7 @@ export const DOCUMENTATION = {
     { name: 'Fires', description: 'Every fire service in one feed with the QLD and WA public warnings, satellite hotspots and fire danger ratings' },
     { name: 'Weather warnings', description: 'Bureau of Meteorology land and marine warnings' },
     { name: 'Ambulance', description: 'ACT Ambulance Service incidents' },
-    { name: 'Power outages', description: "Electricity distributors' outages in one feed, unplanned and planned — NSW (Endeavour Energy, Essential Energy, Ausgrid), Victoria (AusNet, CitiPower, Powercor, Jemena), Queensland (Energex, Ergon Energy), South Australia (SA Power Networks) and Western Australia (Western Power, Horizon Power)" },
+    { name: 'Power outages', description: "Electricity distributors' outages in one feed, unplanned and planned — NSW (Endeavour Energy, Essential Energy, Ausgrid), Victoria (AusNet, CitiPower, Powercor, Jemena), South Australia (SA Power Networks) and Western Australia (Western Power, Horizon Power)" },
     { name: 'Road hazards', description: "Road incidents, roadworks, floods and events: NSW's from Live Traffic NSW, QLD's, VIC's, SA's and the ACT's from their own feeds" },
     { name: 'Public transport', description: 'Public transport vehicles, stops, lines and alerts' },
     { name: 'Aircraft', description: 'Aircraft positions and tracks from ADS-B' },

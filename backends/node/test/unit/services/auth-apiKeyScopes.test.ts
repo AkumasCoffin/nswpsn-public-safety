@@ -402,9 +402,9 @@ describe('the feeds stay aligned with the alert catalog', () => {
   });
 
   it('every source the merged outage feed files a record under is readable through outages history', () => {
-    // The catalog names only the distributors the bot alerts on (Energex,
-    // Ergon Energy and Horizon Power are not read), so the test above does
-    // not reach every one of the other states' distributors.
+    // The catalog names only the distributors the bot alerts on (Horizon
+    // Power is not read), so the test above does not reach every one of the
+    // other states' distributors.
     for (const source of OUTAGE_SOURCES) expect(HISTORY_SOURCES[source], source).toBe('outages');
     for (const store of OUTAGE_STORES) expect(FEEDS.outages.covers, store).toContain(DISTRIBUTOR_INFO[store].name);
   });
@@ -459,7 +459,7 @@ describe('stored history: a route spanning feeds, narrowed per key', () => {
     // The NSW distributors under their feeds' names, every other one under its own.
     expect(historySourcesFor(['outages:history']).sort()).toEqual(
       [
-        'ausgrid', 'ausnet', 'citipower', 'endeavour_current', 'endeavour_maintenance', 'endeavour_planned', 'energex', 'ergon',
+        'ausgrid', 'ausnet', 'citipower', 'endeavour_current', 'endeavour_maintenance', 'endeavour_planned',
         'essential_current', 'essential_future', 'essential_planned', 'horizon', 'jemena', 'powercor', 'sapn', 'westernpower',
       ],
     );

@@ -193,9 +193,8 @@ answer empty rather than with whatever was fetched before polling stopped.
 
 **The other states' distributors** are not in the table above: each joins the
 registry when its source file is added under `src/sources/outages/`. Their
-names are `ausnet`, `citipower`, `powercor`, `jemena` (VIC), `energex`, `ergon`
-(QLD), `sapn` (SA), `westernpower` and `horizon` (WA); the name is the
-LiveStore key, the `source` its history is archived under in `archive_power`,
+names are `ausnet`, `citipower`, `powercor`, `jemena` (VIC), `sapn` (SA),
+`westernpower` and `horizon` (WA); the name is the LiveStore key, the `source` its history is archived under in `archive_power`,
 and the `distributor` in `/api/v1/outages`. Unlike the three NSW sources, which
 store each distributor's own records and are mapped by `api/outages.ts`, these
 store the merged feed's record (`Outage[]`) and are read as they are.
@@ -509,8 +508,8 @@ shows now, polled and cached; `history` — stored records over time). A feed
 groups the sources a person would ask for together: Fires is every fire service
 and the QFD and DFES public warnings (read merged at `/api/v1/fires`,
 `api/fires.ts`, each record's `kind` saying which), satellite hotspots and fire
-danger ratings; Power outages is every distributor read, in NSW, VIC, QLD, SA
-and WA (read merged at `/api/v1/outages`, `api/outages.ts`, each record saying
+danger ratings; Power outages is every distributor read, in NSW, VIC, SA and
+WA (read merged at `/api/v1/outages`, `api/outages.ts`, each record saying
 its distributor and state, and its `kind` and `status` saying whether it is
 unplanned or planned and whether the power is off now).
 

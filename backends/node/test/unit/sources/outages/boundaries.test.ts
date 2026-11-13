@@ -34,7 +34,6 @@ import {
   AREA_FILES,
   AUSGRID_AREA,
   CITIPOWER_AREA,
-  ENERGEX_AREA,
   JEMENA_AREA,
   JEMENA_POCKET,
   JEMENA_RING,
@@ -42,7 +41,7 @@ import {
 } from './boundaries.fixtures.js';
 
 const NOW = Date.parse('2026-11-13T08:40:00Z');
-const ENV = ['ENERGEX_DISABLED', 'ERGON_DISABLED', 'JEMENA_DISABLED'];
+const ENV = ['JEMENA_DISABLED'];
 
 const ringsOf = (g: AreaGeometry): number[][][] => (g.type === 'Polygon' ? g.coordinates : g.coordinates.flat(1));
 const round4 = (p: number[]) => [Math.round(p[0]! * 1e4) / 1e4, Math.round(p[1]! * 1e4) / 1e4];
@@ -126,16 +125,6 @@ describe("each distributor's file", () => {
     // The mask alone has no hole: no area.
     expect(unmask([[JEMENA_WORLD]])).toEqual([]);
     expect(() => parseArea('jemena', { type: 'Polygon', coordinates: [JEMENA_WORLD] })).toThrow(/no area large enough/);
-  });
-
-  it('Energex and Ergon Energy: one Polygon, the ArcGIS properties passed over', () => {
-    for (const d of ['energex', 'ergon'] as const) {
-      const g = parseArea(d, ENERGEX_AREA);
-      expect(g.type, d).toBe('Polygon');
-      expectRings(g);
-      expect(ringsOf(g)).toHaveLength(1);
-      expect(ringsOf(g)[0]![0]).toEqual([154.0571, -25.754]);
-    }
   });
 
   it('anything that is not an area throws, so the read fails and the copy held stays', () => {
@@ -303,8 +292,6 @@ describe('networkAreas', () => {
       { distributor: 'citipower', name: 'CitiPower', state: 'VIC', updated_at: READ_AT },
       { distributor: 'powercor', name: 'Powercor', state: 'VIC', updated_at: READ_AT },
       { distributor: 'jemena', name: 'Jemena', state: 'VIC', updated_at: READ_AT },
-      { distributor: 'energex', name: 'Energex', state: 'QLD', updated_at: null },
-      { distributor: 'ergon', name: 'Ergon Energy', state: 'QLD', updated_at: null },
     ]);
     expect(complete).toBe(true);
     // Ausgrid is asked the way its outages are; the others plainly.
@@ -312,38 +299,25 @@ describe('networkAreas', () => {
     expect(fetchJson.mock.calls[1]![1].headers).toBeUndefined();
   });
 
-  it('Energex and Ergon Energy are not asked for while they are off, and are when switched on', async () => {
-    await networkAreas();
-    expect(asked().join(' ')).not.toMatch(/energex|ergon/);
-    expect(AREA_SOURCES.filter((s) => s.offByDefault).map((s) => s.distributor)).toEqual(['energex', 'ergon']);
-
-    process.env['ENERGEX_DISABLED'] = 'false';
-    fetchJson.mockClear();
-    const { areas, sources } = await networkAreas();
-    expect(asked()).toEqual(['www.energex.com.au/static/PRD/ex_map_servicearea.geojson']);
-    expect(areas.map((a) => a.distributor)).toEqual([...ON, 'energex']);
-    expect(sources.map((s) => s.updated_at)).toEqual([READ_AT, READ_AT, READ_AT, READ_AT, READ_AT, null]);
-
-    process.env['ERGON_DISABLED'] = 'false';
-    fetchJson.mockClear();
-    expect((await networkAreas()).areas.map((a) => a.distributor)).toEqual([...ON, 'energex', 'ergon']);
-    expect(asked()).toEqual(['www.ergon.com.au/static/PRD/ee_map_servicearea.geojson']);
-
-    // Switched off again: not served from the copy read while it was on.
-    delete process.env['ENERGEX_DISABLED'];
-    const off = await networkAreas();
-    expect(off.areas.map((a) => a.distributor)).toEqual([...ON, 'ergon']);
-    expect(off.sources.find((s) => s.distributor === 'energex')!.updated_at).toBeNull();
-    expect(off.complete).toBe(true);
-  });
-
-  it('a distributor switched off with <NAME>_DISABLED=true is not asked either', async () => {
+  it('a distributor switched off with <NAME>_DISABLED=true is not asked, and is when switched on', async () => {
     process.env['JEMENA_DISABLED'] = 'true';
     const { areas, sources, complete } = await networkAreas();
     expect(asked().join(' ')).not.toMatch(/jemena/);
     expect(areas.map((a) => a.distributor)).toEqual(['ausgrid', 'citipower', 'powercor']);
     expect(sources.find((s) => s.distributor === 'jemena')!.updated_at).toBeNull();
     expect(complete).toBe(true);
+
+    delete process.env['JEMENA_DISABLED'];
+    fetchJson.mockClear();
+    expect((await networkAreas()).areas.map((a) => a.distributor)).toEqual(ON);
+    expect(asked()).toEqual(['poweroutages.jemena.com.au/boundary.json']);
+
+    // Switched off again: not served from the copy read while it was on.
+    process.env['JEMENA_DISABLED'] = 'true';
+    const off = await networkAreas();
+    expect(off.areas.map((a) => a.distributor)).toEqual(['ausgrid', 'citipower', 'powercor']);
+    expect(off.sources.find((s) => s.distributor === 'jemena')!.updated_at).toBeNull();
+    expect(off.complete).toBe(true);
   });
 
   it('nothing is read again for 24 hours; then each is, while the copy held is served', async () => {

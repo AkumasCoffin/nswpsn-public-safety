@@ -72,38 +72,10 @@ export const JEMENA_AREA = {
   ],
 };
 
-/** Energex (and Ergon Energy, the same publisher): an ArcGIS export of one Polygon. */
-export const ENERGEX_AREA = {
-  type: 'FeatureCollection',
-  crs: { type: 'name', properties: { name: 'EPSG:4326' } },
-  features: [
-    {
-      type: 'Feature',
-      id: 4,
-      geometry: {
-        type: 'Polygon',
-        coordinates: [[
-          [154.057074670308, -25.7540296638825], [153.251165498781, -28.2468504609635], [153.140634614995, -28.3109864414761],
-          [152.945511783897, -28.3354681212995], [152.780072334176, -28.3466076840604], [152.619377645649, -28.2839069416122],
-          [152.529463282687, -28.292945953487], [152.411680782007, -28.1105994690675], [152.369801264173, -27.9621171851151],
-          [152.152060344525, -27.8739670813532], [152.065519217438, -27.7245972212563], [152.009705182037, -27.5780310170104],
-          [152.199739823314, -27.3336827312922], [152.168900064027, -27.2085547075164], [152.179199661086, -27.0887148270801],
-          [152.165572577552, -26.9695547364359], [152.155523545778, -26.7645012877485], [152.080411702018, -26.6575090952795],
-          [152.241056658912, -26.4857003142846], [152.389581506467, -26.4055139590773], [152.483022379453, -26.2258223272083],
-          [152.710719140544, -26.0347785330201], [153.010396103332, -25.866832506932], [154.057074670308, -25.7540296638825],
-        ]],
-      },
-      properties: { Id: 0, InPoly_FID: 0, MaxSimpTol: 20, MinSimpTol: 20, OBJECTID: 4, Region: 'SOUTH-EAST', Shape__Area: 67097494801.4844, Shape__Length: 1343290.97904812, SimPgnFlag: 0 },
-    },
-  ],
-};
-
 /** Each distributor's file, by the URL it is read from. */
 export const AREA_FILES: Readonly<Record<string, unknown>> = {
   'https://www.ausgrid.com.au/api/outages-map/network-area': AUSGRID_AREA,
   'https://www.powercor.com.au/assets/geo/citipower-network.json': CITIPOWER_AREA,
   'https://www.powercor.com.au/assets/geo/powercor-network.json': POWERCOR_AREA,
   'https://poweroutages.jemena.com.au/boundary.json': JEMENA_AREA,
-  'https://www.energex.com.au/static/PRD/ex_map_servicearea.geojson': ENERGEX_AREA,
-  'https://www.ergon.com.au/static/PRD/ee_map_servicearea.geojson': ENERGEX_AREA,
 };

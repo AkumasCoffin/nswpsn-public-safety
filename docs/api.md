@@ -59,7 +59,7 @@ this server stored over time. Each ticked cell is one scope, written
 | Fires | `fires:live` · `fires:history` | Every fire service in one feed — NSW RFS, QLD Fire Department, VIC Emergency, WA DFES, SA CFS and MFS, NT Fire and Rescue — with the QLD Fire Department and WA DFES public warnings, plus satellite hotspots and fire danger ratings |
 | Weather warnings | `warnings:live` · `warnings:history` | Bureau of Meteorology land and marine warnings |
 | ACT Ambulance | `ambulance:live` · `ambulance:history` | ACT Ambulance Service incidents |
-| Power outages | `outages:live` · `outages:history` | Electricity distributors in one feed — NSW (Endeavour Energy, Essential Energy, Ausgrid), VIC (AusNet, CitiPower, Powercor, Jemena), QLD (Energex, Ergon Energy), SA (SA Power Networks) and WA (Western Power, Horizon Power) ([below](#outages)) |
+| Power outages | `outages:live` · `outages:history` | Electricity distributors in one feed — NSW (Endeavour Energy, Essential Energy, Ausgrid), VIC (AusNet, CitiPower, Powercor, Jemena), SA (SA Power Networks) and WA (Western Power, Horizon Power) ([below](#outages)) |
 | Road hazards | `roads:live` · `roads:history` | Road incidents, roadworks, flooded roads and major events in NSW, QLD, VIC, SA and the ACT ([below](#roads)); NSW road fires, alpine conditions and council works |
 | Public transport | `transport:live` | Vehicles, stops, lines, trips, departures, alerts |
 | Aircraft | `aircraft:live` · `aircraft:history` | ADS-B positions, trails, photos; history replays past positions |
@@ -223,7 +223,6 @@ answer lists them:
 |---|---|
 | NSW | `endeavour` (Endeavour Energy), `essential` (Essential Energy), `ausgrid` (Ausgrid) |
 | VIC | `ausnet` (AusNet), `citipower` (CitiPower), `powercor` (Powercor), `jemena` (Jemena) |
-| QLD | `energex` (Energex), `ergon` (Ergon Energy) |
 | SA | `sapn` (SA Power Networks) |
 | WA | `westernpower` (Western Power), `horizon` (Horizon Power) |
 
@@ -232,7 +231,7 @@ answer lists them:
 | `id` | The distributor's own id; unique with `source` |
 | `source` | What stored history files it under, so `/history?source=…&source_id=<id>` finds its past: `endeavour_current` (unplanned) or `endeavour_planned`; `essential_current` (unplanned), `essential_planned` (planned, under way) or `essential_future` (to come); for every other distributor its own name, the same as `distributor` |
 | `distributor` | One of the names in the table above |
-| `state` | The state the distributor's network is in: `NSW`, `VIC`, `QLD`, `SA` or `WA` |
+| `state` | The state the distributor's network is in: `NSW`, `VIC`, `SA` or `WA` — or `QLD` for an Essential Energy outage in the southern Queensland towns it supplies |
 | `kind` | `unplanned` (a fault) or `planned` (scheduled work) |
 | `status` | `active` — the power is off now (every unplanned outage, and planned work under way) — or `scheduled`, planned work not yet started. Decided from the start time each time the feed is read |
 | `area` | The suburb or locality as the distributor names it; empty when it gives none |
@@ -261,8 +260,8 @@ minutes.
 `GET /api/v1/outages/areas` is each distributor's supply area — whose outages
 to expect where — as one GeoJSON FeatureCollection, read with the same
 `outages:live` scope. There is one feature per distributor that publishes its
-area (`ausgrid`, `citipower`, `powercor`, `jemena`, and `energex` and `ergon`
-when they are switched on); the others publish none and have no feature. The
+area (`ausgrid`, `citipower`, `powercor`, `jemena`); the others publish none
+and have no feature. The
 geometry is a `Polygon` or `MultiPolygon` of closed rings of
 `[longitude, latitude]` to four decimals, and the properties are
 `distributor`, `name` and `state`. The outlines are simplified for drawing on
@@ -289,7 +288,7 @@ key reads an archived source when it holds that feed's history:
 | `warnings:history` | `bom_land`, `bom_marine` |
 | `ambulance:history` | `act_ambulance` |
 | `roads:history` | `traffic_incident`, `traffic_roadwork`, `traffic_flood`, `traffic_fire`, `traffic_majorevent`, `traffic_alpine`, `traffic_lga` (every state's, each under its kind), and `traffic_works` (older records only) |
-| `outages:history` | `endeavour_current`, `endeavour_planned`, `endeavour_maintenance`, `ausgrid`, `essential_current`, `essential_planned`, `essential_future`, `ausnet`, `citipower`, `powercor`, `jemena`, `energex`, `ergon`, `sapn`, `westernpower`, `horizon` |
+| `outages:history` | `endeavour_current`, `endeavour_planned`, `endeavour_maintenance`, `ausgrid`, `essential_current`, `essential_planned`, `essential_future`, `ausnet`, `citipower`, `powercor`, `jemena`, `sapn`, `westernpower`, `horizon` |
 | `beaches:history` | `dorsal` |
 | `pager:history` | `pager` |
 

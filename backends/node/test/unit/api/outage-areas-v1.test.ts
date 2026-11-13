@@ -39,7 +39,6 @@ import { AREA_FILES } from '../sources/outages/boundaries.fixtures.js';
 
 const NOW = Date.parse('2026-11-13T08:40:00Z');
 const READ_AT = new Date(NOW).toISOString();
-const ENV = ['ENERGEX_DISABLED', 'ERGON_DISABLED'];
 
 interface Answer {
   type: string;
@@ -64,14 +63,12 @@ function app(opts: { gate?: boolean } = {}) {
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(NOW);
-  for (const k of ENV) delete process.env[k];
   _resetNetworkAreas();
   fetchJson.mockReset();
   fetchJson.mockImplementation(answer);
 });
 afterEach(() => {
   vi.useRealTimers();
-  for (const k of ENV) delete process.env[k];
   _resetNetworkAreas();
 });
 
@@ -113,22 +110,7 @@ describe('GET /api/v1/outages/areas', () => {
       { distributor: 'citipower', name: 'CitiPower', state: 'VIC', updated_at: READ_AT },
       { distributor: 'powercor', name: 'Powercor', state: 'VIC', updated_at: READ_AT },
       { distributor: 'jemena', name: 'Jemena', state: 'VIC', updated_at: READ_AT },
-      // Off: their sites refuse this server, and they are not asked.
-      { distributor: 'energex', name: 'Energex', state: 'QLD', updated_at: null },
-      { distributor: 'ergon', name: 'Ergon Energy', state: 'QLD', updated_at: null },
     ]);
-    expect(fetchJson.mock.calls.map((c) => c[0]).join(' ')).not.toMatch(/energex|ergon/);
-  });
-
-  it('switched on, Energex and Ergon Energy are read and served', async () => {
-    process.env['ENERGEX_DISABLED'] = 'false';
-    process.env['ERGON_DISABLED'] = 'false';
-    const body = (await (await app().request('/api/v1/outages/areas')).json()) as Answer;
-    expect(body.features.slice(4).map((f) => f.properties)).toEqual([
-      { distributor: 'energex', name: 'Energex', state: 'QLD' },
-      { distributor: 'ergon', name: 'Ergon Energy', state: 'QLD' },
-    ]);
-    expect(body.sources.every((s) => s.updated_at === READ_AT)).toBe(true);
   });
 
   it('may be kept for a day once every area is read', async () => {
@@ -155,7 +137,7 @@ describe('GET /api/v1/outages/areas', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as Answer;
     expect(body).toMatchObject({ type: 'FeatureCollection', features: [], count: 0 });
-    expect(body.sources.map((s) => s.updated_at)).toEqual([null, null, null, null, null, null]);
+    expect(body.sources.map((s) => s.updated_at)).toEqual([null, null, null, null]);
   });
 });
 

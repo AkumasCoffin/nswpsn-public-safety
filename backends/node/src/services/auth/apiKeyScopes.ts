@@ -65,7 +65,7 @@ export const FEEDS = {
   outages: {
     label: 'Power outages',
     covers:
-      'Electricity distributors in one feed, unplanned and planned outages: NSW (Endeavour Energy, Essential Energy, Ausgrid), VIC (AusNet, CitiPower, Powercor, Jemena), QLD (Energex, Ergon Energy), SA (SA Power Networks) and WA (Western Power, Horizon Power)',
+      'Electricity distributors in one feed, unplanned and planned outages: NSW (Endeavour Energy, Essential Energy, Ausgrid), VIC (AusNet, CitiPower, Powercor, Jemena), SA (SA Power Networks) and WA (Western Power, Horizon Power)',
     windows: ['live', 'history'],
   },
   roads: {
@@ -236,8 +236,6 @@ export const HISTORY_SOURCES: Readonly<Record<string, FeedKey>> = {
   citipower: 'outages',
   powercor: 'outages',
   jemena: 'outages',
-  energex: 'outages',
-  ergon: 'outages',
   sapn: 'outages',
   westernpower: 'outages',
   horizon: 'outages',

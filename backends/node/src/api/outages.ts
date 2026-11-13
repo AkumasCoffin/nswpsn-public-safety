@@ -8,7 +8,7 @@
  * Those routes (/api/endeavour/current, /api/essential/outages, …) stay /api/
  * routes for this site's map and live page and the Discord bot, which draw
  * each distributor its own way. Every other distributor (Victoria's,
- * Queensland's, South Australia's, Western Australia's) has a source under
+ * South Australia's, Western Australia's) has a source under
  * sources/outages/ that stores the shared shape already, so its store is read
  * as it is. An API key reads this route (feed `outages`, apiKeyScopes.ts).
  *
@@ -305,9 +305,15 @@ const STATE_NAMES: Readonly<Record<OutageState, string>> = {
 const namesIn = (state: OutageState): string[] =>
   DISTRIBUTORS.filter((d) => DISTRIBUTOR_INFO[d].state === state).map((d) => DISTRIBUTOR_INFO[d].name);
 
-/** The states the feed has a distributor in: what ?state= takes. */
-const FEED_STATES = OUTAGE_STATES.filter((state) => namesIn(state).length > 0);
-const STATE_LIST = FEED_STATES.map((state) => `${STATE_NAMES[state]} (${namesIn(state).join(', ')})`)
+/**
+ * The states the feed files outages under: what ?state= takes. A state with
+ * no distributor of its own is still one when a network reaches into it
+ * (Queensland, where Essential Energy supplies towns over the border).
+ */
+const FEED_STATES = OUTAGE_STATES.filter(
+  (state) => DISTRIBUTORS.some((d) => DISTRIBUTOR_INFO[d].state === state || (DISTRIBUTOR_INFO[d].also ?? []).includes(state)),
+);
+const STATE_LIST = FEED_STATES.filter((state) => namesIn(state).length > 0).map((state) => `${STATE_NAMES[state]} (${namesIn(state).join(', ')})`)
   .join(', ')
   .replace(/, (?=[^,(]*\([^)]*\)$)/, ' and ');
 

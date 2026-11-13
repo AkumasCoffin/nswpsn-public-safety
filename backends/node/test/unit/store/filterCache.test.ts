@@ -38,12 +38,12 @@ describe('filterCache', () => {
 
   it('returns the full provider list when LiveStore is empty', () => {
     const facets = getFilterFacetsLive();
-    // 26 providers: the seven fire agencies (rfs, nt_fire, qfd, vic,
-    // dfes, sacfs, samfs) plus bom, livetraffic, the twelve electricity
+    // 24 providers: the seven fire agencies (rfs, nt_fire, qfd, vic,
+    // dfes, sacfs, samfs) plus bom, livetraffic, the ten electricity
     // distributors (endeavour, ausgrid, essential, then ausnet, citipower,
-    // powercor, jemena, energex, ergon, sapn, westernpower, horizon), pager,
-    // user, rdio, actas, dorsal. Waze was retired with its ingest.
-    expect(facets.providers).toHaveLength(26);
+    // powercor, jemena, sapn, westernpower, horizon), pager, user, rdio,
+    // actas, dorsal. Waze was retired with its ingest.
+    expect(facets.providers).toHaveLength(24);
     // Pin the newest one by key as well as by count — a provider missing
     // from PROVIDER_ORDER is silently dropped from the list rather than
     // erroring, which is exactly the failure this count is here to catch.

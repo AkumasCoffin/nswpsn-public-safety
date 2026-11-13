@@ -3,7 +3,7 @@
  * for the map to draw behind the outages (GET /api/v1/outages/areas,
  * api/outages.ts).
  *
- * Six distributors publish their area as a file behind their outage map, each
+ * Four distributors publish their area as a file behind their outage map, each
  * in its own shape:
  *
  *   ausgrid     one ring, a list of {lat, lng}, not closed
@@ -12,8 +12,6 @@
  *   jemena      a mask: a Polygon covering the whole world with the supply
  *               area cut out of it as a hole, then one small Polygon for each
  *               pocket inside the area that Jemena does not supply
- *   energex     a FeatureCollection of one Polygon (ArcGIS export)
- *   ergon       the same publisher's file (Energy Queensland)
  *
  * The other distributors publish none, and have no area here.
  *
@@ -27,10 +25,8 @@
  * again an hour later, not on the next request. Requests that arrive while a
  * read is under way share it.
  *
- * Energex and Ergon Energy sit behind a bot check that refuses this server
- * (sources/outages/energyq.ts), so their outages are off unless
- * ENERGEX_DISABLED=false / ERGON_DISABLED=false. Their areas follow the same
- * switch: while a distributor is off its area is not asked for at all.
+ * An area follows its distributor's <NAME>_DISABLED switch: while the
+ * distributor's outages are off its area is not asked for at all.
  *
  * The files are drawn for a desktop map and are far too detailed for a
  * phone, so every area is simplified before it is kept: see simplifyArea.
@@ -51,7 +47,7 @@ export type AreaGeometry =
   | { type: 'Polygon'; coordinates: PolygonRings }
   | { type: 'MultiPolygon'; coordinates: PolygonRings[] };
 
-export type AreaDistributor = 'ausgrid' | 'citipower' | 'powercor' | 'jemena' | 'energex' | 'ergon';
+export type AreaDistributor = 'ausgrid' | 'citipower' | 'powercor' | 'jemena';
 
 // ---------------------------------------------------------------------------
 // Reading what the files hold
@@ -302,8 +298,6 @@ interface AreaSource {
   url: string;
   /** Extra request headers, where the distributor's other reads send them. */
   headers?: Record<string, string>;
-  /** Not read unless <NAME>_DISABLED=false, like the distributor's outages. */
-  offByDefault?: boolean;
   /** Jemena's file is the area turned inside out. */
   mask?: boolean;
 }
@@ -314,10 +308,6 @@ export const AREA_SOURCES: readonly AreaSource[] = [
   { distributor: 'citipower', url: 'https://www.powercor.com.au/assets/geo/citipower-network.json' },
   { distributor: 'powercor', url: 'https://www.powercor.com.au/assets/geo/powercor-network.json' },
   { distributor: 'jemena', url: 'https://poweroutages.jemena.com.au/boundary.json', mask: true },
-  // Refused by the sites' bot check, which is not worked around
-  // (energyq.ts): off with the distributor's outages, on with them.
-  { distributor: 'energex', url: 'https://www.energex.com.au/static/PRD/ex_map_servicearea.geojson', offByDefault: true },
-  { distributor: 'ergon', url: 'https://www.ergon.com.au/static/PRD/ee_map_servicearea.geojson', offByDefault: true },
 ];
 
 const sourceOf = (distributor: AreaDistributor): AreaSource => AREA_SOURCES.find((s) => s.distributor === distributor)!;
@@ -428,7 +418,7 @@ export interface NetworkAreaStatus {
  */
 export async function networkAreas(): Promise<{ areas: NetworkArea[]; sources: NetworkAreaStatus[]; complete: boolean }> {
   const now = Date.now();
-  const on = AREA_SOURCES.filter((s) => !switchedOff(s.distributor, s.offByDefault));
+  const on = AREA_SOURCES.filter((s) => !switchedOff(s.distributor));
   const waits: Array<Promise<void>> = [];
   for (const source of on) {
     const h = entry(source.distributor);

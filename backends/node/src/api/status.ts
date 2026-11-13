@@ -358,8 +358,6 @@ const SOURCE_LABELS: Record<string, string> = {
   citipower: 'CitiPower outages',
   powercor: 'Powercor outages',
   jemena: 'Jemena outages',
-  energex: 'Energex outages',
-  ergon: 'Ergon Energy outages',
   sapn: 'SA Power Networks outages',
   westernpower: 'Western Power outages',
   horizon: 'Horizon Power outages',

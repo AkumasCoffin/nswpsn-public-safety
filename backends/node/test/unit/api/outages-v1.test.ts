@@ -38,7 +38,7 @@ const NOW = Date.UTC(2026, 10, 2, 1, 0, 0); // 2026-11-02T01:00:00Z
 const READ_AT = new Date(NOW).toISOString();
 const STORES = [
   'endeavour_current', 'endeavour_maintenance', 'endeavour_planned', 'essential_current', 'essential_future', 'ausgrid',
-  'ausnet', 'citipower', 'powercor', 'jemena', 'energex', 'ergon', 'sapn', 'westernpower', 'horizon',
+  'ausnet', 'citipower', 'powercor', 'jemena', 'sapn', 'westernpower', 'horizon',
 ];
 
 // --- Each distributor in its source's own shape ------------------------------
@@ -460,13 +460,14 @@ describe('GET /api/v1/outages', () => {
     // A state and a distributor of another state have nothing in common.
     const none = await read('/api/v1/outages?state=QLD&distributor=ausnet');
     expect(none).toMatchObject({ count: 0, features: [], sources: [] });
-    // Queensland's own two are not read yet. Essential Energy, a NSW
-    // distributor whose network reaches into southern Queensland, is asked
-    // too: it is listed, with none of its outages there just now.
+    // Queensland has no distributor of its own in the feed. Essential
+    // Energy, a NSW distributor whose network reaches into southern
+    // Queensland, is the one asked: it is listed, with none of its outages
+    // there just now.
     const qld = await read('/api/v1/outages?state=qld');
     expect(qld.count).toBe(0);
     expect(qld.sources.map((s) => [s.distributor, s.state, s.count, s.updated_at === null])).toEqual([
-      ['essential', 'NSW', 0, false], ['energex', 'QLD', 0, true], ['ergon', 'QLD', 0, true],
+      ['essential', 'NSW', 0, false],
     ]);
   });
 
@@ -504,7 +505,7 @@ describe('GET /api/v1/outages', () => {
       expect(s, s.distributor).toMatchObject({ name: info.name, state: info.state });
     }
     expect(body.sources.slice(3).map((s) => [s.distributor, s.count, s.updated_at])).toEqual([
-      ['ausnet', 0, null], ['citipower', 0, null], ['powercor', 0, null], ['jemena', 0, null], ['energex', 0, null], ['ergon', 0, null],
+      ['ausnet', 0, null], ['citipower', 0, null], ['powercor', 0, null], ['jemena', 0, null],
       ['sapn', 0, READ_AT], ['westernpower', 0, null], ['horizon', 0, null],
     ]);
     liveStore.delete('essential_future');
@@ -522,7 +523,7 @@ describe('GET /api/v1/outages', () => {
     expect(error.details.issues.map((i) => i.path)).toEqual(['state', 'distributor', 'kind', 'status']);
     expect(error.message).toBe('state: unknown state: MARS (one of NSW, VIC, QLD, SA, WA)');
     expect(error.details.issues[1]!.message).toBe(
-      'unknown distributor: agl (one of endeavour, essential, ausgrid, ausnet, citipower, powercor, jemena, energex, ergon, sapn, westernpower, horizon)',
+      'unknown distributor: agl (one of endeavour, essential, ausgrid, ausnet, citipower, powercor, jemena, sapn, westernpower, horizon)',
     );
   });
 });

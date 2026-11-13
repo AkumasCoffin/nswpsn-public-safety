@@ -48,8 +48,6 @@ export const DISTRIBUTORS = [
   'citipower',
   'powercor',
   'jemena',
-  'energex',
-  'ergon',
   'sapn',
   'westernpower',
   'horizon',
@@ -66,8 +64,6 @@ export const OUTAGE_STORES = [
   'citipower',
   'powercor',
   'jemena',
-  'energex',
-  'ergon',
   'sapn',
   'westernpower',
   'horizon',
@@ -106,8 +102,6 @@ export const DISTRIBUTOR_INFO: Readonly<Record<Distributor, { name: string; stat
   citipower: { name: 'CitiPower', state: 'VIC' },
   powercor: { name: 'Powercor', state: 'VIC' },
   jemena: { name: 'Jemena', state: 'VIC' },
-  energex: { name: 'Energex', state: 'QLD' },
-  ergon: { name: 'Ergon Energy', state: 'QLD' },
   sapn: { name: 'SA Power Networks', state: 'SA' },
   westernpower: { name: 'Western Power', state: 'WA' },
   horizon: { name: 'Horizon Power', state: 'WA' },
@@ -260,10 +254,6 @@ const COMPACT = new RegExp(String.raw`^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2
 const DMY = new RegExp(String.raw`^(\d{1,2})\/(\d{1,2})\/(\d{4}),?[ T]+${CLOCK}$`, 'i');
 /** 15:53 13-11-2026, as CitiPower and Powercor write it. */
 const CLOCK_DMY = new RegExp(String.raw`^${CLOCK}\s+(\d{1,2})[-/](\d{1,2})[-/](\d{4})$`, 'i');
-/** 5:50PM 13 Nov 2026, as Energex and Ergon write it. */
-const CLOCK_D_MON_Y = new RegExp(String.raw`^${CLOCK}\s+(\d{1,2})\s+([A-Z]{3,9})\.?,?\s+(\d{4})$`, 'i');
-
-const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 
 /**
  * A date and clock time as the milliseconds they would be in UTC, or null
@@ -336,8 +326,8 @@ function zoneAheadMs(ms: number, zone: string): number {
  *
  * Read: 2026-11-13T06:55[:00[.123]][Z|+11:00] and the same with a space;
  * 2026-11-13 06:55PM (AusNet); 13/11/2026 15:53[:00] and 13/11/2026 03:53 PM;
- * 15:53 13-11-2026 (CitiPower, Powercor); 5:50PM 13 Nov 2026 (Energex,
- * Ergon); 20261113T075326+08:00 (Western Power).
+ * 15:53 13-11-2026 (CitiPower, Powercor); 20261113T075326+08:00 (Western
+ * Power).
  *
  * Daylight saving: the offset is the zone's own at that date, found the way
  * lib/sydneyTime.ts sydneyUnixFromNaive finds Sydney's — guess, then correct
@@ -364,9 +354,6 @@ export function zonedUtc(value: unknown, zone: string): string | null {
     wall = wallMs(+m[3]!, +m[2]!, +m[1]!, m[4], m[5], m[6], m[7], m[8]);
   } else if ((m = CLOCK_DMY.exec(s))) {
     wall = wallMs(+m[8]!, +m[7]!, +m[6]!, m[1], m[2], m[3], m[4], m[5]);
-  } else if ((m = CLOCK_D_MON_Y.exec(s))) {
-    const month = MONTHS.indexOf(m[7]!.slice(0, 3).toLowerCase()) + 1;
-    wall = wallMs(+m[8]!, month, +m[6]!, m[1], m[2], m[3], m[4], m[5]);
   }
   if (wall === null) return null;
 
@@ -624,9 +611,8 @@ export type OutagePart<T> = readonly [name: string, run: () => Promise<T[]>, ref
  * A distributor that publishes several files (unplanned, planned, future):
  * run each part's request and answer with all their records, in the order
  * the parts are given. A part that fails answers with its last good records
- * while those are under PART_KEEP_MS old, so one file refused (Energex and
- * Ergon sit behind a bot check that turns some requests away) does not empty
- * the others' outages or its own. When every part fails with nothing kept,
+ * while those are under PART_KEEP_MS old, so one file that cannot be read
+ * does not empty the others' outages or its own. When every part fails with nothing kept,
  * the first error is thrown: the poll fails and the snapshot held stays.
  *
  * `owner` keeps one distributor's parts apart from another's of the same

@@ -151,7 +151,7 @@ Take NSW RFS incidents.
 `AUSGRID_DISABLED` is set to `true`
 (`backends/node/src/sources/ausgrid.ts:353`), which leaves 39.
 The other states' electricity distributors (`ausnet`, `citipower`, `powercor`,
-`jemena`, `energex`, `ergon`, `sapn`, `westernpower`, `horizon`) add one entry
+`jemena`, `sapn`, `westernpower`, `horizon`) add one entry
 each, family `power`, as their source files under
 `backends/node/src/sources/outages/` are added; each has its own
 `<NAME>_DISABLED` switch.
