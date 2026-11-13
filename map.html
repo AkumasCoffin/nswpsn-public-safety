@@ -3110,6 +3110,7 @@
         <label><input type="checkbox" id="chk-outages-unplanned" checked onchange="onOutageFilterChange()"><span class="filter-dot" style="background:#ef4444;"></span> Unplanned Outages</label>
         <label><input type="checkbox" id="chk-outages-maintenance" checked onchange="onOutageFilterChange()"><span class="filter-dot" style="background:#f97316;"></span> Current Maintenance</label>
         <label><input type="checkbox" id="chk-outages-future" checked onchange="onOutageFilterChange()"><span class="filter-dot" style="background:#22c55e;"></span> Future Maintenance</label>
+        <label><input type="checkbox" id="chk-outages-areas" onchange="onOutageFilterChange()"><span class="filter-dot" style="background:transparent;border:1px dashed #94a3b8;"></span> Network areas</label>
       </div>
 
       <!-- Beaches Filter Panel -->
@@ -4003,12 +4004,8 @@
       dorsal_reports: { data: null, timestamp: 0 },
       // Weather
       weather_current: { data: null, timestamp: 0 },
-      // Power outages (Endeavour + Essential Energy have lat/lon)
-      endeavour_current: { data: null, timestamp: 0 },
-      endeavour_maintenance: { data: null, timestamp: 0 },
-      endeavour_future: { data: null, timestamp: 0 },
-      essential_energy: { data: null, timestamp: 0 },
-      ausgrid: { data: null, timestamp: 0 },
+      // Power outages: every distributor, from the merged feed
+      outages: { data: null, timestamp: 0 },
       // NASA FIRMS fire-hotspot polygons
       firms_hotspots: { data: null, timestamp: 0 },
       // ACT Ambulance Service responses (ESA feed)
@@ -9079,7 +9076,7 @@ function initPagerHoursFromStorage() {
     
     // Session cleanup handled by backend timeout (pagehide fires on navigation too)
 
-    // Power Outages - Ausgrid + Endeavour Energy
+    // Power outages - every distributor in the merged feed
     // Helper to build detailed tooltip for power outages
     function buildOutageTooltip(outage, provider) {
       const isPlanned = (outage.outageType || '').toLowerCase() === 'planned' || 
@@ -9221,7 +9218,7 @@ function initPagerHoursFromStorage() {
     let outagesUnplannedCluster = null;
     let outagesMaintenanceCluster = null;
     let outagesFutureCluster = null;
-    let outageFilters = { unplanned: true, maintenance: true, future: true };
+    let outageFilters = { unplanned: true, maintenance: true, future: true, areas: false };
     
     function createOutageClusterGroup(type) {
       const colorMap = { unplanned: '#ef4444', maintenance: '#f97316', future: '#22c55e' };
@@ -9280,6 +9277,8 @@ function initPagerHoursFromStorage() {
       outageFilters.unplanned = showUnplanned;
       outageFilters.maintenance = showMaintenance;
       outageFilters.future = showFuture;
+      outageFilters.areas = document.getElementById('chk-outages-areas')?.checked ?? false;
+      showOutageAreas(outageFilters.areas);
       
       if (outagesUnplannedCluster) {
         if (showUnplanned) { outagesLayer.addLayer(outagesUnplannedCluster); }
@@ -10207,148 +10206,43 @@ function initPagerHoursFromStorage() {
         }
       }
       
-      // Endeavour Energy - Unplanned, Current Maintenance, Future Maintenance
+      // Every distributor, from the one merged feed. Each record says which
+      // distributor and state it is from, whether it is planned, and whether
+      // it is under way or still to come, so there is one mapping here rather
+      // than one block of code per distributor.
       try {
-        let endeavourCurrentRes, endeavourMaintenanceRes, endeavourFutureRes;
-        const currCached = layerCache.endeavour_current;
-        const maintCached = layerCache.endeavour_maintenance;
-        const futCached = layerCache.endeavour_future;
-        const now = Date.now();
-        
-        const needCurr = !currCached.data || (now - currCached.timestamp) >= LAYER_CACHE_TTL;
-        const needMaint = !maintCached.data || (now - maintCached.timestamp) >= LAYER_CACHE_TTL;
-        const needFut = !futCached.data || (now - futCached.timestamp) >= LAYER_CACHE_TTL;
-        
-        if (needCurr || needMaint || needFut) {
-          const fetches = await Promise.all([
-            needCurr ? apiFetch(`${PROXY_BASE}/api/endeavour/current`).then(r => r.json()).catch(() => []) : Promise.resolve(currCached.data),
-            needMaint ? apiFetch(`${PROXY_BASE}/api/endeavour/maintenance`).then(r => r.json()).catch(() => []) : Promise.resolve(maintCached.data),
-            needFut ? apiFetch(`${PROXY_BASE}/api/endeavour/future`).then(r => r.json()).catch(() => []) : Promise.resolve(futCached.data)
-          ]);
-          endeavourCurrentRes = fetches[0];
-          endeavourMaintenanceRes = fetches[1];
-          endeavourFutureRes = fetches[2];
-          if (needCurr) layerCache.endeavour_current = { data: endeavourCurrentRes, timestamp: now };
-          if (needMaint) layerCache.endeavour_maintenance = { data: endeavourMaintenanceRes, timestamp: now };
-          if (needFut) layerCache.endeavour_future = { data: endeavourFutureRes, timestamp: now };
-        } else {
-          endeavourCurrentRes = currCached.data;
-          endeavourMaintenanceRes = maintCached.data;
-          endeavourFutureRes = futCached.data;
-        }
-        
-        // Process unplanned outages (red)
-        const endeavourCurrent = Array.isArray(endeavourCurrentRes) ? endeavourCurrentRes : [];
-        endeavourCurrent.forEach(o => addOutageMarker(o, outagesUnplannedCluster, '#ef4444', 'rgba(239,68,68,0.5)', 'fa-bolt', 'Endeavour Energy (Unplanned)'));
-        
-        // Process current maintenance (orange)
-        const endeavourMaintenance = Array.isArray(endeavourMaintenanceRes) ? endeavourMaintenanceRes : [];
-        endeavourMaintenance.forEach(o => addOutageMarker(o, outagesMaintenanceCluster, '#f97316', 'rgba(249,115,22,0.4)', 'fa-wrench', 'Endeavour Energy (Current Maintenance)'));
-        
-        // Process future maintenance (green)
-        const endeavourFuture = Array.isArray(endeavourFutureRes) ? endeavourFutureRes : [];
-        endeavourFuture.forEach(o => addOutageMarker(o, outagesFutureCluster, '#22c55e', 'rgba(34,197,94,0.4)', 'fa-wrench', 'Endeavour Energy (Future Maintenance)'));
-        
-        console.log(`Loaded ${endeavourCurrent.length} unplanned + ${endeavourMaintenance.length} current maint + ${endeavourFuture.length} future maint Endeavour outages`);
-      } catch (e) {
-        console.error('Endeavour outages error', e);
-      }
-      
-      // Essential Energy - KML outages (current + future feeds)
-      try {
-        let essentialData;
-        const essCached = layerCache.essential_energy;
-        const essNow = Date.now();
-        const needEss = !essCached.data || (essNow - essCached.timestamp) >= LAYER_CACHE_TTL;
-        
-        if (needEss) {
-          essentialData = await apiFetch(`${PROXY_BASE}/api/essential/outages?lite=1`).then(r => r.json()).catch(() => ({ outages: [] }));
-          layerCache.essential_energy = { data: essentialData, timestamp: essNow };
-        } else {
-          essentialData = essCached.data;
-        }
-        
-        const essOutages = essentialData?.outages || (Array.isArray(essentialData) ? essentialData : []);
-        essOutages.forEach(item => {
-          const props = item.properties || item;
-          const lat = parseFloat(props.latitude || props.lat || (item.geometry?.coordinates?.[1]));
-          const lon = parseFloat(props.longitude || props.lon || (item.geometry?.coordinates?.[0]));
-          if (isNaN(lat) || isNaN(lon)) return;
-          
-          const feedType = (props.feedType || 'current').toLowerCase();
-          const outageType = (props.outageType || 'unplanned').toLowerCase();
-          
-          // Determine cluster, color, icon based on feed type
-          let clusterGroup, bgColor, shadowColor, iconClass, label;
-          if (feedType === 'future') {
-            clusterGroup = outagesFutureCluster;
-            bgColor = '#8b5cf6';
-            shadowColor = 'rgba(139,92,246,0.4)';
-            iconClass = 'fa-calendar-alt';
-            label = 'Essential Energy (Future)';
-          } else if (outageType === 'planned') {
-            clusterGroup = outagesFutureCluster;
-            bgColor = '#22c55e';
-            shadowColor = 'rgba(34,197,94,0.4)';
-            iconClass = 'fa-wrench';
-            label = 'Essential Energy (Planned)';
-          } else {
-            clusterGroup = outagesUnplannedCluster;
-            bgColor = '#ef4444';
-            shadowColor = 'rgba(239,68,68,0.5)';
-            iconClass = 'fa-bolt';
-            label = 'Essential Energy (Unplanned)';
-          }
-          
-          // Build a normalized outage object for the tooltip
-          const outage = {
-            suburb: props.title || props.suburb || props.cause || props.reason || 'Unknown',
-            cause: props.cause || props.reason || '',
-            customersAffected: props.customersAffected || 0,
-            startTime: props.timeOff || '',
-            estimatedRestoration: props.estTimeOn || '',
-            lastUpdated: props.lastUpdated || '',
-            outageType: feedType === 'future' ? 'Future' : (outageType === 'planned' ? 'Planned' : 'Unplanned'),
-            latitude: lat,
-            longitude: lon,
-            source: 'essential_energy'
-          };
-          
-          addOutageMarker(outage, clusterGroup, bgColor, shadowColor, iconClass, label);
-        });
-        
-        console.log(`Loaded ${essOutages.length} Essential Energy outages`);
-      } catch (e) {
-        console.error('Essential Energy outages error', e);
-      }
-
-      // Ausgrid - from the merged outages feed, which is the one place that
-      // has its planned work of the month ahead as well as what is off now
-      // (/api/ausgrid/outages answers outages under way only, for the bot).
-      try {
-        let ausgridData;
-        const agCached = layerCache.ausgrid;
-        const agNow = Date.now();
-        if (!agCached.data || (agNow - agCached.timestamp) >= LAYER_CACHE_TTL) {
-          const res = await apiFetch(`${PROXY_BASE}/api/v1/outages?distributor=ausgrid`);
+        let merged;
+        const cached = layerCache.outages;
+        const nowMs = Date.now();
+        if (!cached.data || (nowMs - cached.timestamp) >= LAYER_CACHE_TTL) {
+          const res = await apiFetch(`${PROXY_BASE}/api/v1/outages`);
           // A failed read keeps the last answer rather than clearing the pins.
-          ausgridData = res.ok ? await res.json() : (agCached.data || { features: [] });
-          if (res.ok) layerCache.ausgrid = { data: ausgridData, timestamp: agNow };
+          merged = res.ok ? await res.json() : (cached.data || { features: [], sources: [] });
+          if (res.ok) layerCache.outages = { data: merged, timestamp: nowMs };
         } else {
-          ausgridData = agCached.data;
+          merged = cached.data;
         }
-        const agFeatures = Array.isArray(ausgridData?.features) ? ausgridData.features : [];
-        agFeatures.forEach(f => {
+        const names = {};
+        (Array.isArray(merged?.sources) ? merged.sources : []).forEach(src => { names[src.distributor] = src.name; });
+        const seen = new Set();
+        let drawn = 0;
+        (Array.isArray(merged?.features) ? merged.features : []).forEach(f => {
           const p = f.properties || {};
           const d = p.details || {};
           const c = f.geometry && f.geometry.type === 'Point' ? f.geometry.coordinates : null;
           if (!c || !Number.isFinite(c[0]) || !Number.isFinite(c[1])) return;
+          // Endeavour lists some jobs in two of its feeds; one pin each.
+          const key = `${p.distributor}:${p.id}`;
+          if (seen.has(key)) return;
+          seen.add(key);
           const planned = p.kind === 'planned';
           const scheduled = p.status === 'scheduled';
+          const cause = p.cause && !/^(none|unknown)$/i.test(String(p.cause).trim()) ? p.cause : '';
           const outage = {
-            suburb: p.area || 'Area not given',
+            suburb: p.area || d.title || 'Area not given',
             streets: d.streets || '',
-            cause: p.cause || '',
+            postcode: d.postcode || '',
+            cause,
             status: d.status || '',
             customersAffected: p.customers_affected || 0,
             startTime: p.start_at || '',
@@ -10357,22 +10251,56 @@ function initPagerHoursFromStorage() {
             outageType: planned ? 'Planned' : 'Unplanned',
             latitude: c[1],
             longitude: c[0],
-            source: 'ausgrid'
+            source: p.source || p.distributor
           };
-          // The same three groups, colours and icons as Endeavour's pins.
-          if (scheduled) addOutageMarker(outage, outagesFutureCluster, '#22c55e', 'rgba(34,197,94,0.4)', 'fa-wrench', 'Ausgrid (Future Maintenance)');
-          else if (planned) addOutageMarker(outage, outagesMaintenanceCluster, '#f97316', 'rgba(249,115,22,0.4)', 'fa-wrench', 'Ausgrid (Current Maintenance)');
-          else addOutageMarker(outage, outagesUnplannedCluster, '#ef4444', 'rgba(239,68,68,0.5)', 'fa-bolt', 'Ausgrid (Unplanned)');
+          const who = (names[p.distributor] || p.distributor || 'Distributor') + (p.state && p.state !== 'NSW' ? `, ${p.state}` : '');
+          if (scheduled) addOutageMarker(outage, outagesFutureCluster, '#22c55e', 'rgba(34,197,94,0.4)', 'fa-wrench', `${who} (Future Maintenance)`);
+          else if (planned) addOutageMarker(outage, outagesMaintenanceCluster, '#f97316', 'rgba(249,115,22,0.4)', 'fa-wrench', `${who} (Current Maintenance)`);
+          else addOutageMarker(outage, outagesUnplannedCluster, '#ef4444', 'rgba(239,68,68,0.5)', 'fa-bolt', `${who} (Unplanned)`);
+          drawn += 1;
         });
-        console.log(`Loaded ${agFeatures.length} Ausgrid outages`);
+        console.log(`Loaded ${drawn} power outages`);
       } catch (e) {
-        console.error('Ausgrid outages error', e);
+        console.error('Power outages error', e);
       }
       
       // Add cluster layers to main outages layer based on current filter state
       if (outageFilters.unplanned) outagesLayer.addLayer(outagesUnplannedCluster);
       if (outageFilters.maintenance) outagesLayer.addLayer(outagesMaintenanceCluster);
       if (outageFilters.future) outagesLayer.addLayer(outagesFutureCluster);
+      // clearLayers() above took the network areas off with the pins.
+      if (outageFilters.areas) showOutageAreas(true);
+    }
+
+    // Network areas: each distributor's supply area as an outline, so a gap
+    // in the pins reads as "nothing reported here" or "not this distributor's
+    // patch". Off until asked for; fetched once and kept.
+    let outageAreasLayer = null;
+    let outageAreasLoading = null;
+    async function showOutageAreas(show) {
+      if (!show) { if (outageAreasLayer) outagesLayer.removeLayer(outageAreasLayer); return; }
+      if (!outageAreasLayer) {
+        if (!outageAreasLoading) {
+          outageAreasLoading = apiFetch(`${PROXY_BASE}/api/v1/outages/areas`)
+            .then(r => (r.ok ? r.json() : null))
+            .catch(() => null);
+        }
+        const data = await outageAreasLoading;
+        outageAreasLoading = null;
+        if (!data || !Array.isArray(data.features)) { console.warn('Network areas could not be loaded'); return; }
+        outageAreasLayer = L.geoJSON(data, {
+          style: { color: '#94a3b8', weight: 1.2, opacity: 0.8, dashArray: '5 4', fillColor: '#94a3b8', fillOpacity: 0.04 },
+          onEachFeature: (feature, layer) => {
+            const pr = feature.properties || {};
+            layer.bindTooltip(escapeHtml(`${pr.name || pr.distributor || 'Distributor'}${pr.state ? ', ' + pr.state : ''} network area`), { sticky: true, direction: 'top', opacity: 0.95 });
+          }
+        });
+      }
+      // The box may have been unticked while the areas were loading.
+      if (outageFilters.areas && !outagesLayer.hasLayer(outageAreasLayer)) {
+        outagesLayer.addLayer(outageAreasLayer);
+        if (outageAreasLayer.bringToBack) outageAreasLayer.bringToBack();
+      }
     }
 
     // Traffic Incidents - using combined GeoJSON endpoint
@@ -12858,7 +12786,7 @@ function initPagerHoursFromStorage() {
     // Outages (Unplanned / Current maintenance / Future maintenance).
     window.toggleOutagePill = function (key) {
       const chkId = `chk-outages-${key}`;
-      const cur = document.getElementById(chkId)?.checked ?? true;
+      const cur = document.getElementById(chkId)?.checked ?? (key !== 'areas');
       _ffSetCheckbox(chkId, !cur);
       onOutageFilterChange();
       refreshActiveFilterPanel();
@@ -12871,6 +12799,7 @@ function initPagerHoursFromStorage() {
         const u = document.getElementById('chk-outages-unplanned')?.checked ?? true;
         const m = document.getElementById('chk-outages-maintenance')?.checked ?? true;
         const f = document.getElementById('chk-outages-future')?.checked ?? true;
+        const a = document.getElementById('chk-outages-areas')?.checked ?? false;
         return `
           <h4><i class="fa-solid fa-bolt" style="color:#f97316;"></i> Outages</h4>
           <div class="ff-section-label">Type</div>
@@ -12878,6 +12807,10 @@ function initPagerHoursFromStorage() {
             ${_ffPill(u, 'Unplanned',          "toggleOutagePill('unplanned')")}
             ${_ffPill(m, 'Current maintenance',"toggleOutagePill('maintenance')")}
             ${_ffPill(f, 'Future maintenance', "toggleOutagePill('future')")}
+          </div>
+          <div class="ff-section-label">Show</div>
+          <div class="floating-filter-pills">
+            ${_ffPill(a, 'Network areas', "toggleOutagePill('areas')")}
           </div>
         `;
       },
@@ -21856,14 +21789,12 @@ function initPagerHoursFromStorage() {
           { key: 'beachsafe', url: '/api/v1/beachsafe', unwrap: true },
           { key: 'dorsal_reports', url: '/api/v1/dorsal/reports?hours=168' },
           { key: 'weather_current', url: '/api/v1/weather/current' },
-          { key: 'endeavour_current', url: '/api/endeavour/current' },
-          { key: 'endeavour_maintenance', url: '/api/endeavour/maintenance' },
-          { key: 'endeavour_future', url: '/api/endeavour/future' },
+          { key: 'outages', url: '/api/v1/outages' },
         ];
         totalLoaded += await fetchBatch(stage3, 'Stage 3');
         
         const elapsed = Date.now() - startTime;
-        console.log(`✅ Prefetch complete: ${totalLoaded}/14 layers in ${elapsed}ms`);
+        console.log(`✅ Prefetch complete: ${totalLoaded}/12 layers in ${elapsed}ms`);
       } catch (e) {
         console.log('⚠️ Prefetch partial:', e.message);
       }
