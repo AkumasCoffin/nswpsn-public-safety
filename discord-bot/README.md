@@ -122,17 +122,17 @@ _Generated from `shared/alert-catalog.json` by `gen_readme_alert_types.py` — d
 | Roads (NSW, QLD, VIC, SA, ACT) | `traffic_majorevent` | NSW, QLD, VIC, SA and ACT road agencies | Major Events |
 | Roads (NSW, QLD, VIC, SA, ACT) | `traffic_alpine` | Transport for NSW | Alpine Conditions |
 | Roads (NSW, QLD, VIC, SA, ACT) | `traffic_lga` | Transport for NSW | Council Roads |
-| Endeavour Energy | `endeavour_current` | Endeavour Energy | Endeavour Current Outages |
-| Endeavour Energy | `endeavour_planned` | Endeavour Energy | Endeavour Planned Outages |
-| Ausgrid | `ausgrid` | Ausgrid | Ausgrid Outages |
-| Essential Energy | `essential_unplanned` | Essential Energy | Essential Energy Unplanned Outages |
-| Essential Energy | `essential_future` | Essential Energy | Essential Energy Future Outages |
-| AusNet | `ausnet` | AusNet | AusNet Outages |
-| CitiPower | `citipower` | CitiPower | CitiPower Outages |
-| Powercor | `powercor` | Powercor | Powercor Outages |
-| Jemena | `jemena` | Jemena | Jemena Outages |
-| SA Power Networks | `sapn` | SA Power Networks | SA Power Networks Outages |
-| Western Power | `westernpower` | Western Power | Western Power Outages |
+| Power outages | `endeavour_current` | Endeavour Energy | Endeavour Current Outages |
+| Power outages | `endeavour_planned` | Endeavour Energy | Endeavour Planned Outages |
+| Power outages | `ausgrid` | Ausgrid | Ausgrid Outages |
+| Power outages | `essential_unplanned` | Essential Energy | Essential Energy Unplanned Outages |
+| Power outages | `essential_future` | Essential Energy | Essential Energy Future Outages |
+| Power outages | `ausnet` | AusNet | AusNet Outages |
+| Power outages | `citipower` | CitiPower | CitiPower Outages |
+| Power outages | `powercor` | Powercor | Powercor Outages |
+| Power outages | `jemena` | Jemena | Jemena Outages |
+| Power outages | `sapn` | SA Power Networks | SA Power Networks Outages |
+| Power outages | `westernpower` | Western Power | Western Power Outages |
 | User Submissions | `user_incident` | User Submissions | User Incidents |
 | Radio Scanner | `radio_summary` | Radio Scanner | Radio Summary |
 | The Wire | `wire_article` | The Wire | Wire Articles |

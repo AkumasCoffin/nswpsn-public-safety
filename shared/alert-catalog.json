@@ -84,14 +84,7 @@
     { "key": "actas",       "label": "ACT Ambulance",          "icon": "truck-medical", "color": "#38bdf8" },
     { "key": "bom",         "label": "Bureau of Meteorology",  "icon": "cloud",         "color": "#3b82f6" },
     { "key": "livetraffic", "label": "Roads (NSW, QLD, VIC, SA, ACT)", "icon": "road",   "color": "#f97316" },
-    { "key": "endeavour",   "label": "Endeavour Energy",       "icon": "bolt",          "color": "#fbbf24" },
-    { "key": "ausgrid",     "label": "Ausgrid",                "icon": "plug",          "color": "#f59e0b" },
-    { "key": "essential",   "label": "Essential Energy",       "icon": "bolt",          "color": "#06b6d4" },
-    { "key": "ausnet",      "label": "AusNet",                 "icon": "bolt",          "color": "#fbbf24" },
-    { "key": "citipower",   "label": "CitiPower",              "icon": "bolt",          "color": "#fbbf24" },
-    { "key": "powercor",    "label": "Powercor",               "icon": "bolt",          "color": "#fbbf24" },
-    { "key": "jemena",      "label": "Jemena",                 "icon": "bolt",          "color": "#fbbf24" },
-    { "key": "sapn",        "label": "SA Power Networks",      "icon": "bolt",          "color": "#fbbf24" },
+    { "key": "power",       "label": "Power outages",          "icon": "bolt",          "color": "#fbbf24" },
     { "key": "westernpower","label": "Western Power",          "icon": "bolt",          "color": "#fbbf24" },
     { "key": "user",        "label": "User Submissions",       "icon": "user",          "color": "#a855f7" },
     { "key": "rdio",        "label": "Radio Scanner",          "icon": "radio",         "color": "#10b981" },
@@ -298,14 +291,14 @@
     },
 
     {
-      "key": "endeavour_current", "provider": "endeavour", "label": "Current Outages", "botLabel": "Endeavour Current Outages",
+      "key": "endeavour_current", "provider": "power", "label": "Endeavour Energy (current)", "botLabel": "Endeavour Current Outages",
       "agency": "ENDEAVOUR", "agencyLabel": "Endeavour Energy", "state": "NSW",
       "feedShape": "endeavour",
       "archiveSource": "endeavour_current", "endpoint": "/api/endeavour/current", "itemsPath": "",
       "color": "#8b008b", "icon": "⚡", "severityScale": null, "subtypeAware": false
     },
     {
-      "key": "endeavour_planned", "provider": "endeavour", "label": "Planned Outages", "botLabel": "Endeavour Planned Outages",
+      "key": "endeavour_planned", "provider": "power", "label": "Endeavour Energy (planned)", "botLabel": "Endeavour Planned Outages",
       "agency": "ENDEAVOUR", "agencyLabel": "Endeavour Energy", "state": "NSW",
       "feedShape": "endeavour",
       "archiveSource": "endeavour_planned", "endpoint": "/api/endeavour/planned", "itemsPath": "",
@@ -313,7 +306,7 @@
     },
 
     {
-      "key": "ausgrid", "provider": "ausgrid", "label": "Outages", "botLabel": "Ausgrid Outages",
+      "key": "ausgrid", "provider": "power", "label": "Ausgrid", "botLabel": "Ausgrid Outages",
       "agency": "AUSGRID", "agencyLabel": "Ausgrid", "state": "NSW",
       "feedShape": "ausgrid",
       "archiveSource": "ausgrid", "endpoint": "/api/ausgrid/outages", "itemsPath": ["Markers", "markers"],
@@ -321,14 +314,14 @@
     },
 
     {
-      "key": "essential_unplanned", "provider": "essential", "label": "Unplanned Outages", "botLabel": "Essential Energy Unplanned Outages",
+      "key": "essential_unplanned", "provider": "power", "label": "Essential Energy (unplanned)", "botLabel": "Essential Energy Unplanned Outages",
       "agency": "ESSENTIAL", "agencyLabel": "Essential Energy", "state": "NSW",
       "feedShape": "essential",
       "archiveSource": "essential_current", "endpoint": "/api/essential/outages?feed=current&type=unplanned", "itemsPath": "outages",
       "color": "#22d3ee", "icon": "⚡", "severityScale": null, "subtypeAware": false
     },
     {
-      "key": "essential_future", "provider": "essential", "label": "Future Outages", "botLabel": "Essential Energy Future Outages",
+      "key": "essential_future", "provider": "power", "label": "Essential Energy (future)", "botLabel": "Essential Energy Future Outages",
       "agency": "ESSENTIAL", "agencyLabel": "Essential Energy", "state": "NSW",
       "feedShape": "essential",
       "archiveSource": "essential_future", "endpoint": "/api/essential/future", "itemsPath": "outages",
@@ -337,42 +330,42 @@
     },
 
     {
-      "key": "ausnet", "provider": "ausnet", "label": "Outages", "botLabel": "AusNet Outages",
+      "key": "ausnet", "provider": "power", "label": "AusNet", "botLabel": "AusNet Outages",
       "agency": "AUSNET", "agencyLabel": "AusNet", "state": "VIC",
       "feedShape": "outage_v1",
       "archiveSource": "ausnet", "endpoint": "/api/v1/outages?distributor=ausnet&status=active", "itemsPath": "features",
       "color": "#e67e22", "icon": "⚡", "severityScale": null, "subtypeAware": false
     },
     {
-      "key": "citipower", "provider": "citipower", "label": "Outages", "botLabel": "CitiPower Outages",
+      "key": "citipower", "provider": "power", "label": "CitiPower", "botLabel": "CitiPower Outages",
       "agency": "CITIPOWER", "agencyLabel": "CitiPower", "state": "VIC",
       "feedShape": "outage_v1",
       "archiveSource": "citipower", "endpoint": "/api/v1/outages?distributor=citipower&status=active", "itemsPath": "features",
       "color": "#e67e22", "icon": "⚡", "severityScale": null, "subtypeAware": false
     },
     {
-      "key": "powercor", "provider": "powercor", "label": "Outages", "botLabel": "Powercor Outages",
+      "key": "powercor", "provider": "power", "label": "Powercor", "botLabel": "Powercor Outages",
       "agency": "POWERCOR", "agencyLabel": "Powercor", "state": "VIC",
       "feedShape": "outage_v1",
       "archiveSource": "powercor", "endpoint": "/api/v1/outages?distributor=powercor&status=active", "itemsPath": "features",
       "color": "#e67e22", "icon": "⚡", "severityScale": null, "subtypeAware": false
     },
     {
-      "key": "jemena", "provider": "jemena", "label": "Outages", "botLabel": "Jemena Outages",
+      "key": "jemena", "provider": "power", "label": "Jemena", "botLabel": "Jemena Outages",
       "agency": "JEMENA", "agencyLabel": "Jemena", "state": "VIC",
       "feedShape": "outage_v1",
       "archiveSource": "jemena", "endpoint": "/api/v1/outages?distributor=jemena&status=active", "itemsPath": "features",
       "color": "#e67e22", "icon": "⚡", "severityScale": null, "subtypeAware": false
     },
     {
-      "key": "sapn", "provider": "sapn", "label": "Outages", "botLabel": "SA Power Networks Outages",
+      "key": "sapn", "provider": "power", "label": "SA Power Networks", "botLabel": "SA Power Networks Outages",
       "agency": "SAPN", "agencyLabel": "SA Power Networks", "state": "SA",
       "feedShape": "outage_v1",
       "archiveSource": "sapn", "endpoint": "/api/v1/outages?distributor=sapn&status=active", "itemsPath": "features",
       "color": "#e67e22", "icon": "⚡", "severityScale": null, "subtypeAware": false
     },
     {
-      "key": "westernpower", "provider": "westernpower", "label": "Outages", "botLabel": "Western Power Outages",
+      "key": "westernpower", "provider": "power", "label": "Western Power", "botLabel": "Western Power Outages",
       "agency": "WESTERNPOWER", "agencyLabel": "Western Power", "state": "WA",
       "feedShape": "outage_v1",
       "archiveSource": "westernpower", "endpoint": "/api/v1/outages?distributor=westernpower&status=active", "itemsPath": "features",
