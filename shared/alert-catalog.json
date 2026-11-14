@@ -85,7 +85,6 @@
     { "key": "bom",         "label": "Bureau of Meteorology",  "icon": "cloud",         "color": "#3b82f6" },
     { "key": "livetraffic", "label": "Roads (NSW, QLD, VIC, SA, ACT)", "icon": "road",   "color": "#f97316" },
     { "key": "power",       "label": "Power outages",          "icon": "bolt",          "color": "#fbbf24" },
-    { "key": "westernpower","label": "Western Power",          "icon": "bolt",          "color": "#fbbf24" },
     { "key": "user",        "label": "User Submissions",       "icon": "user",          "color": "#a855f7" },
     { "key": "rdio",        "label": "Radio Scanner",          "icon": "radio",         "color": "#10b981" },
     { "key": "wire",        "label": "The Wire",               "icon": "newspaper",     "color": "#f97316" },
