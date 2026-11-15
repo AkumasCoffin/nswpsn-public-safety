@@ -1963,15 +1963,16 @@ async function buildAdminOverview(): Promise<unknown> {
     // Track the freshest session per uid so the row's session_age_seconds
     // reflects the current visit, not the historical last_seen.
     const activeSessions = listActiveSessions();
-    const sessionsByUid = new Map<string, { iat: number; exp: number; lastSeen: number; sessionCount: number }>();
+    const sessionsByUid = new Map<string, { iat: number; exp: number; lastSeen: number; sessionCount: number; guilds: number }>();
     for (const s of activeSessions) {
       const uid = String(s.uid);
       const lastSeen = s.last_seen ?? s.iat;
       const existing = sessionsByUid.get(uid);
       if (!existing) {
-        sessionsByUid.set(uid, { iat: s.iat, exp: s.exp, lastSeen, sessionCount: 1 });
+        sessionsByUid.set(uid, { iat: s.iat, exp: s.exp, lastSeen, sessionCount: 1, guilds: s.guilds.length });
       } else {
         existing.sessionCount += 1;
+        if (s.guilds.length > existing.guilds) existing.guilds = s.guilds.length;
         if (lastSeen > existing.lastSeen) existing.lastSeen = lastSeen;
         if (s.iat < existing.iat) existing.iat = s.iat;
       }
@@ -1989,7 +1990,10 @@ async function buildAdminOverview(): Promise<unknown> {
         uid,
         username: r.username ?? '',
         avatar_url: userAvatarUrl(uid, r.avatar),
-        guild_count: 0,
+        // A user's servers are held on their session, not stored. Signed
+        // out, the count is not known: null, not a zero that reads as
+        // "manages no servers".
+        guild_count: live ? live.guilds : null,
         age_seconds: Math.max(0, now - lastSeenTs),
         session_age_seconds: Math.max(0, now - sessionStart),
         is_admin: getAdminIds().has(uid),

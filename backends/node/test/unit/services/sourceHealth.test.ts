@@ -205,3 +205,56 @@ describe('clearSourceErrors', () => {
     expect(rfs?.last_ok_at).not.toBeNull();
   });
 });
+
+describe('a healthy source is not called degraded', () => {
+  const now = () => Math.floor(Date.now() / 1000);
+  const state = (name: string) => getSourceHealthSnapshot().find((r) => r.name === name)?.state;
+
+  it('one failed poll is not degradation', () => {
+    _seedSourceStateForTests('rfs', {
+      lastSuccessTs: now() - 60,
+      lastError: 'HTTP 404 for a file that is back next poll',
+      failureCount: 1,
+      lastAttemptTs: now() - 5,
+    });
+    expect(state('rfs')).toBe('ok');
+  });
+
+  it('a source polled every 10 minutes is not degraded between its polls', () => {
+    registerSource({ name: 'weather_air', family: 'misc', intervalMs: 10 * 60_000, fetch: async () => ({}) });
+    // 7 and 9 minutes after a success, with no failure: the next poll is not
+    // even due. The default 5 minute threshold called this degraded.
+    _seedSourceStateForTests('weather_air', { lastSuccessTs: now() - 7 * 60, lastError: null, failureCount: 0 });
+    expect(state('weather_air')).toBe('ok');
+    _seedSourceStateForTests('weather_air', { lastSuccessTs: now() - 9 * 60, lastError: null, failureCount: 0 });
+    expect(state('weather_air')).toBe('ok');
+    // Two polls missed: now it is.
+    _seedSourceStateForTests('weather_air', { lastSuccessTs: now() - 22 * 60, lastError: null, failureCount: 0 });
+    expect(state('weather_air')).toBe('degraded');
+    // Four missed: down.
+    _seedSourceStateForTests('weather_air', { lastSuccessTs: now() - 42 * 60, lastError: null, failureCount: 0 });
+    expect(state('weather_air')).toBe('down');
+  });
+
+  it('a source polled once a day is not down two hours after it ran', () => {
+    registerSource({ name: 'weather_grid', family: 'misc', intervalMs: 24 * 60 * 60_000, fetch: async () => ({}) });
+    _seedSourceStateForTests('weather_grid', { lastSuccessTs: now() - 2 * 3600, lastError: null, failureCount: 0 });
+    expect(state('weather_grid')).toBe('ok');
+    // It still goes degraded when its polls keep failing.
+    _seedSourceStateForTests('weather_grid', {
+      lastSuccessTs: now() - 2 * 3600, lastError: 'boom', failureCount: 2, lastAttemptTs: now() - 30,
+    });
+    expect(state('weather_grid')).toBe('degraded');
+  });
+
+  it('a fast source keeps the thresholds from the table', () => {
+    // rfs is polled every minute here: soft stays 600, not 2 x 60 + 60.
+    _seedSourceStateForTests('rfs', { lastSuccessTs: now() - 500, lastError: null, failureCount: 0 });
+    expect(state('rfs')).toBe('ok');
+  });
+
+  it('names the sources the registry really has', () => {
+    registerSource({ name: 'sa_cfs', family: 'rfs', intervalMs: 120_000, fetch: async () => ({}) });
+    expect(getSourceHealthSnapshot().find((r) => r.name === 'sa_cfs')?.label).toBe('SA CFS incidents');
+  });
+});

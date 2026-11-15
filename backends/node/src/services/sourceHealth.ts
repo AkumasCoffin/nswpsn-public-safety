@@ -9,13 +9,21 @@
  * thread, but on the Node side the runtime state is enough for the admin
  * panel and we can rebuild it on every restart.
  *
- * State buckets (`state` field on each row) follow the python rules:
+ * State buckets (`state` field on each row):
  *   - last_ok_at is null         → 'unknown'
  *   - consec_fails >= 5          → 'down'
  *   - age > hard threshold       → 'down'
- *   - consec_fails > 0           → 'degraded'
+ *   - consec_fails >= 2          → 'degraded'
  *   - age > soft threshold       → 'degraded'
  *   - otherwise                  → 'ok'
+ *
+ * Two things keep a healthy source from being called degraded:
+ *   - the thresholds are never shorter than the source's own poll interval
+ *     allows (see thresholdsFor). A source polled every 10 minutes, or once
+ *     a day, was "degraded" or "down" for most of each cycle with no
+ *     failure at all, because the default was 5 / 15 minutes;
+ *   - one failed poll is not degradation. Several upstreams 404 or time out
+ *     for a single poll and are back on the next.
  */
 import {
   getSourceMetrics,
@@ -66,6 +74,31 @@ const SOURCE_THRESHOLDS: Record<string, ThresholdEntry> = {
   // ~24 reports a day nationally, polled every 5 min — a quiet stretch is
   // normal, so the thresholds are about staleness of the feed, not of events.
   dorsal_reports:    { soft: 900,  hard: 2700, label: 'Dorsal Watch shark reports' },
+  // The rest of the registry, mostly for a readable label. Thresholds are
+  // floored by the poll interval, so a slow source needs no entry of its own.
+  rfs_incidents:         { soft: 600,  hard: 1800, label: 'RFS incidents' },
+  bom_warnings:          { soft: 600,  hard: 1800, label: 'BOM warnings' },
+  traffic_majorevent:    { soft: 1800, hard: 3600, label: 'LiveTraffic — major events' },
+  endeavour_current:     { soft: 1200, hard: 3600, label: 'Endeavour Energy — current' },
+  endeavour_planned:     { soft: 1200, hard: 3600, label: 'Endeavour Energy — planned' },
+  endeavour_maintenance: { soft: 1200, hard: 3600, label: 'Endeavour Energy — maintenance' },
+  ausgrid:               { soft: 1800, hard: 5400, label: 'Ausgrid outages' },
+  essential_current:     { soft: 900,  hard: 2700, label: 'Essential Energy — unplanned' },
+  essential_future:      { soft: 900,  hard: 2700, label: 'Essential Energy — future' },
+  vic_emergency:         { soft: 600,  hard: 1800, label: 'VIC Emergency' },
+  qld_fire:              { soft: 600,  hard: 1800, label: 'QLD Fire incidents' },
+  qld_warning:           { soft: 600,  hard: 1800, label: 'QLD Fire warnings' },
+  wa_incident:           { soft: 600,  hard: 1800, label: 'DFES (WA) incidents' },
+  wa_warning:            { soft: 600,  hard: 1800, label: 'DFES (WA) warnings' },
+  sa_cfs:                { soft: 600,  hard: 1800, label: 'SA CFS incidents' },
+  sa_mfs:                { soft: 600,  hard: 1800, label: 'SA MFS incidents' },
+  nt_fire:               { soft: 600,  hard: 1800, label: 'NT fire incidents' },
+  user_incidents:        { soft: 300,  hard: 900,  label: 'User incidents' },
+  adsb_aircraft:         { soft: 300,  hard: 900,  label: 'ADS-B aircraft' },
+  weather_grid:          { soft: 300,  hard: 900,  label: 'Weather grid' },
+  weather_marine:        { soft: 300,  hard: 900,  label: 'Weather grid — marine' },
+  weather_flood:         { soft: 300,  hard: 900,  label: 'Weather grid — flood' },
+  weather_air:           { soft: 300,  hard: 900,  label: 'Weather grid — air quality' },
 };
 
 // Reference / static data sources that are polled for the live map but
@@ -91,6 +124,7 @@ const NON_INCIDENT_SOURCES = new Set<string>([
 const DEFAULT_SOFT_S = 300;
 const DEFAULT_HARD_S = 900;
 const DOWN_FAIL_THRESHOLD = 5;
+const DEGRADED_FAIL_THRESHOLD = 2;
 
 export type SourceState = 'unknown' | 'ok' | 'degraded' | 'down';
 
@@ -111,11 +145,23 @@ export interface SourceHealthRow {
   state: SourceState;
 }
 
-function thresholdsFor(name: string): ThresholdEntry {
-  return SOURCE_THRESHOLDS[name] ?? {
+/**
+ * The thresholds for a source, never tighter than its poll interval allows:
+ * "degraded" needs two polls to have been missed, "down" four. Without the
+ * floor, anything polled less often than the table (or the 5 / 15 minute
+ * default) assumed was stale between its own polls.
+ */
+function thresholdsFor(name: string, intervalS: number): ThresholdEntry {
+  const base = SOURCE_THRESHOLDS[name] ?? {
     soft: DEFAULT_SOFT_S,
     hard: DEFAULT_HARD_S,
     label: name,
+  };
+  const every = Number.isFinite(intervalS) && intervalS > 0 ? intervalS : 0;
+  return {
+    label: base.label,
+    soft: Math.max(base.soft, every * 2 + 60),
+    hard: Math.max(base.hard, every * 4 + 60),
   };
 }
 
@@ -127,7 +173,7 @@ function deriveState(
   if (metric.last_ok_at === null) return 'unknown';
   if (metric.consec_fails >= DOWN_FAIL_THRESHOLD) return 'down';
   if (ageSecs !== null && ageSecs > cfg.hard) return 'down';
-  if (metric.consec_fails > 0) return 'degraded';
+  if (metric.consec_fails >= DEGRADED_FAIL_THRESHOLD) return 'degraded';
   if (ageSecs !== null && ageSecs > cfg.soft) return 'degraded';
   return 'ok';
 }
@@ -146,7 +192,7 @@ export function getSourceHealthSnapshot(): SourceHealthRow[] {
     // Skip reference/static feeds (cameras, radar tiles, beach data) — they
     // produce no alerts, so they don't belong in the alert source-health panel.
     if (NON_INCIDENT_SOURCES.has(m.name)) continue;
-    const cfg = thresholdsFor(m.name);
+    const cfg = thresholdsFor(m.name, m.interval_s);
     const age = m.last_ok_at ? now - m.last_ok_at : null;
     out.push({
       name: m.name,

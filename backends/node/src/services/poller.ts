@@ -396,6 +396,8 @@ export function pollerHealth(): Record<
 export interface SourceMetricSnapshot {
   name: string;
   family: string;
+  /** How often the source is polled, in seconds. */
+  interval_s: number;
   /** Epoch seconds. null = source has never succeeded since process start. */
   last_ok_at: number | null;
   /** Epoch seconds. null = source has never errored since process start. */
@@ -418,6 +420,7 @@ export function getSourceMetrics(): SourceMetricSnapshot[] {
     out.push({
       name: src.name,
       family: src.family,
+      interval_s: Math.round(src.intervalMs / 1000),
       last_ok_at: s?.lastSuccessTs ?? null,
       // The per-source state tracks last_attempt + last_error together;
       // when lastError is set, lastAttemptTs is the failure timestamp.

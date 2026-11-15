@@ -266,6 +266,17 @@ describe('fetchSaCfs / fetchSaMfs', () => {
     await expect(fetchSaCfs()).rejects.toThrow(/did not return an array/);
   });
 
+  it('says so plainly when the page fails to parse as JSON', async () => {
+    // What really happens: the page is HTML, so the JSON parse fails first.
+    fetchJson.mockRejectedValue(new Error('JSON parse failed: Unexpected token <'));
+    await expect(fetchSaCfs()).rejects.toThrow(/sa_cfs: SA ESS served its "file currently unavailable" page/);
+  });
+
+  it('passes any other failure through unchanged', async () => {
+    fetchJson.mockRejectedValue(new Error('timeout after 20000ms'));
+    await expect(fetchSaCfs()).rejects.toThrow(/timeout after 20000ms/);
+  });
+
   it('throws when the payload is reshaped into an object', async () => {
     fetchJson.mockResolvedValue({ incidents: [CFS_BURN] });
     await expect(fetchSaMfs()).rejects.toThrow(/did not return an array/);

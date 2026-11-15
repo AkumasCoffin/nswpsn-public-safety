@@ -327,10 +327,21 @@ export function saResourcesText(f: SaFeature): string {
 }
 
 async function fetchFeed(url: string, agency: SaAgency, label: string): Promise<SaSnapshot> {
-  const data = await fetchJson<unknown>(url, {
-    headers: { 'User-Agent': 'Mozilla/5.0' },
-    timeoutMs: 20_000,
-  });
+  let data: unknown;
+  try {
+    data = await fetchJson<unknown>(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      timeoutMs: 20_000,
+    });
+  } catch (err) {
+    // SA ESS answers 200 with an HTML "File currently unavailable" page when
+    // it has no file to give. Said plainly, so the admin panel does not show
+    // a JSON parser complaining about a "<".
+    if (/JSON parse failed/.test((err as Error).message ?? '')) {
+      throw new Error(`${label}: SA ESS served its "file currently unavailable" page instead of the feed`);
+    }
+    throw err;
+  }
   // These feeds are bare arrays. Anything else means SA ESS handed us
   // its "File Unavailable" page — which it serves with a 200, so the
   // status code proves nothing — or reshaped the feed. Throwing is what

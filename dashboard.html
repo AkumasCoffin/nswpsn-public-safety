@@ -5245,7 +5245,7 @@ function renderAdmin() {
           u.is_admin ? el('span', { class: 'admin-pill' }, 'admin') : null,
         ]),
         el('td', { class: 'mono' }, u.uid),
-        el('td', {}, String(u.guild_count || 0)),
+        el('td', u.guild_count == null ? { title: 'Only known while the user is signed in' } : {}, u.guild_count == null ? '—' : String(u.guild_count)),
         el('td', {}, formatAge(u.age_seconds)),
         el('td', {}, isActive
           ? el('span', { class: 'status-pill ok' }, 'online')
