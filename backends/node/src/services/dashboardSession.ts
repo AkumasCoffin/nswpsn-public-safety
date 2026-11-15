@@ -238,7 +238,14 @@ export function parseCookieHeader(header: string | undefined | null): Record<str
     if (idx < 0) continue;
     const k = part.slice(0, idx).trim();
     const v = part.slice(idx + 1).trim();
-    if (k) out[k] = decodeURIComponent(v);
+    if (!k) continue;
+    // A cookie from another app on the parent domain may hold a bare '%';
+    // it is not ours to read, and must not take the request down with it.
+    try {
+      out[k] = decodeURIComponent(v);
+    } catch {
+      out[k] = v;
+    }
   }
   return out;
 }

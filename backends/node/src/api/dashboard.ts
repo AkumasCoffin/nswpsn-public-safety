@@ -126,6 +126,12 @@ function dashErr(c: Context, code: string, message: string, status: number) {
   return c.json({ error: code, message }, status as any);
 }
 
+/** A database failure: the detail goes to the log, not to the browser. */
+function dbErr(c: Context, err: unknown) {
+  log.error({ err, path: c.req.path }, 'dashboard: database error');
+  return dashErr(c, 'db_error', 'Something went wrong on our side. Try again in a moment.', 500);
+}
+
 function getCookieMap(c: Context): Record<string, string> {
   return parseCookieHeader(c.req.header('Cookie'));
 }
@@ -324,7 +330,80 @@ async function guildGuard(
       err: dashErr(c, 'bot_not_in_guild', 'The AusAware bot is not configured in this guild yet.', 403),
     };
   }
+  // The session's guild list is as old as the sign-in (or the last page
+  // load). Ask Discord what the member can do now, so someone demoted or
+  // removed loses the dashboard within a minute, not when the session ends.
+  const live = await liveGuildAccess(session.uid, String(guildId));
+  if (live === 'not_member') {
+    return { err: dashErr(c, 'guild_not_found', 'You are no longer a member of that server.', 403) };
+  }
+  if (live === 'forbidden') {
+    return {
+      err: dashErr(c, 'forbidden', 'Manage Channels permission is required on this guild.', 403),
+    };
+  }
   return { entry };
+}
+
+interface DiscordGuildRaw { owner_id?: string; roles?: Array<{ id: string; permissions?: string }> }
+interface DiscordMemberRaw { roles?: string[]; code?: number }
+type LiveAccess = 'ok' | 'not_member' | 'forbidden' | 'unknown';
+
+/** Discord's code for "this user is not in the guild" on a member lookup. */
+const DISCORD_UNKNOWN_MEMBER = 10007;
+
+/**
+ * What a member may do in a guild right now, asked with the bot's token:
+ * the guild's owner, or anyone whose roles carry Administrator or Manage
+ * Channels. Answers are kept for a minute.
+ *
+ * 'unknown' means Discord could not be asked (an outage, a rate limit, the
+ * bot missing from the guild). The caller then goes by the session alone, as
+ * it always did: an outage at Discord should not lock every admin out.
+ */
+async function liveGuildAccess(uid: string, guildId: string): Promise<LiveAccess> {
+  if (!/^\d{1,20}$/.test(uid) || !/^\d{1,20}$/.test(guildId)) return 'unknown';
+  const key = `${guildId}:${uid}`;
+  const cached = cacheGet<LiveAccess>('access', key);
+  if (cached) return cached;
+  let out: LiveAccess = 'unknown';
+  try {
+    let guild = cacheGet<DiscordGuildRaw>('guildraw', guildId);
+    if (!guild) {
+      const g = await botGet<DiscordGuildRaw>(`/guilds/${guildId}`);
+      if (g?.status === 200 && g.body && typeof g.body === 'object' && !Array.isArray(g.body)) {
+        guild = g.body as DiscordGuildRaw;
+        cacheSet('guildraw', guildId, guild);
+      }
+    }
+    if (guild && Array.isArray(guild.roles)) {
+      if (String(guild.owner_id ?? '') === uid) {
+        out = 'ok';
+      } else {
+        const m = await botGet<DiscordMemberRaw>(`/guilds/${guildId}/members/${uid}`);
+        const member = (m?.body ?? null) as DiscordMemberRaw | null;
+        if (m?.status === 404 && Number(member?.code) === DISCORD_UNKNOWN_MEMBER) {
+          out = 'not_member';
+        } else if (m?.status === 200 && member && Array.isArray(member.roles)) {
+          const mine = new Set([guildId, ...member.roles.map(String)]);
+          let perms = 0n;
+          for (const r of guild.roles) {
+            if (!r || !mine.has(String(r.id))) continue;
+            try {
+              perms |= BigInt(r.permissions ?? 0);
+            } catch {
+              /* not a number: no permissions from it */
+            }
+          }
+          out = (perms & (MANAGE_CHANNELS | ADMINISTRATOR)) !== 0n ? 'ok' : 'forbidden';
+        }
+      }
+    }
+  } catch (err) {
+    log.warn({ err, guildId }, 'dashboard: live permission check failed');
+  }
+  if (out !== 'unknown') cacheSet('access', key, out);
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -577,6 +656,38 @@ function cacheSet<T>(kind: string, key: string, data: T) {
 interface DiscordChannel { id: string; name?: string; type?: number; position?: number; parent_id?: string | null }
 interface DiscordRole { id: string; name?: string; color?: number; position?: number; managed?: boolean }
 
+/** Every channel id in a guild, of any type, as Discord lists them; null when Discord could not be asked. */
+async function guildChannelIds(guildId: string): Promise<Set<string> | null> {
+  const cached = cacheGet<string[]>('channelids', guildId);
+  if (cached) return new Set(cached);
+  try {
+    const res = await botGet<DiscordChannel[]>(`/guilds/${guildId}/channels`);
+    if (res?.status !== 200 || !Array.isArray(res.body)) return null;
+    const ids = res.body.filter((ch) => ch && ch.id != null).map((ch) => String(ch.id));
+    cacheSet('channelids', guildId, ids);
+    return new Set(ids);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A preset may only name a channel of its own guild. Without this, anyone
+ * who administers one server with the bot could point a preset at a channel
+ * in another, and the bot would post there with nobody in that server able
+ * to see the preset or switch it off. Returns the refusal, or null to go on.
+ */
+async function channelNotInGuild(c: Context, guildId: string, cid: bigint): Promise<Response | null> {
+  const ids = await guildChannelIds(guildId);
+  if (!ids) {
+    return dashErr(c, 'discord_error', 'Could not check that channel with Discord. Try again shortly.', 503);
+  }
+  if (!ids.has(cid.toString())) {
+    return dashErr(c, 'bad_channel', 'That channel is not in this server.', 400);
+  }
+  return null;
+}
+
 dashboardRouter.get('/api/dashboard/guilds/:guildId/channels', async (c) => {
   const session = await requireSession(c);
   if (session instanceof Response) return session;
@@ -682,13 +793,21 @@ function isoOrNull(v: Date | string | null | undefined): string | null {
 
 function rowToPreset(row: PresetRow): Record<string, unknown> {
   const roleIds = (row.role_ids ?? []).map((r) => String(BigInt(r)));
-  const alertTypes = row.alert_types ?? [];
+  // A row saved before a type was renamed or retired still holds the old
+  // key. The page resends the whole list on every change, so it is given
+  // today's names (the bot folds the same way) and nothing it would be
+  // refused for sending back.
+  const alertTypes: string[] = [];
+  for (const t of row.alert_types ?? []) {
+    const canon = typeof t === 'string' ? canonicalAlertType(t) : null;
+    if (canon && !alertTypes.includes(canon)) alertTypes.push(canon);
+  }
   const overridesRaw = row.type_overrides ?? {};
   const typeOverrides: Record<string, { enabled: boolean; enabled_ping: boolean }> = {};
   if (overridesRaw && typeof overridesRaw === 'object') {
     for (const [k, v] of Object.entries(overridesRaw)) {
       if (!v || typeof v !== 'object') continue;
-      typeOverrides[k] = {
+      typeOverrides[canonicalAlertType(k) ?? k] = {
         enabled: Boolean((v as { enabled?: boolean }).enabled ?? true),
         enabled_ping: Boolean((v as { enabled_ping?: boolean }).enabled_ping ?? true),
       };
@@ -888,7 +1007,7 @@ dashboardRouter.get('/api/dashboard/guilds/:guildId/presets', async (c) => {
     return c.json({ presets: r.rows.map(rowToPreset) });
   } catch (err) {
     log.error({ err }, 'dashboard presets_get error');
-    return dashErr(c, 'db_error', String((err as Error).message), 500);
+    return dbErr(c, err);
   }
 });
 
@@ -957,6 +1076,10 @@ dashboardRouter.post('/api/dashboard/guilds/:guildId/presets', async (c) => {
     throw err;
   }
 
+  // Last, because it is the one check that asks Discord.
+  const wrongChannel = await channelNotInGuild(c, guildId, cid);
+  if (wrongChannel) return wrongChannel;
+
   const pool = await getBotDbPool();
   if (!pool) return dashErr(c, 'dashboard_disabled', 'BOT_DATA_DATABASE_URL is not configured.', 503);
 
@@ -1004,7 +1127,7 @@ dashboardRouter.post('/api/dashboard/guilds/:guildId/presets', async (c) => {
       );
     }
     log.error({ err }, 'dashboard presets_create error');
-    return dashErr(c, 'db_error', String((err as Error).message), 500);
+    return dbErr(c, err);
   }
 });
 
@@ -1013,7 +1136,7 @@ dashboardRouter.patch('/api/dashboard/guilds/:guildId/presets/:presetId', async 
   if (session instanceof Response) return session;
   const guildId = c.req.param('guildId');
   const presetId = Number(c.req.param('presetId'));
-  if (!Number.isFinite(presetId)) {
+  if (!Number.isSafeInteger(presetId) || presetId <= 0) {
     return dashErr(c, 'bad_request', 'preset_id must be numeric.', 400);
   }
   const guard = await guildGuard(c, session, guildId);
@@ -1038,6 +1161,8 @@ dashboardRouter.patch('/api/dashboard/guilds/:guildId/presets/:presetId', async 
       return dashErr(c, 'bad_request', 'channel_id must be numeric.', 400);
     }
     if (cid === 0n) return dashErr(c, 'bad_request', 'channel_id must be non-zero.', 400);
+    const wrongChannel = await channelNotInGuild(c, guildId, cid);
+    if (wrongChannel) return wrongChannel;
     sets.push(`channel_id=$${params.length + 1}`);
     params.push(cid.toString());
   }
@@ -1166,7 +1291,7 @@ dashboardRouter.patch('/api/dashboard/guilds/:guildId/presets/:presetId', async 
       );
     }
     log.error({ err }, 'dashboard presets_patch error');
-    return dashErr(c, 'db_error', String((err as Error).message), 500);
+    return dbErr(c, err);
   }
 });
 
@@ -1175,7 +1300,7 @@ dashboardRouter.delete('/api/dashboard/guilds/:guildId/presets/:presetId', async
   if (session instanceof Response) return session;
   const guildId = c.req.param('guildId');
   const presetId = Number(c.req.param('presetId'));
-  if (!Number.isFinite(presetId)) {
+  if (!Number.isSafeInteger(presetId) || presetId <= 0) {
     return dashErr(c, 'bad_request', 'preset_id must be numeric.', 400);
   }
   const guard = await guildGuard(c, session, guildId);
@@ -1215,7 +1340,7 @@ dashboardRouter.delete('/api/dashboard/guilds/:guildId/presets/:presetId', async
     return c.json({ ok: true });
   } catch (err) {
     log.error({ err }, 'dashboard presets_delete error');
-    return dashErr(c, 'db_error', String((err as Error).message), 500);
+    return dbErr(c, err);
   }
 });
 
@@ -1235,7 +1360,7 @@ dashboardRouter.put(
     const rawAlertType = c.req.param('alertType');
     // Fold retired keys so an override saved under an old name keeps working.
     const alertType = canonicalAlertType(rawAlertType) ?? '';
-    if (!Number.isFinite(presetId)) {
+    if (!Number.isSafeInteger(presetId) || presetId <= 0) {
       return dashErr(c, 'bad_request', 'preset_id must be numeric.', 400);
     }
     if (!alertType) {
@@ -1298,7 +1423,7 @@ dashboardRouter.put(
       return c.json({ preset: rowToPreset(r.rows[0]!) });
     } catch (err) {
       log.error({ err }, 'dashboard preset_override_put error');
-      return dashErr(c, 'db_error', String((err as Error).message), 500);
+      return dbErr(c, err);
     }
   },
 );
@@ -1313,7 +1438,7 @@ dashboardRouter.delete(
     const rawAlertType = c.req.param('alertType');
     // Fold retired keys so an override saved under an old name keeps working.
     const alertType = canonicalAlertType(rawAlertType) ?? '';
-    if (!Number.isFinite(presetId)) {
+    if (!Number.isSafeInteger(presetId) || presetId <= 0) {
       return dashErr(c, 'bad_request', 'preset_id must be numeric.', 400);
     }
     if (!alertType) {
@@ -1354,7 +1479,7 @@ dashboardRouter.delete(
       return c.json({ preset: rowToPreset(r.rows[0]!) });
     } catch (err) {
       log.error({ err }, 'dashboard preset_override_delete error');
-      return dashErr(c, 'db_error', String((err as Error).message), 500);
+      return dbErr(c, err);
     }
   },
 );
@@ -1533,7 +1658,7 @@ dashboardRouter.get('/api/dashboard/guilds/:guildId/mute-state', async (c) => {
     return c.json({ guild: guildState, channels });
   } catch (err) {
     log.error({ err }, 'dashboard mute_state_get error');
-    return dashErr(c, 'db_error', String((err as Error).message), 500);
+    return dbErr(c, err);
   }
 });
 
@@ -1573,7 +1698,7 @@ dashboardRouter.put('/api/dashboard/guilds/:guildId/mute-state/guild', async (c)
     return c.json({ guild: rowToMute(r.rows[0] ?? {}) });
   } catch (err) {
     log.error({ err }, 'dashboard mute_state_guild_put error');
-    return dashErr(c, 'db_error', String((err as Error).message), 500);
+    return dbErr(c, err);
   }
 });
 
@@ -1597,7 +1722,7 @@ dashboardRouter.delete('/api/dashboard/guilds/:guildId/mute-state/guild', async 
     return c.json({ ok: true });
   } catch (err) {
     log.error({ err }, 'dashboard mute_state_guild_delete error');
-    return dashErr(c, 'db_error', String((err as Error).message), 500);
+    return dbErr(c, err);
   }
 });
 
@@ -1649,7 +1774,7 @@ dashboardRouter.put(
       return c.json({ channel: rowToMute(r.rows[0] ?? { channel_id: cid.toString() }, true) });
     } catch (err) {
       log.error({ err }, 'dashboard mute_state_channel_put error');
-      return dashErr(c, 'db_error', String((err as Error).message), 500);
+      return dbErr(c, err);
     }
   },
 );
@@ -1681,7 +1806,7 @@ dashboardRouter.delete(
       return c.json({ ok: true });
     } catch (err) {
       log.error({ err }, 'dashboard mute_state_channel_delete error');
-      return dashErr(c, 'db_error', String((err as Error).message), 500);
+      return dbErr(c, err);
     }
   },
 );
@@ -1940,7 +2065,7 @@ dashboardRouter.get('/api/dashboard/admin/overview', async (c) => {
     return c.json(r.value);
   } catch (err) {
     log.error({ err }, 'dashboard admin_overview error');
-    return dashErr(c, 'db_error', String((err as Error).message), 500);
+    return dbErr(c, err);
   }
 });
 
@@ -2004,7 +2129,7 @@ dashboardRouter.get('/api/dashboard/admin/audit', async (c) => {
     return c.json({ entries, server_time: Math.floor(Date.now() / 1000) });
   } catch (err) {
     log.error({ err }, 'dashboard admin_audit error');
-    return dashErr(c, 'db_error', String((err as Error).message), 500);
+    return dbErr(c, err);
   }
 });
 
@@ -2157,7 +2282,7 @@ dashboardRouter.get('/api/dashboard/admin/broadcast/targets', async (c) => {
     return c.json({ targets: r.value });
   } catch (err) {
     log.error({ err }, 'dashboard broadcast_targets error');
-    return dashErr(c, 'db_error', String((err as Error).message), 500);
+    return dbErr(c, err);
   }
 });
 
@@ -2226,7 +2351,7 @@ dashboardRouter.post('/api/dashboard/admin/broadcast', async (c) => {
     return c.json({ id: newId, queued: true, total: cleanTargets.length }, 202);
   } catch (err) {
     log.error({ err }, 'dashboard broadcast enqueue error');
-    return dashErr(c, 'db_error', String((err as Error).message), 500);
+    return dbErr(c, err);
   }
 });
 
@@ -2284,7 +2409,7 @@ dashboardRouter.get('/api/dashboard/admin/cleanup/candidates', async (c) => {
     return c.json({ candidates, bot_guild_count: liveIds.size });
   } catch (err) {
     log.error({ err }, 'dashboard cleanup_candidates error');
-    return dashErr(c, 'db_error', String((err as Error).message), 500);
+    return dbErr(c, err);
   }
 });
 
@@ -2369,7 +2494,7 @@ dashboardRouter.get('/api/dashboard/admin/bot-actions', async (c) => {
     return c.json({ actions: r.value });
   } catch (err) {
     log.error({ err }, 'dashboard bot_actions_list error');
-    return dashErr(c, 'db_error', String((err as Error).message), 500);
+    return dbErr(c, err);
   }
 });
 
@@ -2429,7 +2554,7 @@ dashboardRouter.post('/api/dashboard/admin/bot-actions', async (c) => {
     return c.json({ id: newId, action, params }, 201);
   } catch (err) {
     log.error({ err }, 'dashboard bot_action_enqueue error');
-    return dashErr(c, 'db_error', String((err as Error).message), 500);
+    return dbErr(c, err);
   }
 });
 

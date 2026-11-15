@@ -794,6 +794,8 @@ class NSWPSNBot(commands.Bot):
         # enforces the actual per-channel + global rate limits, so this can't
         # exceed Discord's caps.
         self.message_queue = asyncio.Queue(maxsize=5000)
+        # Presets already reported as naming another guild's channel.
+        self._foreign_preset_logged = set()
         self.rate_limit_delay = 0.5  # legacy; pacing is now handled by discord.py
         self.max_messages_per_batch = 100  # messages drained per tick (fanned out per channel)
         # How much of one batch a single alert_type may claim while another
@@ -1092,6 +1094,32 @@ class NSWPSNBot(commands.Bot):
                 self.message_queue.put_nowait(item)
             except asyncio.QueueFull:
                 pass
+
+    def _preset_channel_foreign(self, preset) -> bool:
+        """True when a preset names a channel that belongs to another guild.
+
+        The dashboard refuses to save such a preset, but a row is only as
+        trustworthy as everything that has ever been able to write it, and
+        the cost of being wrong is alerts posted into a server whose admins
+        cannot see the preset or switch it off. A channel the cache does not
+        hold is let through: the send finds out whether it can be reached.
+        """
+        try:
+            channel = self.get_channel(int(preset['channel_id']))
+            guild = getattr(channel, 'guild', None)
+            if channel is None or guild is None:
+                return False
+            if int(guild.id) == int(preset['guild_id']):
+                return False
+        except (KeyError, TypeError, ValueError):
+            return False
+        key = preset.get('id')
+        if key not in self._foreign_preset_logged:
+            self._foreign_preset_logged.add(key)
+            logger.warning(
+                "preset %s of guild %s names channel %s, which belongs to guild %s; not sending to it",
+                key, preset.get('guild_id'), preset.get('channel_id'), guild.id)
+        return True
 
     async def _send_one_message(self, item):
         """Send a single queued message. Returns 'sent', 'skip', or
@@ -2649,6 +2677,8 @@ class NSWPSNBot(commands.Bot):
                 # dropped connection costs that preset alone.
                 try:
                     channel_id = preset['channel_id']
+                    if self._preset_channel_foreign(preset):
+                        continue
                     guild_mute = await _get_guild_mute(preset['guild_id'])
                     channel_mute = await _get_channel_mute(
                         preset['guild_id'], channel_id)
@@ -2859,6 +2889,8 @@ class NSWPSNBot(commands.Bot):
         for preset in presets:
             guild_id = preset['guild_id']
             channel_id = preset['channel_id']
+            if self._preset_channel_foreign(preset):
+                continue
             if guild_id not in guild_mute_cache:
                 guild_mute_cache[guild_id] = await loop.run_in_executor(
                     None, self.db.get_guild_mute, guild_id
@@ -2949,6 +2981,8 @@ class NSWPSNBot(commands.Bot):
         for preset in presets:
             guild_id = preset['guild_id']
             channel_id = preset['channel_id']
+            if self._preset_channel_foreign(preset):
+                continue
             guild_mute = await _get_guild_mute(guild_id)
             channel_mute = await _get_channel_mute(guild_id, channel_id)
             # 'pager' is the per-type override key /mute and /smute write for

@@ -13,7 +13,7 @@
  * out structurally identical.
  */
 
-import { ALERT_TYPE_DEFS, severityTokens } from './alertCatalog.js';
+import { ALERT_TYPE_DEFS, severityTokens, canonicalAlertType } from './alertCatalog.js';
 import { AU_STATES } from '../lib/stateMask.js';
 
 export class FilterValidationError extends Error {
@@ -223,17 +223,14 @@ export function validateFilters(v: unknown): Record<string, unknown> {
       }
       if (s) out['severity_min'] = s;
     } else if (isPlainObject(sev)) {
-      const unknownSev: string[] = [];
-      for (const k of Object.keys(sev)) {
-        if (!(k in SEVERITY_SCALES)) unknownSev.push(k);
-      }
-      if (unknownSev.length > 0) {
-        throw new FilterValidationError(
-          `severity_min: unknown alert types ${JSON.stringify(unknownSev.sort())}.`,
-        );
-      }
       const normalised: Record<string, string> = {};
-      for (const [at, val] of Object.entries(sev)) {
+      for (const [rawKey, val] of Object.entries(sev)) {
+        // A floor saved for a type since renamed moves to its new name; one
+        // saved for a type that no longer has a scale (or no longer exists)
+        // is dropped. The page sends back every key a preset was stored
+        // with, so refusing here made such a preset impossible to save.
+        const at = canonicalAlertType(rawKey) ?? rawKey;
+        if (!(at in SEVERITY_SCALES)) continue;
         if (val === null || val === '') continue;
         if (typeof val !== 'string') {
           throw new FilterValidationError(`severity_min[${at}] must be a string.`);
@@ -264,17 +261,11 @@ export function validateFilters(v: unknown): Record<string, unknown> {
     if (!isPlainObject(sf)) {
       throw new FilterValidationError('subtype_filters must be an object.');
     }
-    const unknownSf: string[] = [];
-    for (const k of Object.keys(sf)) {
-      if (!SUBTYPE_AWARE_TYPES.has(k)) unknownSf.push(k);
-    }
-    if (unknownSf.length > 0) {
-      throw new FilterValidationError(
-        `subtype_filters: unsupported alert types ${JSON.stringify(unknownSf.sort())}.`,
-      );
-    }
     const normalised: Record<string, string[]> = {};
-    for (const [at, raw] of Object.entries(sf)) {
+    for (const [rawKey, raw] of Object.entries(sf)) {
+      // As with severity_min: renamed types move, the rest are dropped.
+      const at = canonicalAlertType(rawKey) ?? rawKey;
+      if (!SUBTYPE_AWARE_TYPES.has(at)) continue;
       if (raw === null || raw === undefined) continue;
       if (!Array.isArray(raw)) {
         throw new FilterValidationError(`subtype_filters[${at}] must be a list.`);

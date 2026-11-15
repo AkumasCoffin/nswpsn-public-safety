@@ -367,6 +367,130 @@ describe('GET /guilds/:id/channels', () => {
   });
 });
 
+/**
+ * Discord as the bot's token sees guild 111: its channels, its owner, its
+ * roles (role 500 carries Manage Channels, 0x10) and one member's roles.
+ * The bot's own guild list is left unavailable so the DB fallback queued by
+ * each test decides whether the bot is in the guild.
+ */
+function discordGuild(opts: { channels?: string[]; owner?: string; memberRoles?: string[] | null; memberStatus?: number } = {}) {
+  botGetMock.mockImplementation(async (path: string) => {
+    const p = String(path);
+    if (p.startsWith('/users/@me/guilds')) return { status: 502, body: null, retryAfter: null };
+    if (p === '/guilds/111/channels') {
+      return { status: 200, body: (opts.channels ?? []).map((id) => ({ id, name: 'c' + id, type: 0 })), retryAfter: null };
+    }
+    if (p === '/guilds/111') {
+      return {
+        status: 200,
+        body: { owner_id: opts.owner ?? '1', roles: [{ id: '111', permissions: '0' }, { id: '500', permissions: '16' }, { id: '600', permissions: '2048' }] },
+        retryAfter: null,
+      };
+    }
+    if (p.startsWith('/guilds/111/members/')) {
+      if (opts.memberStatus === 404) return { status: 404, body: { code: 10007, message: 'Unknown Member' }, retryAfter: null };
+      if (opts.memberStatus) return { status: opts.memberStatus, body: null, retryAfter: null };
+      return { status: 200, body: { roles: opts.memberRoles ?? ['500'] }, retryAfter: null };
+    }
+    return { status: 404, body: null, retryAfter: null };
+  });
+}
+
+describe('who may write, and where', () => {
+  const post = (cookie: string, channel: string) =>
+    makeApp().request('/api/dashboard/guilds/111/presets', {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json', Origin: PAGE_ORIGIN },
+      body: JSON.stringify({ channel_id: channel, name: 'x', alert_types: ['rfs'] }),
+    });
+
+  it('refuses a preset that names a channel of another server', async () => {
+    const cookie = makeSessionCookie('42');
+    queryQueue.push({ rows: [{ guild_id: '111' }] });
+    discordGuild({ channels: ['999'] });
+    const res = await post(cookie, '12345');
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe('bad_channel');
+    expect(queryCalls.some((q) => /insert into alert_presets/i.test(q.sql))).toBe(false);
+  });
+
+  it('refuses a move to a channel of another server', async () => {
+    const cookie = makeSessionCookie('42');
+    queryQueue.push({ rows: [{ guild_id: '111' }] });
+    discordGuild({ channels: ['999'] });
+    const res = await makeApp().request('/api/dashboard/guilds/111/presets/7', {
+      method: 'PATCH',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json', Origin: PAGE_ORIGIN },
+      body: JSON.stringify({ channel_id: '12345' }),
+    });
+    expect(res.status).toBe(400);
+    expect(queryCalls.some((q) => /update alert_presets/i.test(q.sql))).toBe(false);
+  });
+
+  it('does not save a preset when Discord cannot confirm the channel', async () => {
+    const cookie = makeSessionCookie('42');
+    queryQueue.push({ rows: [{ guild_id: '111' }] });
+    const res = await post(cookie, '999'); // botGet answers nothing
+    expect(res.status).toBe(503);
+    expect(queryCalls.some((q) => /insert into alert_presets/i.test(q.sql))).toBe(false);
+  });
+
+  it('refuses a member whose roles no longer carry Manage Channels, whatever the session says', async () => {
+    const cookie = makeSessionCookie('42'); // the session still says Administrator
+    queryQueue.push({ rows: [{ guild_id: '111' }] });
+    discordGuild({ channels: ['999'], memberRoles: ['600'] });
+    const res = await post(cookie, '999');
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toBe('forbidden');
+  });
+
+  it('refuses someone who has left the server', async () => {
+    const cookie = makeSessionCookie('42');
+    queryQueue.push({ rows: [{ guild_id: '111' }] });
+    discordGuild({ channels: ['999'], memberStatus: 404 });
+    const res = await post(cookie, '999');
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toBe('guild_not_found');
+  });
+
+  it('lets the owner through without a role, and goes by the session when Discord is down', async () => {
+    const row = { id: 7, guild_id: '111', channel_id: '999', name: 'x', alert_types: ['rfs'], role_ids: [], type_overrides: {}, filters: {} };
+    const owner = makeSessionCookie('42');
+    queryQueue.push({ rows: [{ guild_id: '111' }] });
+    queryQueue.push({ rows: [row] });
+    discordGuild({ channels: ['999'], owner: '42', memberRoles: [] });
+    expect((await post(owner, '999')).status).toBe(201);
+
+    _resetDashboardCachesForTests();
+    sessionMod._resetBotGuildIdsCacheForTests();
+    queryQueue = [];
+    const other = makeSessionCookie('43');
+    queryQueue.push({ rows: [{ guild_id: '111' }] });
+    queryQueue.push({ rows: [] });
+    discordGuild({ memberStatus: 500 });
+    const res = await makeApp().request('/api/dashboard/guilds/111/presets', { headers: { Cookie: other } });
+    expect(res.status).toBe(200);
+  });
+
+  it('hands a stored preset back in the current type names, without the retired ones', async () => {
+    const cookie = makeSessionCookie('42');
+    queryQueue.push({ rows: [{ guild_id: '111' }] });
+    queryQueue.push({
+      rows: [{
+        id: 7, guild_id: '111', channel_id: '999', name: 'x', alert_types: ['qld_warning', 'waze_jam', 'rfs', 'qfd_warning'],
+        role_ids: [], type_overrides: { qld_warning: { enabled: false, enabled_ping: true }, pager: { enabled: false } }, filters: {},
+      }],
+    });
+    discordGuild();
+    const res = await makeApp().request('/api/dashboard/guilds/111/presets', { headers: { Cookie: cookie } });
+    type P = { alert_types: string[]; type_overrides: Record<string, unknown> };
+    const body = (await res.json()) as P[] | { presets: P[] };
+    const preset = Array.isArray(body) ? body[0]! : body.presets[0]!;
+    expect(preset.alert_types).toEqual(['qfd_warning', 'rfs']);
+    expect(Object.keys(preset.type_overrides).sort()).toEqual(['pager', 'qfd_warning']);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Presets CRUD.
 // ---------------------------------------------------------------------------
@@ -444,6 +568,7 @@ describe('Preset CRUD', () => {
     // A preset saved before the agency-naming rename must keep working.
     const cookie = makeSessionCookie('42');
     queryQueue.push({ rows: [{ guild_id: '111' }] });
+    discordGuild({ channels: ['999'] });
     queryQueue.push({
       rows: [
         {

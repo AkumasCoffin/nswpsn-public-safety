@@ -27,6 +27,11 @@
     "hundreds of planned jobs that have not started. Planned work is announced",
     "when it starts.",
     "",
+    "subtypeAware is true only where a record has a kind beyond its alert",
+    "level that the bot can match (bot.py _alert_subtype_token). The",
+    "interstate fire agencies carry only their alert level, which is the",
+    "severity floor's job, so they are false.",
+    "",
     "state is the one state every record of a type is in (NSW, VIC, QLD, SA,",
     "WA, TAS, NT or ACT), for a preset's States filter. Leave it off a type",
     "whose records span states (BOM, FIRMS, shark reports, pager, The Wire):",
@@ -114,7 +119,7 @@
       "feedShape": "geo_fire",
       "archiveSource": "vic_emergency", "endpoint": "/api/vic-emergency/events", "itemsPath": "features",
       "discriminator": { "field": "properties.agency", "equals": "CFA" },
-      "color": "#6366f1", "icon": "🔥", "severityScale": "fire", "subtypeAware": true
+      "color": "#6366f1", "icon": "🔥", "severityScale": "fire", "subtypeAware": false
     },
     {
       "key": "deeca", "provider": "vic", "label": "DEECA", "botLabel": "DEECA (Vic)",
@@ -122,7 +127,7 @@
       "feedShape": "geo_fire",
       "archiveSource": "vic_emergency", "endpoint": "/api/vic-emergency/events", "itemsPath": "features",
       "discriminator": { "field": "properties.agency", "equals": "DEECA" },
-      "color": "#84cc16", "icon": "🌲", "severityScale": "fire", "subtypeAware": true
+      "color": "#84cc16", "icon": "🌲", "severityScale": "fire", "subtypeAware": false
     },
     {
       "key": "vicses", "provider": "vic", "label": "VICSES", "botLabel": "VICSES (Vic)",
@@ -130,7 +135,7 @@
       "feedShape": "geo_fire",
       "archiveSource": "vic_emergency", "endpoint": "/api/vic-emergency/events", "itemsPath": "features",
       "discriminator": { "field": "properties.agency", "equals": "SES" },
-      "color": "#f59e0b", "icon": "🌊", "severityScale": "fire", "subtypeAware": true
+      "color": "#f59e0b", "icon": "🌊", "severityScale": "fire", "subtypeAware": false
     },
     {
       "key": "emv", "provider": "vic", "label": "EMV", "botLabel": "EMV (Vic)",
@@ -138,7 +143,7 @@
       "feedShape": "geo_fire",
       "archiveSource": "vic_emergency", "endpoint": "/api/vic-emergency/events", "itemsPath": "features",
       "discriminator": { "field": "properties.agency", "equals": "EMV" },
-      "color": "#818cf8", "icon": "🛡️", "severityScale": "fire", "subtypeAware": true
+      "color": "#818cf8", "icon": "🛡️", "severityScale": "fire", "subtypeAware": false
     },
     {
       "key": "esta", "provider": "vic", "label": "Triple Zero Vic", "botLabel": "Triple Zero Vic (dispatch)",
@@ -146,7 +151,7 @@
       "feedShape": "geo_fire",
       "archiveSource": "vic_emergency", "endpoint": "/api/vic-emergency/events", "itemsPath": "features",
       "discriminator": { "field": "properties.agency", "equals": "ESTA" },
-      "color": "#a78bfa", "icon": "☎️", "severityScale": "fire", "subtypeAware": true
+      "color": "#a78bfa", "icon": "☎️", "severityScale": "fire", "subtypeAware": false
     },
 
     {
@@ -154,7 +159,7 @@
       "agency": "QFD", "agencyLabel": "QLD Fire Dept", "state": "QLD",
       "feedShape": "geo_fire",
       "archiveSource": "qld_fire", "endpoint": "/api/qld-fire/incidents", "itemsPath": "features",
-      "color": "#dc2626", "icon": "🔥", "severityScale": "fire", "subtypeAware": true
+      "color": "#dc2626", "icon": "🔥", "severityScale": "fire", "subtypeAware": false
     },
     {
       "key": "qfd_warning", "provider": "qfd", "label": "Warnings", "botLabel": "QFD Warnings",
@@ -162,7 +167,7 @@
       "feedShape": "geo_fire_warning",
       "archiveSource": "qld_warning", "endpoint": "/api/qld-fire/warnings", "itemsPath": "features",
       "aliases": ["qld_warning"],
-      "color": "#dc2626", "icon": "⚠️", "severityScale": "fire", "subtypeAware": true
+      "color": "#dc2626", "icon": "⚠️", "severityScale": "fire", "subtypeAware": false
     },
 
     {
@@ -170,7 +175,7 @@
       "agency": "DFES", "agencyLabel": "DFES (WA)", "state": "WA",
       "feedShape": "geo_fire",
       "archiveSource": "wa_incident", "endpoint": "/api/wa-emergency/incidents", "itemsPath": "features",
-      "color": "#e11d48", "icon": "🔥", "severityScale": "fire", "subtypeAware": true
+      "color": "#e11d48", "icon": "🔥", "severityScale": "fire", "subtypeAware": false
     },
     {
       "key": "dfes_warning", "provider": "dfes", "label": "Warnings", "botLabel": "DFES Warnings",
@@ -178,7 +183,7 @@
       "feedShape": "geo_fire_warning",
       "archiveSource": "wa_warning", "endpoint": "/api/wa-emergency/warnings", "itemsPath": "features",
       "aliases": ["wa_warning"],
-      "color": "#e11d48", "icon": "⚠️", "severityScale": "fire", "subtypeAware": true
+      "color": "#e11d48", "icon": "⚠️", "severityScale": "fire", "subtypeAware": false
     },
 
     {
@@ -186,14 +191,14 @@
       "agency": "SACFS", "agencyLabel": "SA CFS", "state": "SA",
       "feedShape": "geo_fire",
       "archiveSource": "sa_cfs", "endpoint": "/api/sa-fire/cfs", "itemsPath": "features",
-      "color": "#ea580c", "icon": "🔥", "severityScale": "fire", "subtypeAware": true
+      "color": "#ea580c", "icon": "🔥", "severityScale": "fire", "subtypeAware": false
     },
     {
       "key": "sa_mfs", "provider": "safire", "label": "MFS", "botLabel": "SA MFS",
       "agency": "SAMFS", "agencyLabel": "SA MFS", "state": "SA",
       "feedShape": "geo_fire",
       "archiveSource": "sa_mfs", "endpoint": "/api/sa-fire/mfs", "itemsPath": "features",
-      "color": "#0ea5e9", "icon": "🚒", "severityScale": "fire", "subtypeAware": true
+      "color": "#0ea5e9", "icon": "🚒", "severityScale": "fire", "subtypeAware": false
     },
 
     {
@@ -202,7 +207,7 @@
       "feedShape": "geo_fire",
       "archiveSource": "nt_fire", "endpoint": "/api/nt-fire/incidents", "itemsPath": "features",
       "discriminator": { "field": "properties.responsibleAgency", "notEquals": "BUSHFIRES NT", "caseInsensitive": true },
-      "color": "#f97316", "icon": "🔥", "severityScale": "fire", "subtypeAware": true
+      "color": "#f97316", "icon": "🔥", "severityScale": "fire", "subtypeAware": false
     },
     {
       "key": "nt_bushfires", "provider": "ntfrs", "label": "Bushfires NT", "botLabel": "Bushfires NT",
@@ -210,7 +215,7 @@
       "feedShape": "geo_fire",
       "archiveSource": "nt_fire", "endpoint": "/api/nt-fire/incidents", "itemsPath": "features",
       "discriminator": { "field": "properties.responsibleAgency", "equals": "BUSHFIRES NT", "caseInsensitive": true },
-      "color": "#fb923c", "icon": "🔥", "severityScale": "fire", "subtypeAware": true
+      "color": "#fb923c", "icon": "🔥", "severityScale": "fire", "subtypeAware": false
     },
 
     {

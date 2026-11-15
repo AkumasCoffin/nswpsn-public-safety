@@ -86,10 +86,10 @@ describe('validateFilters: severity_min', () => {
     ).toEqual({ severity_min: { rfs: 'watch_and_act', bom_land: 'minor' } });
   });
 
-  it('rejects unknown alert_type in dict form', () => {
-    expect(() =>
-      validateFilters({ severity_min: { not_a_type: 'minor' } }),
-    ).toThrow(/unknown alert types/);
+  it('drops a floor for a type that no longer exists, and moves one saved under an old name', () => {
+    expect(validateFilters({ severity_min: { waze_hazard: 'minor', rfs: 'advice' } })).toEqual({ severity_min: { rfs: 'advice' } });
+    expect(validateFilters({ severity_min: { not_a_type: 'minor' } })).toEqual({});
+    expect(validateFilters({ severity_min: { qld_warning: 'advice' } })).toEqual({ severity_min: { qfd_warning: 'advice' } });
   });
 
   it('rejects out-of-scale severity in dict form', () => {
@@ -110,10 +110,13 @@ describe('validateFilters: severity_min', () => {
 });
 
 describe('validateFilters: subtype_filters', () => {
-  it('only accepts subtype-aware alert_types', () => {
-    expect(() =>
-      validateFilters({ subtype_filters: { ausgrid: ['x'] } }),
-    ).toThrow(/unsupported alert types/);
+  it('keeps only subtype-aware alert_types, dropping the rest without refusing the save', () => {
+    expect(validateFilters({ subtype_filters: { ausgrid: ['x'] } })).toEqual({});
+    // Stored on live presets: a Waze type the catalog no longer has.
+    expect(validateFilters({ subtype_filters: { waze_hazard: ['HAZARD_ON_ROAD'], traffic_incident: ['CRASH'] } }))
+      .toEqual({ subtype_filters: { traffic_incident: ['CRASH'] } });
+    // The fire agencies' only "subtype" was their alert level, which the bot never matched on.
+    expect(validateFilters({ subtype_filters: { cfa: ['Advice'] } })).toEqual({});
   });
 
   it('dedupes while preserving insertion order', () => {
