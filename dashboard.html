@@ -483,8 +483,8 @@
     }
     /* Sources two or three across; an opened one takes the full width. */
     .provider-rows {
-      display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
-      gap: 0.45rem; align-items: start;
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 0.4rem; align-items: start;
     }
     .provider-rows .provider-divider { grid-column: 1 / -1; margin: 0.25rem 0; }
     .provider-rows .provider-section.expanded { grid-column: 1 / -1; }
@@ -498,7 +498,7 @@
     .provider-section.expanded { border-color: rgba(249,115,22,0.35); }
     .provider-header {
       display: flex; align-items: center; gap: 0.6rem;
-      padding: 0.55rem 0.8rem;
+      padding: 0.4rem 0.75rem;
       cursor: pointer;
       user-select: none;
       font-size: var(--fs-3);
@@ -938,7 +938,8 @@
     /* The editor in two columns: what is switched (types, overrides,
        filters) on the left; what the preset is (name, activity, roles,
        mute) in a rail on the right that stays in view. */
-    .editor { max-width: 1320px; }
+    /* No cap: a wide screen gets a third column of sources, not an empty margin. */
+    .editor { max-width: none; }
     .ed-cols { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 1.6rem; align-items: start; }
     .ed-main, .ed-rail { min-width: 0; }
     .ed-main > .section-label:first-child { margin-top: 0; }
