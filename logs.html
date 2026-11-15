@@ -26,7 +26,7 @@
   <meta name="twitter:image" content="https://nswpsn.forcequit.xyz/assets/AusAware_filled_background.jpg">
 
   <link rel="stylesheet" href="styles.css?v=20251230b" />
-  <link rel="stylesheet" href="logs.css?v=1" />
+  <link rel="stylesheet" href="logs.css?v=2" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -1075,10 +1075,6 @@
       'pager': { icon: 'comment-dots', color: '#8b5cf6' },
       'user_incident': { icon: 'user-plus', color: '#a855f7' },
       'radio_summary': { icon: 'microphone-lines', color: '#10b981' },
-      // Waze, retired with its ingest but harmless to keep.
-      'waze_hazard': { icon: 'triangle-exclamation', color: '#eab308' },
-      'waze_jam': { icon: 'car', color: '#ef4444' },
-      'waze_police': { icon: 'shield-halved', color: '#3b82f6' },
     };
 
     function onProviderChange(skipAutoSelect = false) {
@@ -1477,35 +1473,6 @@
         
         // Category icon and grouping mappings
         const categoryIcons = {
-          // Waze Hazards - grouped
-          'JAM_HEAVY_TRAFFIC': { icon: 'car', color: '#ef4444', group: 'Traffic Jams' },
-          'JAM_STAND_STILL_TRAFFIC': { icon: 'car', color: '#dc2626', group: 'Traffic Jams' },
-          'JAM_MODERATE_TRAFFIC': { icon: 'car', color: '#f97316', group: 'Traffic Jams' },
-          'JAM_LIGHT_TRAFFIC': { icon: 'car', color: '#eab308', group: 'Traffic Jams' },
-          'ACCIDENT_MAJOR': { icon: 'car-burst', color: '#ef4444', group: 'Accidents' },
-          'ACCIDENT_MINOR': { icon: 'car-burst', color: '#f97316', group: 'Accidents' },
-          'HAZARD_ON_ROAD_POT_HOLE': { icon: 'road-circle-exclamation', color: '#f97316', group: 'Road Hazards' },
-          'HAZARD_ON_ROAD_OBJECT': { icon: 'triangle-exclamation', color: '#eab308', group: 'Road Hazards' },
-          'HAZARD_ON_ROAD': { icon: 'road-circle-exclamation', color: '#f97316', group: 'Road Hazards' },
-          'HAZARD_ON_ROAD_ROAD_KILL': { icon: 'paw', color: '#a3a3a3', group: 'Road Hazards' },
-          'HAZARD_ON_ROAD_TRAFFIC_LIGHT_FAULT': { icon: 'traffic-light', color: '#ef4444', group: 'Road Hazards' },
-          'HAZARD_ON_ROAD_CAR_STOPPED': { icon: 'car', color: '#f97316', group: 'Road Hazards' },
-          'HAZARD_ON_ROAD_ICE': { icon: 'snowflake', color: '#60a5fa', group: 'Weather' },
-          'HAZARD_ON_SHOULDER_CAR_STOPPED': { icon: 'car', color: '#eab308', group: 'Shoulder Hazards' },
-          'HAZARD_ON_SHOULDER_ANIMALS': { icon: 'paw', color: '#a3a3a3', group: 'Shoulder Hazards' },
-          'HAZARD_ON_SHOULDER_MISSING_SIGN': { icon: 'sign-hanging', color: '#f97316', group: 'Shoulder Hazards' },
-          'HAZARD_WEATHER': { icon: 'cloud', color: '#60a5fa', group: 'Weather' },
-          'HAZARD_WEATHER_FOG': { icon: 'smog', color: '#9ca3af', group: 'Weather' },
-          'HAZARD_WEATHER_FLOOD': { icon: 'water', color: '#3b82f6', group: 'Weather' },
-          'HAZARD_WEATHER_HEAVY_SNOW': { icon: 'snowflake', color: '#dbeafe', group: 'Weather' },
-          'HAZARD_WEATHER_HAIL': { icon: 'cloud-meatball', color: '#93c5fd', group: 'Weather' },
-          // Waze Police
-          'POLICE_VISIBLE': { icon: 'shield-halved', color: '#3b82f6', group: 'Police' },
-          'POLICE_HIDING': { icon: 'user-secret', color: '#6366f1', group: 'Police' },
-          'POLICE_WITH_MOBILE_CAMERA': { icon: 'camera', color: '#8b5cf6', group: 'Police' },
-          // Waze Roadwork
-          'ROAD_CLOSED_CONSTRUCTION': { icon: 'person-digging', color: '#f97316', group: 'Roadwork' },
-          'HAZARD_ON_ROAD_CONSTRUCTION': { icon: 'person-digging', color: '#f97316', group: 'Roadwork' },
           // RFS - Fire Types
           'Bush Fire': { icon: 'fire', color: '#ef4444', group: 'Fire Type' },
           'Grass Fire': { icon: 'fire', color: '#f97316', group: 'Fire Type' },
@@ -1641,38 +1608,7 @@
           'land': { icon: 'mountain-sun', color: '#22c55e', group: 'Category' },
           'marine': { icon: 'water', color: '#0ea5e9', group: 'Category' },
           // Pager cap codes - no icons per user request
-          // Waze Police subtypes (spelled out)
-          'Police Visible': { icon: 'shield-halved', color: '#3b82f6', group: 'Police' },
-          'Police Hiding': { icon: 'user-secret', color: '#6366f1', group: 'Police' },
-          'Police With Mobile Camera': { icon: 'camera', color: '#8b5cf6', group: 'Police' },
-          // Waze Roadwork subtypes
-          'Hazard On Road Construction': { icon: 'person-digging', color: '#f97316', group: 'Roadwork' },
-          'Road Closed Construction': { icon: 'road-barrier', color: '#ef4444', group: 'Roadwork' },
-          // Waze hazards - human readable versions
-          'Jam Heavy Traffic': { icon: 'car', color: '#ef4444', group: 'Traffic Jams' },
-          'Jam Stand Still Traffic': { icon: 'car', color: '#dc2626', group: 'Traffic Jams' },
-          'Jam Moderate Traffic': { icon: 'car', color: '#f97316', group: 'Traffic Jams' },
-          'Jam Light Traffic': { icon: 'car', color: '#eab308', group: 'Traffic Jams' },
-          'Accident Major': { icon: 'car-burst', color: '#ef4444', group: 'Accidents' },
-          'Accident Minor': { icon: 'car-burst', color: '#f97316', group: 'Accidents' },
-          'Hazard On Road Pot Hole': { icon: 'road-circle-exclamation', color: '#f97316', group: 'Road Hazards' },
-          'Hazard On Road Object': { icon: 'triangle-exclamation', color: '#eab308', group: 'Road Hazards' },
-          'Hazard On Road': { icon: 'road-circle-exclamation', color: '#f97316', group: 'Road Hazards' },
-          'Hazard On Road Road Kill': { icon: 'paw', color: '#a3a3a3', group: 'Road Hazards' },
-          'Hazard On Road Traffic Light Fault': { icon: 'traffic-light', color: '#ef4444', group: 'Road Hazards' },
-          'Hazard On Road Car Stopped': { icon: 'car', color: '#f97316', group: 'Road Hazards' },
-          'Hazard On Road Ice': { icon: 'snowflake', color: '#60a5fa', group: 'Weather' },
-          'Hazard On Shoulder Car Stopped': { icon: 'car', color: '#eab308', group: 'Shoulder Hazards' },
-          'Hazard On Shoulder Animals': { icon: 'paw', color: '#a3a3a3', group: 'Shoulder Hazards' },
-          'Hazard On Shoulder Missing Sign': { icon: 'sign-hanging', color: '#f97316', group: 'Shoulder Hazards' },
-          'Hazard Weather': { icon: 'cloud', color: '#60a5fa', group: 'Weather' },
-          'Hazard Weather Fog': { icon: 'smog', color: '#9ca3af', group: 'Weather' },
-          'Hazard Weather Flood': { icon: 'water', color: '#3b82f6', group: 'Weather' },
-          'Hazard Weather Heavy Snow': { icon: 'snowflake', color: '#dbeafe', group: 'Weather' },
-          'Hazard Weather Hail': { icon: 'cloud-meatball', color: '#93c5fd', group: 'Weather' },
-          'Road Closed Event': { icon: 'road-barrier', color: '#8b5cf6', group: 'Other' },
-          'Hazard On Road Lane Closed': { icon: 'road-barrier', color: '#f97316', group: 'Other' },
-          // Waze Jams - severity levels (subcategory on waze_jam rows)
+          // Congestion severity levels
           'Free Flow': { icon: 'car-side', color: '#22c55e', group: 'Jam Severity' },
           'Light Traffic': { icon: 'car-side', color: '#eab308', group: 'Jam Severity' },
           'Moderate Traffic': { icon: 'car-side', color: '#f97316', group: 'Jam Severity' },
@@ -1703,74 +1639,24 @@
         // Check if this is pager (no icons for cap codes)
         const isPager = sourceToQuery && sourceToQuery.includes('pager');
         
-        // For Waze hazards, group subcategories
-        const isWazeHazard = sourceToQuery && sourceToQuery.includes('waze_hazard');
-        
-        if (isWazeHazard && categoryOptions.length > 5) {
-          // Group by category prefix for better organization
-          const groups = {
-            'Traffic Jams': [],
-            'Accidents': [],
-            'Road Hazards': [],
-            'Shoulder Hazards': [],
-            'Weather': [],
-            'Other': []
-          };
-          
-          categoryOptions.forEach(s => {
-            const info = categoryIcons[s.value];
-            const groupName = info?.group || 'Other';
-            if (groups[groupName]) {
-              groups[groupName].push(s);
-            } else {
-              groups['Other'].push(s);
-            }
-          });
-          
-          // Add grouped options with headers
-          Object.entries(groups).forEach(([groupName, items]) => {
-            if (items.length === 0) return;
-            
-            // Add group header
-            const header = document.createElement('div');
-            header.className = 'custom-dropdown-group-header';
-            header.textContent = groupName;
-            subcategoryOptionsContainer.appendChild(header);
-            
-            // Add items in group
-            items.forEach(s => {
-              const displayName = formatSubcategory(s.value);
-              const info = typeChip(s.value, s.value);
-              const opt = document.createElement('div');
-              opt.className = 'custom-dropdown-option';
-              opt.dataset.value = s.value;
-              opt.dataset.icon = info.icon;
-              opt.dataset.color = info.color;
-              opt.innerHTML = `<i class="fa-solid fa-${info.icon}" style="color: ${info.color};"></i><span>${escapeHtml(displayName)}</span><span class="option-count">${s.count.toLocaleString()}</span>`;
-              opt.onclick = () => selectSubcategory(s.value, displayName, info.icon, info.color);
-              subcategoryOptionsContainer.appendChild(opt);
-            });
-          });
-        } else {
-          // Default: populate without grouping
-          categoryOptions.forEach(s => {
-            const displayName = formatSubcategory(s.value);
-            const info = isPager ? { icon: 'tags', color: '#64748b' } : typeChip(s.value, displayName);
-            const opt = document.createElement('div');
-            opt.className = 'custom-dropdown-option';
-            opt.dataset.value = s.value;
-            opt.dataset.icon = info.icon;
-            opt.dataset.color = info.color;
-            if (isPager) {
-              // No icons for pager cap codes
-              opt.innerHTML = `<span>${escapeHtml(displayName)}</span><span class="option-count">${s.count.toLocaleString()}</span>`;
-            } else {
-              opt.innerHTML = `<i class="fa-solid fa-${info.icon}" style="color: ${info.color};"></i><span>${escapeHtml(displayName)}</span><span class="option-count">${s.count.toLocaleString()}</span>`;
-            }
-            opt.onclick = () => selectSubcategory(s.value, displayName, isPager ? 'tags' : info.icon, isPager ? '#64748b' : info.color);
-            subcategoryOptionsContainer.appendChild(opt);
-          });
-        }
+        // Populate the category options
+        categoryOptions.forEach(s => {
+          const displayName = formatSubcategory(s.value);
+          const info = isPager ? { icon: 'tags', color: '#64748b' } : typeChip(s.value, displayName);
+          const opt = document.createElement('div');
+          opt.className = 'custom-dropdown-option';
+          opt.dataset.value = s.value;
+          opt.dataset.icon = info.icon;
+          opt.dataset.color = info.color;
+          if (isPager) {
+            // No icons for pager cap codes
+            opt.innerHTML = `<span>${escapeHtml(displayName)}</span><span class="option-count">${s.count.toLocaleString()}</span>`;
+          } else {
+            opt.innerHTML = `<i class="fa-solid fa-${info.icon}" style="color: ${info.color};"></i><span>${escapeHtml(displayName)}</span><span class="option-count">${s.count.toLocaleString()}</span>`;
+          }
+          opt.onclick = () => selectSubcategory(s.value, displayName, isPager ? 'tags' : info.icon, isPager ? '#64748b' : info.color);
+          subcategoryOptionsContainer.appendChild(opt);
+        });
         
         // Alert level icon mappings
         const alertLevelIcons = {
@@ -1849,7 +1735,7 @@
       params.set('unique', '1');
       const { reverseDisplay, usedCursor } = applyPaginationParams(params, page);
       // full=1 pulls the JSONB `data` column so list rows can render per-source
-      // detail badges (pager message, waze street/city, endeavour suburb, etc.)
+      // detail badges (pager message, endeavour suburb, etc.)
       params.set('full', '1');
       
       // Get filter values - source can come from type dropdown or be derived from provider
@@ -2086,9 +1972,9 @@
         const sourceName = formatSourceName(item.source);
         // Title fallback chain. The backend's formatted `title` only
         // gets populated for sources whose archiveItems extractor sets
-        // data.title (currently just pager). For waze_* / traffic_* /
-        // rfs we have to dig a bit further into the JSONB blob:
-        //   data.street            — waze (street/road name)
+        // data.title (currently just pager). For traffic_* / rfs we
+        // have to dig a bit further into the JSONB blob:
+        //   data.street            — street/road name, where a source has one
         //   data.alias             — pager (already promoted, defensive)
         //   data.locationDescriptor — RFS / traffic incidents
         //   data.title             — defensive (in case backend missed)
@@ -2103,8 +1989,7 @@
           || sourceName
           || 'Unknown';
         
-        // For waze_police with no subcategory, show "Police Visible"
-        let subcat = item.subcategory ? formatSubcategory(item.subcategory) : (item.source === 'waze_police' ? 'Police Visible' : '');
+        let subcat = item.subcategory ? formatSubcategory(item.subcategory) : '';
         // Don't show subcat if it matches title (avoid duplicate info)
         if (subcat && title.toLowerCase().includes(subcat.toLowerCase())) subcat = '';
         // ...nor when it only repeats the source's own name. The roadwork
@@ -2350,95 +2235,6 @@
           if (data.orgName) details.push(`<span class="lg-tint" style="--c:#a3e635"><i class="fas fa-building-columns"></i> ${escapeHtml(data.orgName)}</span>`);
           if (data.otherAdvice) details.push(`<span class="lg-dim lg-wrap"><i class="fas fa-info-circle"></i> ${escapeHtml(String(data.otherAdvice).slice(0, 140))}</span>`);
           if (details.length) extraDetails = details.join(' · ');
-        } else if (item.source === 'waze_hazard') {
-          const street = data.street || '';
-          const city = data.city || '';
-          const thumbsUp = data.nThumbsUp || 0;
-          // Determine badge color and icon based on subcategory
-          const sub = (item.subcategory || '').toUpperCase();
-          let badgeColor = '#eab308';
-          let badgeIcon = '';
-          if (sub.startsWith('JAM')) {
-            badgeColor = sub.includes('STAND_STILL') ? '#dc2626' : (sub.includes('HEAVY') ? '#ef4444' : '#f97316');
-            badgeIcon = '<i class="fas fa-car"></i>';
-          } else if (sub.startsWith('ACCIDENT')) {
-            badgeColor = sub.includes('MAJOR') ? '#ef4444' : '#f97316';
-            badgeIcon = '<i class="fas fa-car-crash"></i>';
-          } else if (sub.includes('WEATHER') || sub.includes('FOG') || sub.includes('ICE') || sub.includes('SNOW') || sub.includes('FLOOD') || sub.includes('HAIL')) {
-            badgeColor = '#3b82f6';
-            if (sub.includes('FOG')) badgeIcon = '<i class="fas fa-smog"></i>';
-            else if (sub.includes('ICE') || sub.includes('SNOW')) badgeIcon = '<i class="fas fa-snowflake"></i>';
-            else if (sub.includes('FLOOD')) badgeIcon = '<i class="fas fa-water"></i>';
-            else badgeIcon = '<i class="fas fa-cloud"></i>';
-          } else if (sub.includes('TRAFFIC_LIGHT')) {
-            badgeColor = '#ef4444';
-            badgeIcon = '<i class="fas fa-traffic-light"></i>';
-          } else if (sub.includes('ROAD_KILL') || sub.includes('ANIMALS')) {
-            badgeColor = '#a3a3a3';
-            badgeIcon = '<i class="fas fa-paw"></i>';
-          } else if (sub.includes('POT_HOLE')) {
-            badgeColor = '#f97316';
-            badgeIcon = '<i class="fas fa-circle-exclamation"></i>';
-          }
-          if (item.category) extraInfo += `<span class="lg-badge" style="--badge:${badgeColor}">${badgeIcon}${escapeHtml(item.category)}</span>`;
-          let details = [];
-          if (street) details.push(`<span class="lg-tint" style="--c:#fde047"><i class="fas fa-road"></i> ${escapeHtml(street)}</span>`);
-          if (city) details.push(`<span class="lg-dim"><i class="fas fa-city"></i> ${escapeHtml(city)}</span>`);
-          if (thumbsUp > 0) details.push(`<span class="lg-tint" style="--c:#22c55e"><i class="fas fa-thumbs-up"></i> ${thumbsUp}</span>`);
-          if (details.length) extraDetails = details.join(' · ');
-        } else if (item.source === 'waze_police') {
-          const street = data.street || '';
-          const city = data.city || '';
-          const thumbsUp = data.nThumbsUp || 0;
-          // Determine badge icon based on subcategory
-          const sub = (item.subcategory || '').toUpperCase();
-          let badgeIcon = '<i class="fas fa-shield-halved"></i>';
-          let badgeColor = '#3b82f6';
-          if (sub.includes('HIDING')) {
-            badgeIcon = '<i class="fas fa-user-secret"></i>';
-            badgeColor = '#6366f1';
-          } else if (sub.includes('CAMERA')) {
-            badgeIcon = '<i class="fas fa-camera"></i>';
-            badgeColor = '#8b5cf6';
-          }
-          if (item.category) extraInfo += `<span class="lg-badge" style="--badge:${badgeColor}">${badgeIcon}${escapeHtml(item.category)}</span>`;
-          let details = [];
-          if (street) details.push(`<span class="lg-tint" style="--c:#93c5fd"><i class="fas fa-road"></i> ${escapeHtml(street)}</span>`);
-          if (city) details.push(`<span class="lg-dim"><i class="fas fa-city"></i> ${escapeHtml(city)}</span>`);
-          if (thumbsUp > 0) details.push(`<span class="lg-tint" style="--c:#22c55e"><i class="fas fa-thumbs-up"></i> ${thumbsUp}</span>`);
-          if (details.length) extraDetails = details.join(' · ');
-        } else if (item.source === 'waze_roadwork') {
-          const street = data.street || '';
-          const city = data.city || '';
-          const thumbsUp = data.nThumbsUp || 0;
-          const delay = data.delay || 0;
-          if (item.category) extraInfo += `<span class="lg-badge" style="--badge:#f97316">${escapeHtml(item.category)}</span>`;
-          let details = [];
-          if (street) details.push(`<span class="lg-tint" style="--c:#fdba74"><i class="fas fa-road"></i> ${escapeHtml(street)}</span>`);
-          if (city) details.push(`<span class="lg-dim"><i class="fas fa-city"></i> ${escapeHtml(city)}</span>`);
-          if (delay > 0) details.push(`<span class="lg-tint" style="--c:#f87171"><i class="fas fa-clock"></i> ${Math.round(delay / 60)}min delay</span>`);
-          if (thumbsUp > 0) details.push(`<span class="lg-tint" style="--c:#22c55e"><i class="fas fa-thumbs-up"></i> ${thumbsUp}</span>`);
-          if (details.length) extraDetails = details.join(' · ');
-        } else if (item.source === 'waze_jam') {
-          const street = data.street || '';
-          const city = data.city || '';
-          const delayMins = data.delayMins || (data.delay ? Math.round(data.delay / 60) : 0);
-          const lengthKm = data.lengthKm || (data.length ? +(data.length / 1000).toFixed(2) : 0);
-          const severity = data.severity || item.subcategory || '';
-          const sev = severity.toLowerCase();
-          let badgeColor = '#dc2626';
-          if (sev.includes('blocked')) badgeColor = '#991b1b';
-          else if (sev.includes('standstill')) badgeColor = '#dc2626';
-          else if (sev.includes('heavy')) badgeColor = '#ef4444';
-          else if (sev.includes('moderate')) badgeColor = '#f97316';
-          else if (sev.includes('light')) badgeColor = '#eab308';
-          if (severity) extraInfo += `<span class="lg-badge" style="--badge:${badgeColor}"><i class="fas fa-car-side"></i>${escapeHtml(severity)}</span>`;
-          let details = [];
-          if (street) details.push(`<span class="lg-tint" style="--c:#fca5a5"><i class="fas fa-road"></i> ${escapeHtml(street)}</span>`);
-          if (city) details.push(`<span class="lg-dim"><i class="fas fa-city"></i> ${escapeHtml(city)}</span>`);
-          if (lengthKm > 0) details.push(`<span class="lg-tint" style="--c:#fecaca"><i class="fas fa-ruler-horizontal"></i> ${lengthKm} km</span>`);
-          if (delayMins > 0) details.push(`<span class="lg-tint" style="--c:#f87171"><i class="fas fa-clock"></i> ${delayMins}min delay</span>`);
-          if (details.length) extraDetails = details.join(' · ');
         } else if (MERGED_OUTAGE_SOURCES.has(item.source)) {
           // The other states' distributors, all stored in the merged feed's shape.
           const customers = Number(data.customers_affected) || 0;
@@ -2624,11 +2420,7 @@
       
       marker = L.marker([item.latitude, item.longitude]).addTo(map);
       // Show category/subcategory in tooltip, not just title
-      let popupText = item.title || item.category || item.subcategory || 'Incident';
-      // For waze_police, show subcategory as the label or "Police Visible"
-      if (item.source === 'waze_police') {
-        popupText = item.subcategory ? formatSubcategory(item.subcategory) : 'Police Visible';
-      }
+      const popupText = item.title || item.category || item.subcategory || 'Incident';
       marker.bindPopup(`<strong>${escapeHtml(popupText)}</strong>`).openPopup();
       
       map.setView([item.latitude, item.longitude], 14);
@@ -2923,7 +2715,6 @@
             let sourceColor = '#64748b';
             if (item.source === 'user_incident') sourceColor = '#a855f7';
             else if (item.source.includes('traffic')) sourceColor = '#f97316';
-            else if (item.source.includes('waze')) sourceColor = '#06b6d4';
             else if (item.source.includes('endeavour') || item.source.includes('ausgrid') || MERGED_OUTAGE_SOURCES.has(item.source)) sourceColor = '#eab308';
             else if (item.source.includes('essential')) sourceColor = '#06b6d4';
             else if (item.source.includes('bom')) sourceColor = '#3b82f6';
@@ -2968,7 +2759,7 @@
       if (!linkedSection) return;
       
       // Only RFS and Pager have linking (finding related incidents nearby)
-      // Waze, Traffic, etc. don't need linking
+      // Traffic, etc. don't need linking
       const linkableSources = ['rfs', 'pager', 'traffic_fire', 'user_incident'];
       if (!linkableSources.includes(item.source)) {
         linkedSection.innerHTML = '';
@@ -3516,10 +3307,6 @@
         'traffic_flood': 'Floods',
         'traffic_fire': 'Traffic Fire',
         'traffic_majorevent': 'Major Events',
-        'waze_hazard': 'Waze Hazards',
-        'waze_police': 'Waze Police',
-        'waze_roadwork': 'Waze Roadwork',
-        'waze_jam': 'Waze Jams',
         'pager': 'Pager',
         'user_incident': 'User Incident',
         'endeavour_current': 'Endeavour',
@@ -3550,7 +3337,7 @@
     
     function formatSubcategory(subcategory) {
       if (!subcategory) return '';
-      // Convert HAZARD_ON_ROAD_CONSTRUCTION → Hazard On Road Construction
+      // Convert SCHEDULED_ROADWORK → Scheduled Roadwork
       // Also split the aggregate feed's camelCase keys
       // (buildingConstruction -> Building Construction); without this
       // logs rendered 'Buildingconstruction' while map.html was right.
@@ -3605,10 +3392,6 @@
         'traffic_flood': { primary: '#3b82f6', secondary: '#60a5fa' },
         'traffic_fire': { primary: '#ef4444', secondary: '#f87171' },
         'traffic_majorevent': { primary: '#8b5cf6', secondary: '#a78bfa' },
-        'waze_hazard': { primary: '#eab308', secondary: '#facc15' },
-        'waze_police': { primary: '#3b82f6', secondary: '#60a5fa' },
-        'waze_roadwork': { primary: '#f97316', secondary: '#fb923c' },
-        'waze_jam': { primary: '#dc2626', secondary: '#f87171' },
         'endeavour_current': { primary: '#ca8a04', secondary: '#facc15' },
         'endeavour_planned': { primary: '#ca8a04', secondary: '#facc15' },
         'essential_current': { primary: '#0891b2', secondary: '#06b6d4' },
@@ -3781,25 +3564,7 @@
         let typeValue = item.subcategory ? formatSubcategory(item.subcategory) : '';
         
         // Source-specific overrides
-        // For Waze sources, category is redundant (just "HAZARD", "POLICE", "ROADWORK")
-        // Only show the subtype which has useful info
-        if (source === 'waze_police') {
-          catValue = ''; // Skip redundant "POLICE" category
-          typeLabel = 'Type';
-          typeValue = typeValue || 'Police Visible';
-        } else if (source === 'waze_roadwork') {
-          catValue = ''; // Skip redundant "ROADWORK" category
-          typeLabel = 'Type';
-          typeValue = item.subcategory ? formatSubcategory(item.subcategory) : 'Construction';
-        } else if (source === 'waze_hazard') {
-          catValue = ''; // Skip redundant "HAZARD" category
-          typeLabel = 'Hazard Type';
-          typeValue = item.subcategory ? formatSubcategory(item.subcategory) : '';
-        } else if (source === 'waze_jam') {
-          catValue = ''; // category is "JAM", subcategory holds severity like "Heavy Traffic"
-          typeLabel = 'Severity';
-          typeValue = item.subcategory || '';
-        } else if (source.includes('endeavour')) {
+        if (source.includes('endeavour')) {
           catLabel = 'Outage Type';
           typeLabel = 'Status';
           typeValue = item.status || item.subcategory || '';
@@ -3854,20 +3619,14 @@
         }
       }
       
-      // Title (or Alias for pager, skip if it matches subtype for Waze)
+      // Title (or Alias for pager)
       if (item.title) {
         const titleLabel = source === 'pager' ? 'Alias' : 'Title';
         const titleIcon = source === 'pager' ? 'fa-user-tag' : 'fa-tag';
-        // Skip title for Waze if it matches the subtype (redundant), but show if different (like "Construction vehicle on scene")
-        const isWazeSource = source.startsWith('waze_');
-        const subtype = item.subcategory ? formatSubcategory(item.subcategory) : '';
-        const titleMatchesSubtype = isWazeSource && item.title.toLowerCase() === subtype.toLowerCase();
-        if (!titleMatchesSubtype) {
-          html += `<div class="lg-mb8">
-            <div class="lg-kv-k" style="--c:#f59e0b"><i class="fas ${titleIcon}" style="margin-right:4px;"></i>${titleLabel}</div>
-            <div class="lg-t11">${escapeHtml(item.title)}</div>
-          </div>`;
-        }
+        html += `<div class="lg-mb8">
+          <div class="lg-kv-k" style="--c:#f59e0b"><i class="fas ${titleIcon}" style="margin-right:4px;"></i>${titleLabel}</div>
+          <div class="lg-t11">${escapeHtml(item.title)}</div>
+        </div>`;
       }
       
       // Location
@@ -3938,42 +3697,6 @@
               <div class="lg-t10 lg-mb4">${escapeHtml(String(value).substring(0, 200))}${String(value).length > 200 ? '...' : ''}</div>`;
           });
           html += `</div>`;
-        }
-      } else if (source.startsWith('waze_')) {
-        // Waze extra details - source-specific color
-        let wazeColor = '#eab308'; // Default yellow
-        if (source === 'waze_police') wazeColor = '#3b82f6';
-        else if (source === 'waze_roadwork') wazeColor = '#f97316';
-        else if (source === 'waze_jam') wazeColor = '#dc2626';
-        
-        const extraFields = [];
-        if (data.street) extraFields.push(['Street', data.street]);
-        if (data.city) extraFields.push(['City', data.city]);
-        // Roadwork-specific: delay info
-        if (data.delay && data.delay > 0) {
-          const delayMins = Math.round(data.delay / 60);
-          extraFields.push(['Delay', `${delayMins} min`]);
-        }
-        if (data.length && data.length > 0) {
-          const lengthKm = (data.length / 1000).toFixed(1);
-          extraFields.push(['Length', `${lengthKm} km`]);
-        }
-        if (data.speed !== undefined && data.speed >= 0) extraFields.push(['Speed', `${data.speed} km/h`]);
-        if (data.reportRating) extraFields.push(['Rating', data.reportRating]);
-        if (data.reliability) extraFields.push(['Reliability', data.reliability]);
-        if (data.confidence) extraFields.push(['Confidence', data.confidence]);
-        if (data.reportBy) extraFields.push(['Reported By', data.reportBy]);
-        if (data.nThumbsUp) extraFields.push(['👍', data.nThumbsUp]);
-        if (data.nComments) extraFields.push(['💬', data.nComments]);
-        
-        if (extraFields.length > 0) {
-          html += `<div class="lg-mb8">
-            <div class="lg-kv-k" style="--c:${wazeColor}"><i class="fas fa-info-circle"></i>Details</div>
-            <div class="lg-grid2">`;
-          extraFields.forEach(([label, value]) => {
-            html += `<div class="lg-meta">${escapeHtml(label)}:</div><div class="lg-t10">${escapeHtml(String(value))}</div>`;
-          });
-          html += `</div></div>`;
         }
       } else if (MERGED_OUTAGE_SOURCES.has(source)) {
         // The other states' distributors: one shape, so one branch. `details`
@@ -4134,36 +3857,6 @@
         return FireVocab.typeIconHtml(subcategory || '', { style: `color:${colors.primary}` });
       }
 
-      // For waze_hazard, use subcategory-specific icons
-      if (source === 'waze_hazard' && subcategory) {
-        const sub = subcategory.toUpperCase();
-        if (sub.startsWith('JAM')) return '<i class="fas fa-car" style="color:#ef4444"></i>';
-        if (sub.startsWith('ACCIDENT')) return '<i class="fas fa-car-crash" style="color:#ef4444"></i>';
-        if (sub.includes('WEATHER') || sub.includes('FOG')) return '<i class="fas fa-smog" style="color:#60a5fa"></i>';
-        if (sub.includes('ICE') || sub.includes('SNOW')) return '<i class="fas fa-snowflake" style="color:#60a5fa"></i>';
-        if (sub.includes('FLOOD')) return '<i class="fas fa-water" style="color:#3b82f6"></i>';
-        if (sub.includes('TRAFFIC_LIGHT')) return '<i class="fas fa-traffic-light" style="color:#ef4444"></i>';
-        if (sub.includes('ROAD_KILL') || sub.includes('ANIMALS')) return '<i class="fas fa-paw" style="color:#a3a3a3"></i>';
-        if (sub.includes('POT_HOLE') || sub.includes('OBJECT')) return '<i class="fas fa-road-circle-exclamation" style="color:#f97316"></i>';
-      }
-      
-      // For waze_police, use subcategory-specific icons
-      if (source === 'waze_police' && subcategory) {
-        const sub = subcategory.toUpperCase();
-        if (sub.includes('HIDING')) return '<i class="fas fa-user-secret" style="color:#6366f1"></i>';
-        if (sub.includes('CAMERA')) return '<i class="fas fa-camera" style="color:#8b5cf6"></i>';
-      }
-
-      // For waze_jam, colour by severity (subcategory holds "Heavy Traffic" etc.)
-      if (source === 'waze_jam' && subcategory) {
-        const sub = subcategory.toLowerCase();
-        if (sub.includes('blocked')) return '<i class="fas fa-car-side" style="color:#991b1b"></i>';
-        if (sub.includes('standstill')) return '<i class="fas fa-car-side" style="color:#dc2626"></i>';
-        if (sub.includes('heavy')) return '<i class="fas fa-car-side" style="color:#ef4444"></i>';
-        if (sub.includes('moderate')) return '<i class="fas fa-car-side" style="color:#f97316"></i>';
-        if (sub.includes('light')) return '<i class="fas fa-car-side" style="color:#eab308"></i>';
-      }
-      
       // Shark reports: the icon is the kind of report, not the species — a
       // bite and a receiver ping are the same animal and very different
       // events. `subcategory` here is the report category, passed by the
@@ -4191,10 +3884,6 @@
         'traffic_flood': '<i class="fas fa-water" style="color:#3b82f6"></i>',
         'traffic_fire': '<i class="fas fa-fire-alt" style="color:#ef4444"></i>',
         'traffic_majorevent': '<i class="fas fa-star" style="color:#8b5cf6"></i>',
-        'waze_hazard': '<i class="fas fa-triangle-exclamation" style="color:#eab308"></i>',
-        'waze_police': '<i class="fas fa-shield-halved" style="color:#3b82f6"></i>',
-        'waze_roadwork': '<i class="fas fa-person-digging" style="color:#f97316"></i>',
-        'waze_jam': '<i class="fas fa-car-side" style="color:#dc2626"></i>',
         'pager': '<i class="fas fa-pager" style="color:#22c55e"></i>',
         'endeavour_current': '<i class="fas fa-bolt" style="color:#ef4444"></i>',
         'endeavour_planned': '<i class="fas fa-calendar-check" style="color:#22c55e"></i>',

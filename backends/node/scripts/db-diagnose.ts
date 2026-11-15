@@ -189,7 +189,7 @@ async function tableStats(table: string): Promise<TableStats[]> {
  * EXPLAIN (ANALYZE, BUFFERS) the archiveLiveness DISTINCT ON query for
  * a single archive table. Mirrors the live SQL in
  * `backends/node/src/services/archiveLiveness.ts:107-119` but with
- * placeholder-substituted source list (every NON-waze source associated
+ * placeholder-substituted source list (every source associated
  * with the table family — the values come from the archive writer's
  * ARCHIVE_SOURCE_TABLES map but for diagnostic purposes we dump every
  * source actually present in the table).
@@ -201,12 +201,11 @@ async function explainArchiveLiveness(table: string): Promise<unknown> {
   const srcs = await pool.query<{ source: string }>(
     `SELECT DISTINCT source FROM ${table}
      WHERE fetched_at >= now() - interval '1 day'
-       AND NOT (source LIKE 'waze_%')
      LIMIT 20`,
   );
   const sources = srcs.rows.map((r) => r.source);
   if (sources.length === 0) {
-    return { skipped: 'no recent non-waze sources in table' };
+    return { skipped: 'no recent sources in table' };
   }
   const sql = `
     EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)

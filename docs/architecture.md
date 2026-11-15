@@ -604,52 +604,22 @@ the main pool, the rdio pool, and the bot-data pool.
 
 ### Waze is gone, and the data with it
 
-Waze was retired as a data source. **The ingest, the routes and the data are
-gone; the references are not.** Nothing about Waze works, but a contributor who
-greps for it will get a lot of hits — so read this section before concluding
-the layer is still wired up.
+Waze was retired as a data source and then removed outright: the ingest, the
+`/api/waze/*` routes, the map layers and filters, the logs-page labels, the
+config keys and the bot's handling of its alert types. Migration
+`071_drop_police_heatmap.sql` dropped the two derived heatmap tables and
+`074_drop_archive_waze.sql` dropped `archive_waze` and `archive_waze_latest`.
 
-What is genuinely gone:
+What still mentions it, on purpose:
 
-- No ingest. The `SourceFamily` union in `src/services/sourceRegistry.ts:20`
-  does not include `waze` and no source module registers one.
-- No routes. There is no `/api/waze/*` handler anywhere in `backends/node/src`.
-- No data. Migration `071_drop_police_heatmap.sql` dropped the two derived
-  heatmap tables, and migration `074_drop_archive_waze.sql` dropped
-  `archive_waze` and `archive_waze_latest` with `CASCADE`. That migration's own
-  comment says it: *"Irreversible, and deliberately so — this is the last of the
-  Waze data."*
-
-**The leftovers are extensive**, but the frontend is no longer among them: the
-site makes no Waze requests. `map.html` still *contains* the two loaders — the
-`fetch` of `/api/waze/police-heatmap` at `map.html:9528` and of
-`/api/waze/police` at `map.html:10903` — but both functions return immediately on
-a `WAZE_RETIRED = true` constant (`map.html:3863`), and the controls that used to
-call them are gone. The guard is at each function's first line on purpose, so
-that "the site makes no Waze requests" does not depend on an exhaustive reading
-of the call sites; clearing the constant and reverting the UI commit is what
-would bring the layer back.
-
-The rest is dead reference rather than breakage, and there is a lot of it —
-roughly 88 mentions across 16 non-migration files under `backends/node/src`.
-The ones most likely to mislead:
-
-| Where | What survives |
-|---|---|
-| `services/sourceRegistry.ts:6` | the doc comment above `SourceFamily` still lists `waze` as a family — in the same file whose line 20 proves it is not one |
-| `store/filterCache.ts:68-71`, `:147`, `:193` | the four `waze_*` alert types, a `waze: { name: 'Waze', … }` display entry, and a `waze:` group |
-| `store/filterCache.ts:343-352` | two **orphaned doc comments**. The first describes `wazeAlertType()` and points at `services/wazeAlerts` and `api/waze-ingest`; the second describes a bbox-snapshot reader and points at `store/wazeIngestCache`. All four of those are gone — and because the comments were left behind, they now sit directly above the unrelated `dimSlotFor()` at `:353`, which reads as its documentation and is not |
-| `store/filterCache.ts:7-15` | the module header still describes Waze as a live in-memory path |
-| `services/sourceHealth.ts:48` | a `waze` threshold entry |
-| `api/status.ts:44`, `:64` | `STATUS_WAZE_STALE_SECS` and `WAZE_BOOT_GRACE_SECS`; live `/api/status` still reports `cleanup.last_waze_ended` |
-| `config.ts:86-102` | the userscript ingest keys and the bbox TTL are still parsed |
-
-Migrations under `src/db/migrations/` also mention Waze throughout. That is
-correct and must stay — a migration is a record of what happened.
-
-**None of this is evidence the layer exists.** Treat every Waze reference
-outside the migrations as residue until someone removes it, and do not extend
-any of it.
+- the migrations under `src/db/migrations/`, which are a record of what
+  happened and must not be edited;
+- `CHANGELOG.md`;
+- a few tests and comments that use `waze_*` as the example of a **retired
+  alert type still stored on a live preset**. Presets saved while Waze existed
+  keep those keys in the bot's database; the dashboard API drops them when it
+  hands a preset to the page (`rowToPreset` in `src/api/dashboard.ts`) and the
+  filter validator drops a filter saved under one.
 
 ## Authentication, in layers
 

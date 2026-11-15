@@ -2,17 +2,14 @@
  * Facet aggregation for /api/data/history/filters.
  *
  * Replaces Python's `data_history_filter_cache` table that was refreshed
- * every 5 min via 5×GROUP BY scans of `data_history`. Hybrid model:
+ * every 5 min via 5×GROUP BY scans of `data_history`.
  *
- * 1. **Non-waze sources** (rfs / power / traffic / misc) come from a
- *    GROUP BY scan over the small archive_* tables on a 5-min loop.
- *    Bounded to the last 24h of rows so the dropdown reflects what the
- *    user would actually see when filtering. archive_misc has hundreds
- *    of pager hits per day; the LiveStore-only walk used to surface
- *    just the latest poll's 100 messages and showed "Pager: 1".
- * 2. **Waze** stays on the in-memory path — archive_waze is the only
- *    multi-million-row table and waze categorisation is hardcoded
- *    (`wazeAlertType()`) so the live snapshot is sufficient.
+ * Counts (rfs / power / traffic / misc) come from a GROUP BY scan over
+ * the small archive_* tables on a 5-min loop. Bounded to the last 24h
+ * of rows so the dropdown reflects what the user would actually see
+ * when filtering. archive_misc has hundreds of pager hits per day; the
+ * LiveStore-only walk used to surface just the latest poll's 100
+ * messages and showed "Pager: 1".
  *
  * Response shape exactly matches Python's `_build_filters_response`:
  *   {
@@ -65,10 +62,6 @@ const RAW_SOURCE_TO_ALERT_TYPE: Record<string, string> = {
   essential_planned: 'essential_current',
   essential_future: 'essential_future',
   essential: 'essential_current',
-  waze_hazard: 'waze_hazard',
-  waze_jam: 'waze_jam',
-  waze_police: 'waze_police',
-  waze_roadwork: 'waze_roadwork',
   pager: 'pager',
   dorsal: 'dorsal',
   // LiveStore keys (the Node poller's source name) → alert_type. Without
@@ -169,7 +162,6 @@ const PROVIDER_DISPLAY: Record<string, { name: string; icon: string; color: stri
   sapn: { name: 'SA Power Networks', icon: 'bolt', color: '#fbbf24' },
   westernpower: { name: 'Western Power', icon: 'bolt', color: '#fbbf24' },
   horizon: { name: 'Horizon Power', icon: 'bolt', color: '#fbbf24' },
-  waze: { name: 'Waze', icon: 'car', color: '#00d4ff' },
   pager: { name: 'Pager', icon: 'pager', color: '#8b5cf6' },
   user: { name: 'User Submissions', icon: 'user', color: '#a855f7' },
   rdio: { name: 'Radio Scanner', icon: 'radio', color: '#10b981' },
@@ -225,7 +217,6 @@ const PROVIDER_TYPE_ORDER: Record<string, string[]> = {
   ],
   endeavour: ['endeavour_current', 'endeavour_planned'],
   essential: ['essential_current', 'essential_future'],
-  waze: ['waze_hazard', 'waze_jam', 'waze_police', 'waze_roadwork'],
 };
 
 const DEPRECATED_SOURCES = new Set<string>(['essential_energy_cancelled']);
@@ -306,8 +297,8 @@ function readDim(record: Record<string, unknown>, field: string): string | null 
 /**
  * Walk a snapshot payload and count one record. Most LiveStore snapshots
  * are arrays of records (e.g. `endeavour_current` is an array of
- * outages), some are objects with feature collections (e.g. waze is an
- * object with `alerts`/`jams`). We handle both shapes — anything else
+ * outages), some are objects with feature collections or
+ * `alerts`/`jams` lists. We handle both shapes — anything else
  * counts as a single "snapshot" record contributing 1 to the type total.
  */
 function recordsFromSnapshot(data: unknown): Record<string, unknown>[] {
@@ -322,7 +313,7 @@ function recordsFromSnapshot(data: unknown): Record<string, unknown>[] {
         unknown
       >[];
     }
-    // Waze-ish: { alerts: [...], jams: [...] } — flatten both.
+    // { alerts: [...], jams: [...] } — flatten both.
     const merged: Record<string, unknown>[] = [];
     if (Array.isArray(data['alerts'])) {
       for (const a of data['alerts'] as unknown[]) {
@@ -376,16 +367,6 @@ interface ComputedFacets {
 }
 
 /**
- * Categorise a single waze alert into one of the four alert_types we
- * surface in the filter dropdown. Mirrors the isPoliceAlert /
- * isRoadworkAlert / isJamAlert / isHazardAlert helpers in
- * services/wazeAlerts (and the ingest split in api/waze-ingest) —
- * duplicated here to avoid a cross-module cycle (filterCache shouldn't
- * import from a route's service layer).
- */
-/** Pull all alerts + jams from the bbox-keyed waze LiveStore snapshot,
- *  deduplicated by uuid/id. Mirrors store/wazeIngestCache.snapshot(). */
-/**
  * Every dimension a facet slot carries, in one list.
  *
  * The two merge loops below each spelled their own out and both stopped at
@@ -408,7 +389,7 @@ function dimSlotFor(
 
 /** Full sync LiveStore walk — counts every registered source's current
  *  snapshot. Used as a synchronous fallback (cold start, tests without
- *  DB). The async archive scan replaces the non-waze counts when it
+ *  DB). The async archive scan replaces these counts when it
  *  completes. */
 function computeFacetsLive(): ComputedFacets {
   const typeCounts: Record<string, number> = {};
@@ -452,8 +433,7 @@ function computeFacetsLive(): ComputedFacets {
 
 /**
  * Tables we GROUP BY for facet counts and the per-table lookback
- * window. archive_waze is deliberately excluded — too big to scan,
- * and waze counts come from LiveStore.
+ * window.
  *
  * Per-table windows: archive_traffic + archive_rfs see ~140k+
  * rows/24h; a 7d GROUP BY scan times out at 60s. archive_misc +
@@ -745,7 +725,6 @@ async function archiveFacetsFromDaily(windowHours: number): Promise<{
     if (DEPRECATED_SOURCES.has(row.source)) continue;
     const alertType = canonicalAlertType(row.source);
     if (!alertType || !ALERT_TYPE_PROVIDER[alertType]) continue;
-    if (alertType.startsWith('waze_')) continue;
 
     typeCounts[alertType] = (typeCounts[alertType] ?? 0) + cnt;
     const slot = dimSlotFor(perTypeDims, alertType);
@@ -833,11 +812,6 @@ async function archiveFacets(windowHours: number): Promise<{
           if (DEPRECATED_SOURCES.has(row.source)) continue;
           const alertType = canonicalAlertType(row.source);
           if (!alertType || !ALERT_TYPE_PROVIDER[alertType]) continue;
-          // Note: legacy fallback path still skips waze because this code
-          // path is only reached when both sidecar + daily are unavailable
-          // and ARCHIVE_FACET_TABLES doesn't include archive_waze (it's
-          // too big to scan with a hour/day window).
-          if (alertType.startsWith('waze_')) continue;
 
           typeCounts[alertType] = (typeCounts[alertType] ?? 0) + cnt;
           const slot = dimSlotFor(perTypeDims, alertType);
@@ -911,7 +885,7 @@ function computeFacets(): ComputedFacets {
 }
 
 /** Async entry point. With DB available, queries archive_*_latest
- *  sidecars (including archive_waze_latest) for unique-incident counts
+ *  sidecars for unique-incident counts
  *  in the requested window. Without DB, falls back to a LiveStore walk
  *  for cold-start / test-without-DB scenarios; windowHours is ignored
  *  in that fallback because LiveStore has no historical depth. */

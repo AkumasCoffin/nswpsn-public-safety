@@ -334,8 +334,8 @@ describe('buildSqlForTable — multi-family rank-aware cursor seek (DESC)', () =
       'archive_traffic',
       defaultParams({ cursor, order: 'ASC' }),
     );
-    // ASC global order = (fetched_at ASC, rank ASC, id ASC); waze(0) <
-    // rfs(2) so waze sorts BEFORE the cursor at a tie → strict seek.
+    // ASC global order = (fetched_at ASC, rank ASC, id ASC); traffic(0) <
+    // rfs(1) so traffic sorts BEFORE the cursor at a tie → strict seek.
     expect(q.sql).toMatch(/fetched_at > to_timestamp\(\$\d+\)/);
     expect(q.sql).not.toMatch(/fetched_at >= to_timestamp/);
   });
@@ -359,7 +359,7 @@ describe('buildSqlForTable — unique=1', () => {
     // per incident) via a `top_keys` CTE, then CROSS JOIN LATERAL to
     // the parent for the full record. The previous DISTINCT ON
     // bounded-scan approach was replaced because it timed out at 30s
-    // on archive_waze under ingest load.
+    // under ingest load.
     const q = buildSqlForTable(
       'archive_traffic',
       defaultParams({ unique: true, sources: ['traffic_incident'] }),
@@ -489,7 +489,7 @@ describe('mergeAndPaginate', () => {
     const b: ArchiveQueryRow = { ...row(1, 1000), _family: 'archive_misc' }; // rank 4
     const plan = buildPlan(defaultParams({ limit: 10 }));
     const out = mergeAndPaginate([a, b], plan);
-    // DESC → rank 4 (misc, id 1) before rank 0 (waze, id 5).
+    // DESC → rank 4 (misc, id 1) before rank 0 (traffic, id 5).
     expect(out.map((r) => r._family)).toEqual(['archive_misc', 'archive_traffic']);
   });
 

@@ -6,7 +6,7 @@
  * Why: python wrote one row per incident to `data_history` with
  * top-level columns (title, severity, status, location_text, latitude,
  * longitude, etc.) plus the original feature blob in `data`. Node now
- * writes to the family-partitioned `archive_waze`, `archive_traffic`,
+ * writes to the family-partitioned `archive_traffic`,
  * `archive_rfs`, `archive_power`, `archive_misc` — same shape, different
  * tables. Without this script, /api/data/history on Node only sees
  * data since the cutover; everything python collected is invisible.
@@ -37,11 +37,6 @@ const { Pool } = pg;
 const MARKER = '999_data_history_backfill';
 
 const SOURCE_TO_FAMILY = {
-  // Waze
-  waze_hazard: 'archive_waze',
-  waze_jam: 'archive_waze',
-  waze_police: 'archive_waze',
-  waze_roadwork: 'archive_waze',
   // LiveTraffic NSW
   traffic_incident: 'archive_traffic',
   traffic_roadwork: 'archive_traffic',
@@ -238,9 +233,9 @@ async function migrateFamily(pool, family, sources, unitDivisor) {
   // Page by id ascending. Uses a CTE so the INSERT and the cursor
   // advance run atomically against the same row set: the previous
   // version did INSERT followed by a separate `MAX(id) WHERE id <=
-  // lastId + batch*5` which skipped rows when waze ids were sparsely
-  // interleaved with other-source rows. Multi-batch families
-  // (anything > batch_size in count) hit that, e.g. waze stopping at
+  // lastId + batch*5` which skipped rows when one family's ids were
+  // sparsely interleaved with other-source rows. Multi-batch families
+  // (anything > batch_size in count) hit that, e.g. one stopping at
   // exactly 100_000 of 257k. The CTE form returns the genuine MAX(id)
   // of the rows we just inserted.
   let copied = 0;

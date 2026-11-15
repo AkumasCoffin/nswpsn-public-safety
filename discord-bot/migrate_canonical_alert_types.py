@@ -5,7 +5,7 @@ Migrate alert_presets.alert_types to the canonical, singular alert_type names.
 WHEN TO RUN:
     Run this once after deploying the bot with the renamed alert_type
     strings (the catalog at shared/alert-catalog.json). Existing presets
-    will still carry the old keys ('waze_hazards', 'traffic_incidents',
+    will still carry the old keys ('traffic_incidents',
     'traffic_major', 'power_ausgrid', 'user_incidents', 'bom',
     'power_endeavour', 'qld_warning', 'wa_warning'); this script rewrites
     each row's alert_types array to the new canonical form.
@@ -53,7 +53,6 @@ except ImportError:
 # - Splits map old key -> [new_key_a, new_key_b]
 # Order in the lists is irrelevant; the migrator dedupes per-row.
 RENAMES = {
-    'waze_hazards':      ['waze_hazard', 'waze_jam'],
     'traffic_incidents': ['traffic_incident'],
     'traffic_major':     ['traffic_majorevent'],
     'bom':               ['bom_land', 'bom_marine'],

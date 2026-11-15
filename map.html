@@ -1091,41 +1091,6 @@
     #hazards-panel { border: 1px solid rgba(239, 68, 68, 0.3); }
     #hazards-panel h4 { color: #ef4444; }
     #hazards-panel input[type="checkbox"] { accent-color: #ef4444; }
-    #police-panel { border: 1px solid rgba(59, 130, 246, 0.3); }
-    #police-panel h4 { color: #3b82f6; }
-    #police-panel input[type="checkbox"] { accent-color: #3b82f6; }
-    .heatmap-legend-bar {
-      height: 9px;
-      border-radius: 4px;
-      background: linear-gradient(to right,
-        rgb(34,211,238)  0%,
-        rgb(6,182,212)  20%,
-        rgb(139,92,246) 45%,
-        rgb(217,70,239) 65%,
-        rgb(236,72,153) 82%,
-        rgb(244,63,94) 100%);
-      box-shadow: inset 0 0 0 1px rgba(15,23,42,0.4);
-    }
-    .heatmap-legend-labels {
-      display: flex; justify-content: space-between; align-items: center;
-      font-size: 10px; color: #94a3b8;
-      margin-top: 3px;
-    }
-    .heatmap-legend-labels #heat-legend-mid {
-      color: #64748b; font-style: italic;
-    }
-    .heatmap-legend-empty {
-      display: flex; align-items: center; gap: 6px;
-      font-size: 10px; color: #94a3b8;
-      margin-top: 5px;
-    }
-    .heatmap-legend-empty-swatch {
-      display: inline-block;
-      width: 14px; height: 9px;
-      border-radius: 2px;
-      background: rgba(15,23,42,0.7);
-      border: 1px solid rgba(148,163,184,0.55);
-    }
     /* Cameras settings panel */
     #cameras-panel { border: 1px solid rgba(139, 92, 246, 0.3); }
     #cameras-panel h4 { color: #c4b5fd; }
@@ -1248,7 +1213,6 @@
     .outage-pin-unplanned { background: #ef4444; box-shadow: 0 0 6px rgba(239, 68, 68, 0.7); }
     .outage-pin-planned { background: #22c55e; box-shadow: 0 0 6px rgba(34, 197, 94, 0.5); }
     .btn-toggle.active#btn-hazards { border: 1px solid #ef4444; color: #fca5a5; }
-    .btn-toggle.active#btn-police { border: 1px solid #3b82f6; color: #93c5fd; }
     .btn-toggle.active#btn-roadwork { border: 1px solid #eab308; color: #fde047; }
     .btn-toggle.active#btn-floods { border: 1px solid #06b6d4; color: #67e8f9; }
     .btn-toggle.active#btn-cameras { border: 1px solid #8b5cf6; color: #c4b5fd; }
@@ -1703,7 +1667,6 @@
       #ais-panel,
       #weather-panel,
       #hazards-panel,
-      #police-panel,
       #cameras-panel,
       #pager-panel,
       #outages-panel,
@@ -2338,50 +2301,6 @@
       margin: -6px -6px 0 8px; display: flex; align-items: center; justify-content: center;
       font-size: 18px; line-height: 1; background: rgba(255,255,255,0.08);
       border: none; border-radius: 50%; color: #cbd5e1; cursor: pointer;
-    }
-
-    /* Compact tooltip for police-heatmap hex cells. Override the
-       default min-width / green glow / white card so a tiny hex
-       label doesn't render as a 350px white box. */
-    .leaflet-tooltip.hex-tooltip {
-      min-width: 0 !important;
-      max-width: none !important;
-      padding: 6px 10px !important;
-      background: rgba(15, 23, 42, 0.94) !important;
-      color: #f8fafc !important;
-      border: 1px solid rgba(139, 92, 246, 0.55) !important;
-      border-radius: 6px !important;
-      box-shadow: 0 0 14px rgba(139, 92, 246, 0.35), 0 4px 14px rgba(0,0,0,0.5) !important;
-      font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
-    }
-    .leaflet-tooltip.hex-tooltip::before {
-      border-top-color: rgba(15, 23, 42, 0.94) !important;
-      border-bottom-color: rgba(15, 23, 42, 0.94) !important;
-    }
-    .hex-tooltip .hex-tt-label {
-      color: #c4b5fd;
-      font-size: 9px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.6px;
-      margin-bottom: 2px;
-    }
-    .hex-tooltip .hex-tt-count {
-      color: #fff;
-      font-size: 15px;
-      font-weight: 700;
-      line-height: 1.1;
-    }
-    .hex-tooltip .hex-tt-unit {
-      color: #94a3b8;
-      font-size: 11px;
-      font-weight: 500;
-      margin-left: 3px;
-    }
-    .hex-tooltip .hex-tt-window {
-      color: #64748b;
-      font-size: 9px;
-      margin-top: 3px;
     }
 
     /* Fullscreen Camera Viewer */
@@ -3065,12 +2984,6 @@
         <label><input type="checkbox" id="chk-hazards-closures" checked onchange="toggleHazardFilter('closures', this.checked)"><span class="filter-dot" style="background:#a855f7;"></span> Closures / Jams</label>
       </div>
       
-      <!-- Police Filter Panel -->
-      <!-- Police Reports panel removed: it was fed entirely by the retired
-           Waze ingest (live pins + the historical density heatmap). The
-           loader/layer code below is dormant and unreferenced; the archived
-           data is untouched in Postgres. -->
-
       <!-- Cameras Filter Panel -->
       <div class="filter-panel" id="cameras-panel">
         <h4><i class="fa-solid fa-video"></i> Cameras</h4>
@@ -3344,8 +3257,6 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
-  <!-- Leaflet.heat — used by the Police Heatmap layer. -->
-  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
   <!-- MapLibre GL renders the transport network lines (the same engine
        AnyTrip uses). GPU line-offset spaces parallel corridors and,
        unlike geometric offsetting, can never self-intersect into ring
@@ -3365,7 +3276,6 @@
       { panel: 'pager-panel', btn: 'btn-pager' },
       { panel: 'outages-panel', btn: 'btn-outages' },
       { panel: 'hazards-panel', btn: 'btn-hazards' },
-      { panel: 'police-panel', btn: 'btn-police' },
       { panel: 'cameras-panel', btn: 'btn-cameras' },
       { panel: 'beaches-panel', btn: 'btn-beachwatch' },
       { panel: 'sharksmart-panel', btn: 'btn-sharksmart' },
@@ -3476,7 +3386,6 @@
         if (window.innerWidth > 900) {
           if (document.getElementById('weather-panel')?.classList.contains('open')) toggleWeatherPanel();
           if (document.getElementById('hazards-panel')?.classList.contains('open')) toggleHazardsPanel();
-          if (document.getElementById('police-panel')?.classList.contains('open')) togglePolicePanel();
           if (document.getElementById('cameras-panel')?.classList.contains('open')) toggleCamerasPanel();
           if (document.getElementById('pager-panel')?.classList.contains('open')) togglePagerPanel();
           if (document.getElementById('outages-panel')?.classList.contains('open')) toggleOutagesPanel();
@@ -3777,9 +3686,6 @@
           const layerMap = {
             beachwatch: { layer: beachwatchLayer, btn: 'btn-beachwatch', loader: loadBeachwatchData },
             hazards: { layer: hazardsLayer, btn: 'btn-hazards', loader: loadHazardsData },
-            // police removed: a deep link (?layer=police) would otherwise
-            // reach getElementById('btn-police').classList on a button that
-            // no longer exists and throw, taking the rest of init with it.
             roadwork: { layer: roadworkLayer, btn: 'btn-roadwork', loader: loadRoadworkData },
             floods: { layer: floodsLayer, btn: 'btn-floods', loader: loadFloodsData },
             cameras: { layer: camerasLayer, btn: 'btn-cameras', loader: loadCamerasData },
@@ -3933,28 +3839,9 @@
     const pagerLayer = L.layerGroup().addTo(map);
     const outagesLayer = L.layerGroup();
     
-    // Waze layers - no clustering to keep different pin types separate
-    const hazardsLayer = L.layerGroup(); // For all hazard markers and jam polylines
-    const policeLayer = L.layerGroup(); // For all police markers
+    // Road layers - no clustering to keep different pin types separate
+    const hazardsLayer = L.layerGroup(); // For all hazard markers
     const roadworkLayer = L.layerGroup(); // For all roadwork markers
-    // Waze ingest retired Aug 2026 (blocked at source; see
-    // docs/waze-userscript.user.js). The police pin layer and the density
-    // heatmap were Waze-only, so their controls are gone and their loaders
-    // return early. Hazards/roadwork/floods keep their LiveTraffic data.
-    // Set false + revert the UI commit to bring it back.
-    const WAZE_RETIRED = true;
-    let policeHeatmapLayer = null;       // L.heatLayer instance — created on first toggle
-    let _policeHeatmapData = null;       // last fetched payload from /api/waze/police-heatmap
-    let _heatmapOpacityScale = 1.0;      // user-controlled multiplier (0.10–1.00)
-    function setHeatmapOpacity(v) {
-      const pct = Math.max(10, Math.min(100, parseInt(v, 10) || 100));
-      _heatmapOpacityScale = pct / 100;
-      const lbl = document.getElementById('heat-opacity-val');
-      if (lbl) lbl.textContent = pct + '%';
-      if (typeof _renderPoliceHexGrid === 'function' && _policeHeatmapData) {
-        _renderPoliceHexGrid();
-      }
-    }
     
     // What3Words grid layer
     const w3wGridLayer = L.layerGroup();
@@ -3982,10 +3869,6 @@
       wa_emergency_warnings: { data: null, timestamp: 0 },
       sa_cfs_incidents: { data: null, timestamp: 0 },
       sa_mfs_incidents: { data: null, timestamp: 0 },
-      // Waze data
-      waze_hazards: { data: null, timestamp: 0 },
-      waze_police: { data: null, timestamp: 0 },
-      waze_roadwork: { data: null, timestamp: 0 },
       // Traffic data
       traffic_incidents: { data: null, timestamp: 0 },
       traffic_cameras: { data: null, timestamp: 0 },
@@ -4050,7 +3933,7 @@
           data.lastUpdated || data.updated_at || data.generated_at || data.timestamp || null;
         // Only take the cheap count|timestamp shortcut when the payload
         // actually carries a timestamp. Count alone is lossy: on a
-        // churning feed (waze police has no timestamp field) one alert
+        // churning feed with no timestamp field, one alert
         // expiring while another appears keeps the count identical, so
         // hasDataChanged() said "unchanged" and the 60s auto-refresh
         // never redrew the layer — stale pins persisted indefinitely.
@@ -4083,43 +3966,18 @@
       return true; // Data changed, needs redraw
     }
     
-    // Legacy wazeCache alias for compatibility
-    const wazeCache = {
-      get hazards() { return layerCache.waze_hazards; },
-      set hazards(v) { layerCache.waze_hazards = v; },
-      get police() { return layerCache.waze_police; },
-      set police(v) { layerCache.waze_police = v; },
-      get roadwork() { return layerCache.waze_roadwork; },
-      set roadwork(v) { layerCache.waze_roadwork = v; }
-    };
-    const WAZE_CACHE_TTL = LAYER_CACHE_TTL;
-    
-    // Filter states for hazards and police layers
+    // Filter states for the hazards layer
     const hazardFilters = {
       accident: true,
       hazard: true,
       closures: true  // Combines road closures + traffic jams
     };
-    const policeFilters = {
-      visible: true,
-      hidden: true,
-      camera: true
-    };
     
     // Sub-layers for filtered data
     let hazardSubLayers = {};
-    let policeSubLayers = {};
-    // Police: flat marker list (mirrors the hazards/roadwork pattern) so
-    // the layer can be viewport-culled — markers are projected into the
-    // per-category sub-layers (visible / hidden / camera) honouring the
-    // current viewport, rather than all mounted at once.
-    const _policeMarkers = []; // [{marker, category, latlng}]
-    // Hazards: flat marker list lets us re-project into sub-layers when
-    // the source filter (livetraffic / waze) flips, without refetching.
-    // subtypeLabel is the human-readable label from formatWazeType()
-    // for waze markers (null for livetraffic) — drives the per-subtype
-    // pill filter under the Traffic Hazards floating menu.
-    const _hazardMarkers = []; // [{marker, type, source, subtypeLabel, mainCategory}]
+    // Hazards: flat marker list, re-projected into the sub-layers when a
+    // filter pill flips, without refetching.
+    const _hazardMarkers = []; // [{marker, type, mainCategory, state, publisher}]
     // The three sub-layers above (accident / hazard / closures) are a coarse
     // bucketing: the Live Traffic incident feed actually publishes eight
     // categories, so BREAKDOWN, ADVERSE WEATHER, both TRAFFIC LIGHTS types
@@ -4139,13 +3997,6 @@
     // membership when a pill flips.
     const _floodMarkers = []; // [{marker, state}]
     const _floodExcludedStates = new Set();
-    // 'waze' dropped with the retired ingest. It also gates the Waze subtype
-    // pill block below, which would otherwise render an empty section.
-    const _hazardSelectedSources = new Set(['livetraffic']);
-    // Waze subtype labels (formatWazeType output) the user has toggled
-    // OFF. Empty = everything visible. Livetraffic markers ignore this
-    // set — they have no subtypeLabel and pass through unconditionally.
-    const _hazardExcludedSubtypes = new Set();
 
     // ---------- Alert levels, types, statuses and agencies ----------
     // All four vocabularies live in fire-vocab.js, which logs.html reads
@@ -4188,9 +4039,8 @@
       return rings.length ? rings : null;
     }
 
-    // Roadwork — filtered by classified type rather than by source. The
-    // raw feeds carry inconsistent type labels (mainCategory /
-    // subCategoryB for Live Traffic, wazeSubtype for Waze) so we
+    // Roadwork — filtered by classified type. The raw feeds carry
+    // inconsistent type labels (mainCategory / subCategoryB) so we
     // normalise each marker into one of a handful of buckets and store
     // the per-marker type alongside the marker. Filtering then just
     // re-projects the flat list into roadworkLayer based on the
@@ -4198,10 +4048,9 @@
     // A record can have more than one entry: an SA job is a pin at each end
     // and its road as a line. Only the first entry of a record counts
     // towards the panel's numbers; the rest are `extra`.
-    const _roadworkMarkers = [];        // [{marker, type, source, state, extra?, line?}]
+    const _roadworkMarkers = []; // [{marker, type, state, extra?, line?}]
     const _roadworkAvailableTypes = []; // distinct types in current dataset, ordered
     const _roadworkSelectedTypes = new Set(); // populated from available on first load
-    const _roadworkSelectedSources = new Set(['livetraffic']); // 'waze' dropped with the retired ingest
     const _roadworkExcludedStates = new Set();
 
     // Camera filter states and sub-layers
@@ -5123,10 +4972,6 @@
         rfs: rfsLayer,
         pager: pagerLayer,
         hazards: hazardsLayer,
-        // police removed with the Waze retirement — leaving it here would let
-        // toggleLayer('police') past the `!layer || !btnId` guard (which only
-        // checks the map entries, not the DOM) and then dereference a
-        // btn-police element that no longer exists.
         roadwork: roadworkLayer,
         floods: floodsLayer,
         cameras: camerasLayer,
@@ -5196,7 +5041,6 @@
         if (target === 'floods') addFilterButton('floods');
         // Load data when layer is first enabled
         if (target === 'hazards' && hazardsLayer.getLayers().length === 0) loadHazardsData();
-        if (target === 'police' && policeLayer.getLayers().length === 0) loadPoliceData();
         // Roadwork: gate on the flat list — its markers mount directly on
         // the layer (no sub-groups), so a culled-empty viewport would
         // otherwise re-trigger the loader on every toggle.
@@ -5578,8 +5422,8 @@
     }
 
 
-    // ----- Beach-style tooltip helpers (shared by hazard / jam / roadwork
-    // / police / flood tooltips so they match the beach layer styling). -----
+    // ----- Beach-style tooltip helpers (shared by hazard / roadwork
+    // / flood tooltips so they match the beach layer styling). -----
     // Wrap a sectioned tooltip in the dark themed container.
     function _ttWrap(headerHtml, bodyHtml) {
       return `<div style="max-width:360px; font-family: system-ui, sans-serif; color:#e2e8f0; line-height:1.4;">`
@@ -5587,7 +5431,7 @@
     }
     // Tooltip header — icon + title + optional colored source pill.
     // titleColor drives the title text; pillBg/pillFg/pillText are
-    // the source badge (e.g. WAZE green / LIVE TRAFFIC blue).
+    // the source badge (e.g. LIVE TRAFFIC blue).
     function _ttHeader(iconClass, title, titleColor, pillBg, pillFg, pillText) {
       let h = `<div style="font-size:15px; font-weight:700; color:${titleColor}; margin-bottom:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">`;
       h += `<i class="${iconClass}"></i> ${escapeHtml(title)}`;
@@ -5632,8 +5476,7 @@
       return _ttSection('Location', '#f59e0b', '245,158,11', body);
     }
     // Build the TYPE / SUBTYPE section. Pass already-formatted strings
-    // (e.g. via formatWazeType) — this helper does no normalisation so
-    // both Waze and LiveTraffic feeds slot in cleanly.
+    // — this helper does no normalisation.
     function _ttTypeSection(typeLabel, subtypeLabel, accentColor, accentRgb) {
       // The Python-serialised feeds ship the literal strings 'null'/'None'
       // where a field is absent; those rendered as a Subtype tile reading
@@ -5668,73 +5511,6 @@
       if (e) body += `<div style="color:#7dd3fc; font-size:11px; margin-top:2px;">Expected end: ${e}</div>`;
       if (u) body += `<div style="color:#64748b; font-size:10px; margin-top:3px;"><i class="fa-solid fa-rotate" style="margin-right:4px;"></i>Updated: ${u}</div>`;
       return _ttSection('Timing', '#64748b', '100,116,139', body);
-    }
-
-    // Format Waze type/subtype strings into clean readable text.
-    // Explicit overrides fix titleCase artefacts ("Stand Still Traffic"
-    // → "Standstill Traffic") and disambiguate near-duplicates
-    // (HAZARD_ON_ROAD_CAR_STOPPED vs HAZARD_ON_SHOULDER_CAR_STOPPED).
-    const WAZE_LABEL_OVERRIDES = {
-      POLICE: 'Visible',
-      POLICE_VISIBLE: 'Visible',
-      POLICE_HIDING: 'Hiding',
-      POLICE_WITH_MOBILE_CAMERA: 'Mobile Camera',
-      ACCIDENT: 'Accident',
-      ACCIDENT_MINOR: 'Minor Accident',
-      ACCIDENT_MAJOR: 'Major Accident',
-      ROAD_CLOSED: 'Road Closed',
-      ROAD_CLOSED_EVENT: 'Event Closure',
-      ROAD_CLOSED_CONSTRUCTION: 'Roadwork Closure',
-      ROAD_CLOSED_HAZARD: 'Hazard Closure',
-      JAM: 'Traffic Jam',
-      JAM_STAND_STILL_TRAFFIC: 'Standstill Traffic',
-      JAM_HEAVY_TRAFFIC: 'Heavy Traffic',
-      JAM_MODERATE_TRAFFIC: 'Moderate Traffic',
-      JAM_LIGHT_TRAFFIC: 'Light Traffic',
-      HAZARD: 'Hazard',
-      HAZARD_ON_ROAD: 'Hazard on Road',
-      HAZARD_ON_ROAD_OBJECT: 'Object on Road',
-      HAZARD_ON_ROAD_POT_HOLE: 'Pothole',
-      HAZARD_ON_ROAD_CONSTRUCTION: 'Roadwork',
-      HAZARD_ON_ROAD_LANE_CLOSED: 'Lane Closed',
-      HAZARD_ON_ROAD_ICE: 'Ice on Road',
-      HAZARD_ON_ROAD_CAR_STOPPED: 'Car Stopped on Road',
-      HAZARD_ON_ROAD_TRAFFIC_LIGHT_FAULT: 'Traffic Light Fault',
-      HAZARD_ON_SHOULDER: 'Hazard on Shoulder',
-      HAZARD_ON_SHOULDER_CAR_STOPPED: 'Car Stopped on Shoulder',
-      HAZARD_ON_SHOULDER_ANIMALS: 'Animals on Shoulder',
-      HAZARD_ON_SHOULDER_MISSING_SIGN: 'Missing Sign',
-      HAZARD_WEATHER: 'Weather Hazard',
-      HAZARD_WEATHER_FLOOD: 'Flooded Road',
-      HAZARD_WEATHER_FOG: 'Fog',
-      HAZARD_WEATHER_HAIL: 'Hail',
-      HAZARD_WEATHER_HEAVY_RAIN: 'Heavy Rain',
-      HAZARD_WEATHER_HEAVY_SNOW: 'Heavy Snow',
-      HAZARD_WEATHER_HURRICANE: 'Hurricane',
-      HAZARD_WEATHER_TORNADO: 'Tornado',
-      HAZARD_WEATHER_MONSOON: 'Monsoon',
-      HAZARD_WEATHER_FREEZING_RAIN: 'Freezing Rain',
-      HAZARD_WEATHER_HEAT_WAVE: 'Heat Wave',
-      CONSTRUCTION: 'Roadwork',
-      CONSTRUCTION_MINOR: 'Minor Roadwork',
-      CONSTRUCTION_MAJOR: 'Major Roadwork',
-    };
-    function formatWazeType(rawType) {
-      if (!rawType) return '';
-      const str = String(rawType).toUpperCase();
-      if (WAZE_LABEL_OVERRIDES[str]) return WAZE_LABEL_OVERRIDES[str];
-      // Strip the common prefix so the residual is what the user actually
-      // cares about, then title-case it. Any future waze subtype string
-      // still renders cleanly without needing a code change.
-      let cleaned = str;
-      const prefixes = [
-        'HAZARD_WEATHER_', 'HAZARD_ON_ROAD_', 'HAZARD_ON_SHOULDER_',
-        'JAM_', 'ACCIDENT_', 'CONSTRUCTION_', 'ROAD_CLOSED_',
-      ];
-      for (const p of prefixes) {
-        if (cleaned.startsWith(p)) { cleaned = cleaned.slice(p.length); break; }
-      }
-      return cleaned.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
     }
 
     // Haversine distance in metres (used for pager↔pager clustering by distance)
@@ -9315,375 +9091,6 @@ function initPagerHoursFromStorage() {
       updateSettingsBackdrop();
     }
     
-    function togglePolicePanel() {
-      const panel = document.getElementById('police-panel');
-      const btn = document.getElementById('btn-police');
-      const isOpen = panel.classList.contains('open');
-      if (!isOpen) { showFiltersSidebarToast(); if (typeof umami !== 'undefined') umami.track('map-layer-toggle', { layer: 'police' }); }
-      if (isOpen) {
-        panel.classList.remove('open');
-        btn.classList.remove('active');
-        if (map.hasLayer(policeLayer)) map.removeLayer(policeLayer);
-        // Closing the police panel also tears down the heatmap sub-layer.
-        if (policeHeatmapLayer && map.hasLayer(policeHeatmapLayer)) {
-          map.removeLayer(policeHeatmapLayer);
-        }
-        const heatChk = document.getElementById('chk-police-heatmap');
-        if (heatChk) heatChk.checked = false;
-        const heatCtl = document.getElementById('police-heatmap-controls');
-        if (heatCtl) heatCtl.style.display = 'none';
-        // Reset pin toggle so reopening starts with pins on.
-        const pinChk = document.getElementById('chk-police-pins');
-        if (pinChk) pinChk.checked = true;
-        removeFilterButton('police');
-      } else {
-        panel.classList.add('open');
-        btn.classList.add('active');
-        const pinChk = document.getElementById('chk-police-pins');
-        if (!pinChk || pinChk.checked) {
-          if (!map.hasLayer(policeLayer)) map.addLayer(policeLayer);
-          if (policeLayer.getLayers().length === 0) loadPoliceData();
-        }
-        addFilterButton('police');
-      }
-      updateFilterPanelPositions();
-      updateSettingsBackdrop();
-    }
-
-    // Police pins on/off (independent of the panel being open). Lets a
-    // user keep the panel open with heatmap visible but pins hidden.
-    function togglePolicePinsMode(on) {
-      if (on) {
-        if (!map.hasLayer(policeLayer)) map.addLayer(policeLayer);
-        if (policeLayer.getLayers().length === 0) loadPoliceData();
-      } else {
-        if (map.hasLayer(policeLayer)) map.removeLayer(policeLayer);
-      }
-    }
-
-    // Police Heatmap — sub-toggle inside the Police panel. Reuses the
-    // panel's three pin-filter checkboxes (chk-police-visible / hidden /
-    // camera) so the same type filter applies to both pins and heatmap.
-    let _policeHeatmapRefreshTimer = null;
-    function togglePoliceHeatmapMode(on) {
-      const controls = document.getElementById('police-heatmap-controls');
-      if (controls) controls.style.display = on ? '' : 'none';
-      if (on) {
-        loadPoliceHeatmap();
-        // Auto-refresh while the heatmap is visible. Backend cache
-        // refreshes every 30 min, so a 5-min frontend pull is plenty
-        // to pick up new server data shortly after each cache cycle
-        // without hammering the endpoint.
-        clearInterval(_policeHeatmapRefreshTimer);
-        _policeHeatmapRefreshTimer = setInterval(() => {
-          if (document.getElementById('chk-police-heatmap')?.checked) {
-            loadPoliceHeatmap(true);
-          }
-        }, 5 * 60 * 1000);
-      } else {
-        if (policeHeatmapLayer && map.hasLayer(policeHeatmapLayer)) {
-          map.removeLayer(policeHeatmapLayer);
-        }
-        clearInterval(_policeHeatmapRefreshTimer);
-        _policeHeatmapRefreshTimer = null;
-      }
-    }
-
-    function _heatmapSelectedSubtypes() {
-      const wanted = [];
-      if (document.getElementById('chk-police-visible')?.checked) wanted.push('POLICE_VISIBLE');
-      if (document.getElementById('chk-police-hidden')?.checked)  wanted.push('POLICE_HIDING');
-      if (document.getElementById('chk-police-camera')?.checked)  wanted.push('POLICE_WITH_MOBILE_CAMERA');
-      return wanted;
-    }
-
-    // Linear interpolation between gradient stops. Synthwave ramp —
-    // cyan → electric blue → violet → hot pink → red. Stays in the
-    // cool/cyber family until the warm end, with deep brightness
-    // jumps between stops (light cyan vs deep cobalt vs saturated
-    // violet) so adjacent bins look distinct without a clashing
-    // yellow in the middle.
-    const _HEATMAP_STOPS = [
-      [0.00, [103, 232, 249]],  // light cyan
-      [0.25, [ 37,  99, 235]],  // electric blue
-      [0.50, [124,  58, 237]],  // violet
-      [0.75, [236,  72, 153]],  // hot pink
-      [1.00, [239,  68,  68]],  // red
-    ];
-    function _heatmapColorAt(t) {
-      t = Math.max(0, Math.min(1, t));
-      for (let i = 1; i < _HEATMAP_STOPS.length; i++) {
-        if (t <= _HEATMAP_STOPS[i][0]) {
-          const [t0, c0] = _HEATMAP_STOPS[i - 1];
-          const [t1, c1] = _HEATMAP_STOPS[i];
-          const f = (t1 === t0) ? 0 : (t - t0) / (t1 - t0);
-          const r = Math.round(c0[0] + (c1[0] - c0[0]) * f);
-          const g = Math.round(c0[1] + (c1[1] - c0[1]) * f);
-          const b = Math.round(c0[2] + (c1[2] - c0[2]) * f);
-          return `rgb(${r},${g},${b})`;
-        }
-      }
-      return 'rgb(244,63,94)';
-    }
-
-    // Flat-top hex polygon centred on (lat,lng). Vertices at 0°, 60°,
-    // 120°, 180°, 240°, 300° give points on the left and right and flat
-    // top/bottom edges — the orientation that tiles cleanly with the
-    // grid spacing (1.5R between columns, sqrt(3)·R between rows in
-    // the same column, columns staggered by sqrt(3)·R/2 vertically).
-    // radiusDeg is centre-to-corner; lngScale corrects for cosine
-    // longitude narrowing so the hex looks regular at any latitude.
-    function _hexPolygon(lat, lng, radiusDeg) {
-      const lngScale = 1 / Math.max(0.05, Math.cos(lat * Math.PI / 180));
-      const verts = [];
-      for (let i = 0; i < 6; i++) {
-        const angle = (Math.PI / 3) * i;   // flat-top: 0, 60, 120, 180, 240, 300
-        verts.push([
-          lat + radiusDeg * Math.sin(angle),
-          lng + radiusDeg * Math.cos(angle) * lngScale,
-        ]);
-      }
-      return verts;
-    }
-
-    // Cube-round to snap fractional axial (q,r) to the nearest hex cell.
-    // Standard hex-grid algorithm; see redblobgames.com/grids/hexagons.
-    function _hexRound(qf, rf) {
-      const sf = -qf - rf;
-      let q = Math.round(qf);
-      let r = Math.round(rf);
-      let s = Math.round(sf);
-      const dq = Math.abs(q - qf);
-      const dr = Math.abs(r - rf);
-      const ds = Math.abs(s - sf);
-      if (dq > dr && dq > ds) q = -r - s;
-      else if (dr > ds) r = -q - s;
-      return [q, r];
-    }
-
-    // Hex radius per zoom level. Each zoom step halves the radius so
-    // cell density (cells across the viewport) stays roughly constant
-    // — viewport degrees also halve per zoom-in step. Calibrated to
-    // the user-approved z=6 baseline (R=0.18, ~60 hexes across NSW).
-    // Floored so we never go sub-cm at extreme zooms.
-    function _hexRadiusForZoom(z) {
-      const R = 0.18 / Math.pow(2, Math.max(0, z - 6));
-      return Math.max(0.00012, R);   // ~13 m floor
-    }
-
-    // Fixed origin so panning doesn't shift the grid — every cell sits at
-    // a deterministic lat/lng for a given zoom level. Picked near NSW
-    // centre so the cosine-longitude correction stays accurate everywhere
-    // in the state.
-    const HEX_ORIGIN_LAT = -33.0;
-    const HEX_ORIGIN_LNG = 150.0;
-    const HEX_ORIGIN_LNG_SCALE = 1 / Math.cos(HEX_ORIGIN_LAT * Math.PI / 180);
-
-    // Shared canvas renderer for the heatmap layer. Hexes are rendered
-    // onto a single canvas instead of separate SVG paths — handles
-    // tens of thousands of polygons easily where SVG bogs down at a
-    // few thousand. Tooltips still work via Leaflet's pointer hit-test.
-    const _heatmapCanvasRenderer = L.canvas({ padding: 0.2 });
-
-    // Adaptive hex-grid renderer. Tiles the current viewport with
-    // flat-top hexes from a fixed origin, buckets the server's bin
-    // counts into them, and renders ALL cells — empty ones as faint
-    // outlines so the grid structure is always visible.
-    function _renderPoliceHexGrid() {
-      if (!policeHeatmapLayer || !_policeHeatmapData) return;
-      policeHeatmapLayer.clearLayers();
-
-      const z = map.getZoom();
-      const R = _hexRadiusForZoom(z);
-
-      const bounds = map.getBounds().pad(0.05);
-      const south = bounds.getSouth();
-      const north = bounds.getNorth();
-      const west  = bounds.getWest();
-      const east  = bounds.getEast();
-      const lngScale = HEX_ORIGIN_LNG_SCALE;
-
-      const COL_STEP_LNG = R * 1.5 * lngScale;       // between hex columns
-      const ROW_STEP_LAT = R * Math.sqrt(3);          // between hex rows
-
-      // Bucket detection points by axial (q,r) — relative to the fixed
-      // NSW origin, NOT the viewport.
-      const counts = new Map();
-      let maxCount = 0;
-      for (const [lat, lng, count] of (_policeHeatmapData.points || [])) {
-        if (lat < south - R || lat > north + R) continue;
-        if (lng < west - R * lngScale || lng > east + R * lngScale) continue;
-        const x = (lng - HEX_ORIGIN_LNG) / lngScale / R;
-        const y = (lat - HEX_ORIGIN_LAT) / R;
-        const qf = (2 / 3) * x;
-        const rf = (-x / 3) + (Math.sqrt(3) / 3) * y;
-        const [q, r] = _hexRound(qf, rf);
-        const k = q + ',' + r;
-        const c = (counts.get(k) || 0) + count;
-        counts.set(k, c);
-        if (c > maxCount) maxCount = c;
-      }
-      if (maxCount < 1) maxCount = 1;
-
-      // Update the legend to reflect this render's real hex max — bins
-      // can collapse into a single hex (especially at low zoom) so the
-      // hex max is often greater than the server's bin max.
-      const lblMin = document.getElementById('heat-legend-min');
-      const lblMax = document.getElementById('heat-legend-max');
-      if (lblMin) lblMin.textContent = '1';
-      if (lblMax) lblMax.textContent = maxCount.toLocaleString();
-
-      // Render every hex in the viewport (including empty cells).
-      // (q,r) iterated relative to the fixed origin so cells stay put
-      // when the user pans.
-      const qMin = Math.floor((west - HEX_ORIGIN_LNG) / COL_STEP_LNG) - 1;
-      const qMax = Math.ceil((east - HEX_ORIGIN_LNG) / COL_STEP_LNG) + 1;
-      // Cell-count guard against pathological viewports. With the canvas
-      // renderer the practical browser limit is far higher than SVG's;
-      // 50k cells covers a wide NSW view at the smallest dynamic radius.
-      const MAX_CELLS = 50000;
-      let rendered = 0;
-      for (let q = qMin; q <= qMax && rendered < MAX_CELLS; q++) {
-        const cellLng = HEX_ORIGIN_LNG + q * COL_STEP_LNG;
-        const rMin = Math.floor((south - HEX_ORIGIN_LAT) / ROW_STEP_LAT - q / 2) - 1;
-        const rMax = Math.ceil((north - HEX_ORIGIN_LAT) / ROW_STEP_LAT - q / 2) + 1;
-        for (let r = rMin; r <= rMax && rendered < MAX_CELLS; r++) {
-          const cellLat = HEX_ORIGIN_LAT + (r + q / 2) * ROW_STEP_LAT;
-          if (cellLat < south - R || cellLat > north + R) continue;
-          const k = q + ',' + r;
-          const count = counts.get(k) || 0;
-          const isEmpty = count === 0;
-          // Log scaling — police-density distributions are heavily
-          // bottom-heavy (most hexes have 1-3 pings, a handful have
-          // 50+). Linear scaling left low and mid counts looking
-          // identical in the cyan-teal band; log spreads them across
-          // the full cyan→pink-red gradient.
-          const t = isEmpty ? 0 : (Math.log(count + 1) / Math.log(maxCount + 1));
-          const color = isEmpty ? 'rgba(148,163,184,0.55)' : _heatmapColorAt(t);
-          const op = _heatmapOpacityScale;  // user slider 0.10–1.00
-          const poly = L.polygon(_hexPolygon(cellLat, cellLng, R), {
-            renderer: _heatmapCanvasRenderer,   // canvas, not SVG
-            color: color,
-            weight: isEmpty ? 0.4 : 1.2,
-            opacity: (isEmpty ? 0.35 : 0.95) * op,
-            fillColor: isEmpty ? '#0f172a' : color,
-            fillOpacity: (isEmpty ? 0.05 : 0.45 + 0.45 * t) * op,
-            lineJoin: 'round',
-            interactive: !isEmpty,
-          });
-          if (count > 0) {
-            const unit = count === 1 ? 'ping' : 'pings';
-            poly.bindTooltip(
-              `<div class="hex-tt-label"><i class="fa-solid fa-fire" style="margin-right:4px;color:#f43f5e;"></i>Police Density</div>` +
-              `<div class="hex-tt-count">${count.toLocaleString()}<span class="hex-tt-unit">${unit}</span></div>`,
-              { direction: 'top', sticky: true, className: 'hex-tooltip' }
-            );
-          }
-          poly.addTo(policeHeatmapLayer);
-          rendered++;
-        }
-      }
-    }
-
-    // Debounced viewport listeners — wired once per heatmap activation.
-    let _hexRenderTimer = null;
-    function _scheduleHexRerender() {
-      clearTimeout(_hexRenderTimer);
-      _hexRenderTimer = setTimeout(_renderPoliceHexGrid, 180);
-    }
-    let _hexListenersInstalled = false;
-    function _ensureHexViewportListeners() {
-      if (_hexListenersInstalled) return;
-      _hexListenersInstalled = true;
-      map.on('moveend zoomend', _scheduleHexRerender);
-    }
-
-    function onPoliceHeatmapFilter() {
-      if (document.getElementById('chk-police-heatmap')?.checked) {
-        loadPoliceHeatmap(true);
-      }
-    }
-
-    // Waze retired. The UI that reached this is gone, and every call site is
-    // gated on controls that no longer exist — but a hard guard here means
-    // "the site makes no Waze requests" doesn't depend on that analysis being
-    // exhaustive. Delete this line to re-enable.
-    async function loadPoliceHeatmap(forceRefresh = false) {
-      if (WAZE_RETIRED) return;
-      const stats = document.getElementById('heat-stats');
-      // The floating filter panel reads #heat-stats at render time; if
-      // we mutate it without re-rendering, the panel keeps showing
-      // whatever was there at panel-open time (typically "Loading…"
-      // until the first network round-trip lands).
-      const setStats = (text) => {
-        if (stats) stats.textContent = text;
-        if (typeof refreshActiveFilterPanel === 'function') {
-          refreshActiveFilterPanel();
-        }
-      };
-      try {
-        const subs = _heatmapSelectedSubtypes();
-        // If user unchecks all three, render nothing (no points to show).
-        if (subs.length === 0) {
-          if (policeHeatmapLayer && map.hasLayer(policeHeatmapLayer)) {
-            map.removeLayer(policeHeatmapLayer);
-          }
-          policeHeatmapLayer = null;
-          _policeHeatmapData = null;
-          setStats('Pick at least one type.');
-          return;
-        }
-        const url = `${PROXY_BASE}/api/waze/police-heatmap?subtypes=${encodeURIComponent(subs.join(','))}`;
-        setStats('Loading…');
-        const res = await apiFetch(url);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        _policeHeatmapData = data;
-        const points = (data.points || []).map(([lat, lng, c]) => [lat, lng, c]);
-        // Cache hasn't been built yet (warming) or briefly busy with the
-        // refresh swap (busy) — show a status line and retry after a
-        // short backoff so the heatmap appears as soon as it's ready.
-        if (data.cache_status && data.cache_status !== 'ok' && points.length === 0) {
-          if (policeHeatmapLayer && map.hasLayer(policeHeatmapLayer)) {
-            map.removeLayer(policeHeatmapLayer);
-          }
-          policeHeatmapLayer = null;
-          setStats(
-            data.cache_status === 'warming'
-              ? 'Cache warming up… retrying in 10s'
-              : 'Cache busy — retrying in 5s',
-          );
-          const delay = data.cache_status === 'warming' ? 10000 : 5000;
-          setTimeout(() => {
-            if (document.getElementById('chk-police-heatmap')?.checked) {
-              loadPoliceHeatmap(true);
-            }
-          }, delay);
-          return;
-        }
-        if (policeHeatmapLayer && map.hasLayer(policeHeatmapLayer)) {
-          map.removeLayer(policeHeatmapLayer);
-        }
-        // Adaptive hex grid — tile the viewport with cells, including
-        // empty ones, and re-tile on every pan / zoom. The actual
-        // rendering lives in _renderPoliceHexGrid; here we just stash
-        // the data and trigger a render.
-        if (!policeHeatmapLayer) policeHeatmapLayer = L.layerGroup();
-        if (!map.hasLayer(policeHeatmapLayer)) map.addLayer(policeHeatmapLayer);
-        _ensureHexViewportListeners();
-        _renderPoliceHexGrid();
-        setStats(
-          `${points.length.toLocaleString()} bins · ${(data.total_records ?? 0).toLocaleString()} pings · ${data.days ?? 0}d window`,
-        );
-        // Legend min/max are set inside _renderPoliceHexGrid using the
-        // actual hex-max (which can be larger than data.max_count after
-        // multiple bins collapse into one hex at low zooms).
-      } catch (e) {
-        console.error('Police heatmap load failed', e);
-        setStats('Failed to load. Retry.');
-      }
-    }
-
     function toggleCamerasPanel() {
       const panel = document.getElementById('cameras-panel');
       const btn = document.getElementById('btn-cameras');
@@ -9999,7 +9406,7 @@ function initPagerHoursFromStorage() {
     // Stack open filter panels vertically (desktop only)
     function updateFilterPanelPositions() {
       if (window.innerWidth <= 900) return; // Mobile uses bottom-sheet CSS
-      const panels = ['pager-panel', 'outages-panel', 'beaches-panel', 'sharksmart-panel', 'hazards-panel', 'police-panel', 'cameras-panel', 'weather-panel'];
+      const panels = ['pager-panel', 'outages-panel', 'beaches-panel', 'sharksmart-panel', 'hazards-panel', 'cameras-panel', 'weather-panel'];
       let bottomOffset = 80; // Start above map type controls
       
       panels.forEach(panelId => {
@@ -10026,7 +9433,7 @@ function initPagerHoursFromStorage() {
     }
 
     // ---- Viewport culling (shared across the incident layers) ----------
-    // The hazards / police / roadwork layers intentionally don't cluster,
+    // The hazards / roadwork layers intentionally don't cluster,
     // so any of them can drag once it holds a lot of pins. Instead of
     // mounting every pin, each layer keeps only the pins inside the padded
     // viewport in the DOM and re-evaluates on map move. PAD over-renders a
@@ -10109,17 +9516,14 @@ function initPagerHoursFromStorage() {
     map.on('moveend', () => { for (const fn of _viewportCullers) fn(); });
 
     /** Rebuild the per-type sub-layers from the flat hazards list,
-     *  honouring source + (waze-only) subtype filters AND viewport
-     *  culling. Call after a load, after the user toggles a source /
-     *  subtype pill, or on map move. Delta-based (see note above). */
+     *  honouring the category / state / publisher filters AND viewport
+     *  culling. Call after a load, after the user toggles a filter
+     *  pill, or on map move. Delta-based (see note above). */
     function _rebuildHazardSubLayers() {
       const bounds = _viewportCullBounds();
       for (const m of _hazardMarkers) {
         const desired =
-          _hazardSelectedSources.has(m.source)
-          && !(m.source === 'waze' && m.subtypeLabel
-               && _hazardExcludedSubtypes.has(m.subtypeLabel))
-          && !(m.mainCategory && _hazardExcludedCategories.has(m.mainCategory))
+          !(m.mainCategory && _hazardExcludedCategories.has(m.mainCategory))
           && !(m.state && _hazardExcludedStates.has(m.state))
           && !(m.publisher && _hazardExcludedPublishers.has(m.publisher))
           && _cullEntryInView(m, bounds);
@@ -10129,56 +9533,7 @@ function initPagerHoursFromStorage() {
       }
     }
     registerViewportCuller(_rebuildHazardSubLayers);
-    function toggleHazardSourcePill(src) {
-      if (_hazardSelectedSources.has(src)) _hazardSelectedSources.delete(src);
-      else _hazardSelectedSources.add(src);
-      _rebuildHazardSubLayers();
-      refreshActiveFilterPanel();
-    }
-    window.toggleHazardSourcePill = toggleHazardSourcePill;
-    window.toggleHazardSubtypePill = function (label) {
-      if (_hazardExcludedSubtypes.has(label)) _hazardExcludedSubtypes.delete(label);
-      else _hazardExcludedSubtypes.add(label);
-      _rebuildHazardSubLayers();
-      refreshActiveFilterPanel();
-    };
     
-    function togglePoliceFilter(type, checked) {
-      policeFilters[type] = checked;
-
-      // Update sub-layer visibility
-      const subLayer = policeSubLayers[type];
-      if (subLayer) {
-        if (checked) {
-          policeLayer.addLayer(subLayer);
-        } else {
-          policeLayer.removeLayer(subLayer);
-        }
-      }
-      // The heatmap shares this filter — refetch when active.
-      if (document.getElementById('chk-police-heatmap')?.checked) {
-        loadPoliceHeatmap(true);
-      }
-    }
-
-    /** Project the flat police list into the per-category sub-layers,
-     *  honouring viewport culling. Category → sub-layer is fixed per
-     *  marker, so this is delta-based like the hazards/roadwork rebuilds.
-     *  The visible/hidden/camera filters still work by attaching or
-     *  detaching whole sub-layers in togglePoliceFilter — untouched. */
-    function _renderPoliceVisible() {
-      if (!policeSubLayers.visible) return; // not loaded yet
-      const bounds = _viewportCullBounds();
-      for (const m of _policeMarkers) {
-        const desired = _cullEntryInView(m, bounds);
-        const sl = policeSubLayers[m.category];
-        if (!sl) continue;
-        if (desired && !m._shown) { sl.addLayer(m.marker); m._shown = true; }
-        else if (!desired && m._shown) { sl.removeLayer(m.marker); m._shown = false; }
-      }
-    }
-    registerViewportCuller(_renderPoliceVisible);
-
     async function loadOutageData() {
       outagesLayer.clearLayers();
       
@@ -10542,7 +9897,7 @@ function initPagerHoursFromStorage() {
       return html;
     }
 
-    // Traffic Hazards - combines Live Traffic incidents + Waze hazards + jams
+    // Traffic Hazards - Live Traffic incidents and the feeds merged with them
     async function loadHazardsData(forceRefresh = false) {
       // Skip if layer already has data and not forcing refresh
       if (!forceRefresh && hazardsLayer.getLayers().length > 0) {
@@ -10551,7 +9906,7 @@ function initPagerHoursFromStorage() {
       }
       
       // Fetch data first, then check if it changed before clearing
-      let trafficData, wazeData;
+      let trafficData;
       try {
         const cached = layerCache.hazards_merged;
         const now = Date.now();
@@ -10733,20 +10088,13 @@ function initPagerHoursFromStorage() {
           };
           layerCache.hazards_merged = { data: trafficData, timestamp: now };
         }
-        
-        // Waze retired — this layer keeps its LiveTraffic half, which is the
-        // majority of it. An empty collection is used rather than unpicking
-        // the merge below, so the accident/hazard/closure sub-layer logic is
-        // untouched and this is one line to reverse if Waze ever returns.
-        wazeData = { features: [] };
       } catch (e) {
         console.error('Error fetching hazards data:', e);
         return;
       }
       
       // Check if data has changed - skip redraw if unchanged (no flash!)
-      const combinedData = { traffic: trafficData, waze: wazeData };
-      if (!hasDataChanged('hazards', combinedData) && hazardsLayer.getLayers().length > 0) {
+      if (!hasDataChanged('hazards', trafficData) && hazardsLayer.getLayers().length > 0) {
         console.log('Hazards data unchanged, skipping redraw');
         return;
       }
@@ -10763,21 +10111,9 @@ function initPagerHoursFromStorage() {
       _hazardMarkers.length = 0;
 
       let totalCount = 0;
-      let jamCount = 0;
       
       // Helper to determine which sub-layer a marker belongs to
       function getHazardCategory(props) {
-        const isWaze = props.source === 'waze';
-        const wazeType = (props.wazeType || '').toUpperCase();
-        const subtype = (props.wazeSubtype || '').toUpperCase();
-        
-        // For Waze data
-        if (isWaze) {
-          if (wazeType === 'ACCIDENT' || subtype.includes('ACCIDENT')) return 'accident';
-          if (wazeType === 'ROAD_CLOSED' || subtype.includes('ROAD_CLOSED') || wazeType === 'JAM') return 'closures';
-          return 'hazard'; // Default for other hazards
-        }
-        
         // For Live Traffic data - categorize by mainCategory/subCategoryB
         const mainCat = (props.mainCategory || '').toLowerCase();
         const subCat = (props.subCategoryB || '').toLowerCase();
@@ -10800,100 +10136,9 @@ function initPagerHoursFromStorage() {
         return `<div class="${pulseClass}" style="background:${bgColor}; width:24px; height:24px; border-radius:${radius}; border:2px solid #fff; box-shadow:0 2px 6px rgba(0,0,0,0.4), 0 0 12px ${bgColor}80; display:flex; align-items:center; justify-content:center;"><i class="${icon}" style="font-size:12px; color:#fff; text-shadow:0 1px 2px rgba(0,0,0,0.3);"></i></div>`;
       }
       
-      // Helper to get icon based on source and type
+      // Helper to get icon based on type
       function getHazardIcon(props) {
         const pulse = isWithinMinutes(props.created, 15);
-        const isWaze = props.source === 'waze';
-        
-        // Waze-specific icons based on type/subtype
-        if (isWaze) {
-          const subtype = (props.wazeSubtype || '').toUpperCase();
-          const wazeType = (props.wazeType || '').toUpperCase();
-          
-          // Road closed - red square with barrier
-          if (wazeType === 'ROAD_CLOSED' || subtype.includes('ROAD_CLOSED')) {
-            return createMarkerIcon('fa-solid fa-road-barrier', '#dc2626', pulse, true);
-          }
-          
-          // Accidents - red crash
-          if (wazeType === 'ACCIDENT' || subtype.includes('ACCIDENT')) {
-            return createMarkerIcon('fa-solid fa-car-burst', '#ef4444', pulse);
-          }
-          
-          // Traffic jams - purple. Cover the full JAM_* subtype family
-          // (JAM_HEAVY_TRAFFIC, JAM_STAND_STILL_TRAFFIC, etc) so
-          // jam-flavoured hazards always render the jam icon regardless
-          // of which wazeType bucket they landed in.
-          if (wazeType === 'JAM' || subtype.startsWith('JAM_')) {
-            return createMarkerIcon('fa-solid fa-bars-staggered', '#a855f7', pulse);
-          }
-          
-          // Pothole
-          if (subtype.includes('POT_HOLE') || subtype.includes('POTHOLE')) {
-            return createMarkerIcon('fa-solid fa-circle-exclamation', '#f97316', pulse);
-          }
-          
-          // Object on road
-          if (subtype.includes('OBJECT') || subtype === 'HAZARD_ON_ROAD') {
-            return createMarkerIcon('fa-solid fa-cube', '#f97316', pulse);
-          }
-          
-          // Car stopped / on shoulder
-          if (subtype.includes('CAR_STOPPED') || subtype.includes('SHOULDER')) {
-            return createMarkerIcon('fa-solid fa-car', '#eab308', pulse);
-          }
-          
-          // Lane closed
-          if (subtype.includes('LANE_CLOSED')) {
-            return createMarkerIcon('fa-solid fa-xmark', '#f97316', pulse);
-          }
-          
-          // Traffic light fault
-          if (subtype.includes('TRAFFIC_LIGHT')) {
-            return createMarkerIcon('fa-solid fa-traffic-light', '#f97316', pulse);
-          }
-          
-          // Animals on road
-          if (subtype.includes('ANIMAL')) {
-            return createMarkerIcon('fa-solid fa-paw', '#eab308', pulse);
-          }
-          
-          // Weather hazards
-          if (subtype.includes('FOG')) {
-            return createMarkerIcon('fa-solid fa-smog', '#64748b', pulse);
-          }
-          if (subtype.includes('FLOOD') || subtype.includes('RAIN') || subtype.includes('MONSOON')) {
-            return createMarkerIcon('fa-solid fa-water', '#3b82f6', pulse);
-          }
-          if (subtype.includes('ICE') || subtype.includes('FREEZING') || subtype.includes('SNOW')) {
-            return createMarkerIcon('fa-solid fa-snowflake', '#06b6d4', pulse);
-          }
-          if (subtype.includes('HAIL')) {
-            return createMarkerIcon('fa-solid fa-cloud-meatball', '#64748b', pulse);
-          }
-          if (subtype.includes('WIND') || subtype.includes('TORNADO') || subtype.includes('HURRICANE')) {
-            return createMarkerIcon('fa-solid fa-wind', '#64748b', pulse);
-          }
-          if (subtype.includes('HEAT')) {
-            return createMarkerIcon('fa-solid fa-temperature-high', '#ef4444', pulse);
-          }
-          if (subtype.includes('WEATHER')) {
-            return createMarkerIcon('fa-solid fa-cloud-bolt', '#3b82f6', pulse);
-          }
-          
-          // Missing sign
-          if (subtype.includes('MISSING_SIGN')) {
-            return createMarkerIcon('fa-solid fa-sign-hanging', '#f97316', pulse);
-          }
-          
-          // Oil on road
-          if (subtype.includes('OIL')) {
-            return createMarkerIcon('fa-solid fa-droplet', '#78716c', pulse);
-          }
-          
-          // Default hazard - orange warning triangle
-          return createMarkerIcon('fa-solid fa-triangle-exclamation', '#f97316', pulse);
-        }
         
         // Live Traffic NSW - use incident subtype
         const subCat = (props.subCategoryB || props.mainCategory || '').toLowerCase();
@@ -10917,11 +10162,9 @@ function initPagerHoursFromStorage() {
         return createMarkerIcon('fa-solid fa-circle-exclamation', '#ef4444', pulse);
       }
       
-      // Beach-style hazard tooltip — same sectioned layout for both
-      // Waze and LiveTraffic feeds. Coordinates come from the calling
+      // Beach-style hazard tooltip. Coordinates come from the calling
       // marker so the Location section can include them.
       function buildHazardTooltip(props, lat, lon) {
-        const isWaze = props.source === 'waze';
         // Prefer the record's own title ('Police incident', 'Hazard:
         // Bridge or culvert damaged') over the raw category key
         // ('generalHazards'), and title-case a category fallback so a
@@ -10932,20 +10175,18 @@ function initPagerHoursFromStorage() {
         const header = _ttHeader(
           'fa-solid fa-triangle-exclamation',
           hazardHeader,
-          isWaze ? '#25d366' : '#3b82f6',
-          isWaze ? '#25d366' : '#3b82f6',
-          isWaze ? '#000' : '#fff',
-          isWaze ? 'WAZE' : 'LIVE TRAFFIC'
+          '#3b82f6',
+          '#3b82f6',
+          '#fff',
+          'LIVE TRAFFIC'
         );
 
         let body = '';
 
         // Description / advice block, when the feed gives us a sentence
         // that isn't already captured by the title.
-        const descText = isWaze
-          ? (props.title && props.title !== props.displayType ? props.title : '')
-          : (props.adviceA || props.otherAdvice || '');
-        const descExtra = isWaze ? '' : (props.adviceB && props.adviceB !== props.adviceA ? props.adviceB : '');
+        const descText = props.adviceA || props.otherAdvice || '';
+        const descExtra = props.adviceB && props.adviceB !== props.adviceA ? props.adviceB : '';
         if (descText || descExtra) {
           let descHtml = '';
           if (descText) descHtml += `<div style="color:#e2e8f0; font-size:12px;">${escapeHtml(descText)}</div>`;
@@ -10953,36 +10194,18 @@ function initPagerHoursFromStorage() {
           body += _ttSection('Details', '#67e8f9', '103,232,249', descHtml);
         }
 
-        // Location: Street + suburb + coords. Waze ships these as
-        // street/city; LiveTraffic uses roads/suburb. Fall back to
-        // props.location when Waze didn't include a structured street.
-        const street = isWaze ? (props.street || props.location || '') : (props.roads || '');
-        const suburb = isWaze ? (props.city || '') : (props.suburb || props.region || '');
+        // Location: roads + suburb + coords.
+        const street = props.roads || '';
+        const suburb = props.suburb || props.region || '';
         body += _ttLocationSection(street, suburb, lat, lon);
 
-        // Type / Subtype — formatted for both feeds so the labels read
-        // as English.
-        let typeLabel = '', subtypeLabel = '';
-        if (isWaze) {
-          typeLabel = formatWazeType(props.wazeType || '');
-          subtypeLabel = formatWazeType(props.wazeSubtype || '');
-        } else {
-          typeLabel = _titleCaseCat(props.mainCategory || '');
-          subtypeLabel = props.subCategory || props.subCategoryB || '';
-        }
+        // Type / Subtype — formatted so the labels read as English.
+        const typeLabel = _titleCaseCat(props.mainCategory || '');
+        const subtypeLabel = props.subCategory || props.subCategoryB || '';
         body += _ttTypeSection(typeLabel, subtypeLabel, '#fb923c', '251,146,60');
 
-        // Waze-only crowdsourced confidence row.
-        if (isWaze && (props.thumbsUp > 0 || props.reliability > 0)) {
-          let conf = `<div style="display:grid; grid-template-columns:repeat(${(props.thumbsUp > 0 && props.reliability > 0) ? 2 : 1}, 1fr); gap:4px;">`;
-          if (props.thumbsUp > 0) conf += _ttTile('Confirmed', '👍 ' + props.thumbsUp, '#4ade80');
-          if (props.reliability > 0) conf += _ttTile('Reliability', props.reliability + '/10', '#fbbf24');
-          conf += `</div>`;
-          body += _ttSection('Confidence', '#86efac', '74,222,128', conf);
-        }
-
-        // LiveTraffic-only "what does this do to the road" line.
-        if (!isWaze && (props.impactingNetwork || props.arrangement)) {
+        // "What does this do to the road" line.
+        if (props.impactingNetwork || props.arrangement) {
           body += _ttSection(
             'Network impact', '#7dd3fc', '125,211,252',
             `<div style="color:#e2e8f0; font-size:11px;"><i class="fa-solid fa-road" style="margin-right:4px;"></i>${escapeHtml(props.impactingNetwork || props.arrangement)}</div>`
@@ -11000,70 +10223,6 @@ function initPagerHoursFromStorage() {
         body += _ttTimingSection(props.created, props.end, props.lastUpdated);
 
         return _ttWrap(header, body);
-      }
-      
-      // Beach-style jam tooltip. lat/lon point at the midpoint of the
-      // jam polyline so the Location section can show coordinates.
-      function buildJamTooltip(props, lat, lon) {
-        const level = props.level || 0;
-        const severityText = level >= 4 ? 'Heavy Traffic' : level >= 2 ? 'Moderate Traffic' : 'Light Traffic';
-        const severityColor = level >= 4 ? '#ef4444' : level >= 2 ? '#f97316' : '#eab308';
-
-        const header = _ttHeader(
-          'fa-solid fa-car-burst', severityText, severityColor,
-          '#25d366', '#000', 'WAZE'
-        );
-
-        let body = '';
-        body += _ttLocationSection(props.street || '', props.city || '', lat, lon);
-
-        // Type / Subtype — jams map to a fixed Type (Traffic Jam) with
-        // the severity bucket as the Subtype, so the Classification
-        // section is consistent with the hazard tooltip.
-        body += _ttTypeSection('Traffic Jam', severityText, severityColor, '168,85,247');
-
-        // Metrics: speed / length / delay.
-        const hasMetrics = (props.speed !== undefined && props.speed !== null) || props.lengthKm || props.delayMins > 0;
-        if (hasMetrics) {
-          const tiles = [];
-          if (props.speed !== undefined && props.speed !== null) {
-            const speedColor = props.speed < 20 ? '#ef4444' : props.speed < 40 ? '#f97316' : '#22c55e';
-            tiles.push(_ttTile('Speed', `${props.speed} km/h`, speedColor));
-          }
-          if (props.lengthKm) tiles.push(_ttTile('Length', `${props.lengthKm} km`, '#cbd5e1'));
-          if (props.delayMins > 0) tiles.push(_ttTile('Delay', `${props.delayMins} min`, '#f87171'));
-          const cols = tiles.length;
-          let metricsHtml = `<div style="display:grid; grid-template-columns:repeat(${cols}, 1fr); gap:4px;">${tiles.join('')}</div>`;
-
-          // Severity bar 1..5
-          if (level > 0) {
-            metricsHtml += `<div style="margin-top:6px; display:flex; align-items:center; gap:8px;">`;
-            metricsHtml += `<span style="color:#94a3b8; font-size:10px; font-weight:600;">Level ${level}/5</span>`;
-            metricsHtml += `<div style="flex:1; display:flex; gap:2px;">`;
-            for (let i = 1; i <= 5; i++) {
-              const barColor = i <= level ? severityColor : 'rgba(148,163,184,0.2)';
-              metricsHtml += `<div style="flex:1; height:5px; border-radius:2px; background:${barColor};"></div>`;
-            }
-            metricsHtml += `</div></div>`;
-          }
-          body += _ttSection('Traffic', severityColor, '168,85,247', metricsHtml);
-        }
-
-        body += _ttTimingSection(props.created, null, null);
-        return _ttWrap(header, body);
-      }
-      
-      // Get jam color based on severity level
-      function getJamColor(level) {
-        const colors = {
-          0: '#22c55e', // Free flow - green
-          1: '#84cc16', // Light - lime
-          2: '#eab308', // Moderate - yellow
-          3: '#f97316', // Heavy - orange
-          4: '#ef4444', // Standstill - red
-          5: '#dc2626'  // Blocked - dark red
-        };
-        return colors[level] || '#f97316';
       }
       
       try {
@@ -11088,7 +10247,7 @@ function initPagerHoursFromStorage() {
                 offset: [0, -10],
                 opacity: 0.95
               });
-              _hazardMarkers.push({ marker, type: category, source: 'livetraffic', subtypeLabel: null,
+              _hazardMarkers.push({ marker, type: category,
                 state: props.state || '',
                 publisher: props.publisher || '',
                 // Colour for the zoomed-out canvas dot, matching the bucket.
@@ -11106,76 +10265,6 @@ function initPagerHoursFromStorage() {
         console.error('Traffic incidents error', e);
       }
 
-      try {
-        // Use cached Waze data if available, otherwise fetch
-        // Add point hazards (accidents, road closures, hazards) - using data already fetched
-        // Note: Waze flood items (FLOOD subtype) are excluded here and shown on the Floods layer instead
-        if (wazeData && wazeData.features) {
-          wazeData.features.forEach(feature => {
-            if (feature.geometry && feature.geometry.coordinates) {
-              const [lon, lat] = feature.geometry.coordinates;
-              if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
-              const props = feature.properties || {};
-              props.source = 'waze'; // Ensure source is set for Waze data
-
-              // Skip flood-type hazards - they belong on the Floods layer
-              const _subtype = (props.wazeSubtype || '').toUpperCase();
-              if (_subtype.includes('FLOOD')) return;
-
-              const category = getHazardCategory(props);
-              const icon = L.divIcon({
-                className: 'custom-pin',
-                html: getHazardIcon(props),
-                iconSize: [24, 24],
-                iconAnchor: [12, 12]
-              });
-              const marker = L.marker([lat, lon], { icon });
-              marker.bindTooltip(buildHazardTooltip(props, lat, lon), {
-                direction: 'top',
-                offset: [0, -10],
-                opacity: 0.95
-              });
-              const subtypeLabel = formatWazeType(props.wazeSubtype || props.wazeType || '') || null;
-              _hazardMarkers.push({ marker, type: category, source: 'waze', subtypeLabel, latlng: L.latLng(lat, lon) });
-              totalCount++;
-            }
-          });
-        }
-
-        // Add jam polylines (traffic slowdowns)
-        if (wazeData && wazeData.jams) {
-          wazeData.jams.forEach(jam => {
-            if (jam.geometry && jam.geometry.coordinates && jam.geometry.type === 'LineString') {
-              const props = jam.properties || {};
-              props.source = 'waze'; // Ensure source is set for Waze data
-              const color = getJamColor(props.level || 0);
-              
-              // Convert [lon, lat] to [lat, lon] for Leaflet
-              const latLngs = jam.geometry.coordinates.map(coord => [coord[1], coord[0]]);
-              if (!latLngs.length) return;
-
-              const polyline = L.polyline(latLngs, {
-                color: color,
-                weight: 5,
-                opacity: 0.8,
-                lineCap: 'round',
-                lineJoin: 'round'
-              });
-
-              const jamMid = latLngs[Math.floor(latLngs.length / 2)] || latLngs[0];
-              polyline.bindTooltip(buildJamTooltip(props, jamMid[0], jamMid[1]), {
-                sticky: true,
-                opacity: 0.95
-              });
-              _hazardMarkers.push({ marker: polyline, type: 'closures', source: 'waze', subtypeLabel: 'Traffic Jam', mbounds: polyline.getBounds() });
-              jamCount++;
-            }
-          });
-        }
-      } catch (e) {
-        console.error('Waze hazards error', e);
-      }
-
       _rebuildHazardSubLayers();
 
       // Add sub-layers to main layer based on filter state
@@ -11185,155 +10274,15 @@ function initPagerHoursFromStorage() {
         }
       });
       
-      console.log(`Loaded ${totalCount} traffic hazards + ${jamCount} jams (Live Traffic + Waze)`);
+      console.log(`Loaded ${totalCount} traffic hazards`);
     }
 
-    // Police Layer - Waze police reports
-    async function loadPoliceData(forceRefresh = false) {
-      if (WAZE_RETIRED) return;   // see loadPoliceHeatmap
-      // Skip if layer already has data and not forcing refresh
-      if (!forceRefresh && policeLayer.getLayers().length > 0) {
-        console.log('Police layer already loaded, skipping fetch');
-        return;
-      }
-      
-      // Fetch data first, then check if it changed before clearing
-      let data;
-      try {
-        const cached = layerCache.waze_police;
-        const now = Date.now();
-        if (cached.data && (now - cached.timestamp) < LAYER_CACHE_TTL) {
-          data = cached.data;
-        } else {
-          const res = await apiFetch(`${PROXY_BASE}/api/waze/police`);
-          data = await res.json();
-          layerCache.waze_police = { data, timestamp: now };
-        }
-      } catch (e) {
-        console.error('Error fetching police data:', e);
-        return;
-      }
-      
-      // Check if data has changed - skip redraw if unchanged (no flash!)
-      if (!hasDataChanged('police', data) && policeLayer.getLayers().length > 0) {
-        console.log('Police data unchanged, skipping redraw');
-        return;
-      }
-      
-      policeLayer.clearLayers();
-      
-      // Create sub-layers for each filter type
-      policeSubLayers = {
-        visible: L.layerGroup(),
-        hidden: L.layerGroup(),
-        camera: L.layerGroup()
-      };
-      // Reset the flat marker list — repopulated below, then projected
-      // into the sub-layers by _renderPoliceVisible() (viewport-culled).
-      _policeMarkers.length = 0;
-
-      // Helper to determine which sub-layer a marker belongs to
-      function getPoliceCategory(subtype) {
-        const st = (subtype || '').toLowerCase();
-        if (st.includes('camera') || st.includes('mobile_camera')) return 'camera';
-        if (st.includes('hiding')) return 'hidden';
-        return 'visible';
-      }
-      
-      try {
-        // Defensive: handle API errors or alternate response formats
-        const features = Array.isArray(data?.features) ? data.features : [];
-        if (data && !Array.isArray(data.features) && data.features !== undefined) {
-          console.warn('Police API returned unexpected format:', typeof data.features);
-        }
-        features.forEach(feature => {
-            if (feature.geometry && feature.geometry.coordinates) {
-              const [lon, lat] = feature.geometry.coordinates;
-              if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
-              const props = feature.properties || {};
-              const pulseClass = isWithinMinutes(props.created, 15) ? 'rfs-pulse' : '';
-              const subtype = (props.wazeSubtype || '').toLowerCase();
-              const category = getPoliceCategory(subtype);
-              
-              // Different icons for different police types - with background
-              let iconHtml;
-              const policeColor = '#3b82f6';
-              const baseStyle = `background:${policeColor}; width:24px; height:24px; border-radius:50%; border:2px solid #fff; box-shadow:0 2px 6px rgba(0,0,0,0.4), 0 0 12px ${policeColor}80; display:flex; align-items:center; justify-content:center;`;
-              const iconStyle = `font-size:12px; color:#fff; text-shadow:0 1px 2px rgba(0,0,0,0.3);`;
-              
-              if (category === 'camera') {
-                iconHtml = `<div class="${pulseClass}" style="${baseStyle}"><i class="fa-solid fa-video" style="${iconStyle}"></i></div>`;
-              } else if (category === 'hidden') {
-                iconHtml = `<div class="${pulseClass}" style="${baseStyle}"><i class="fa-solid fa-eye-slash" style="${iconStyle}"></i></div>`;
-              } else {
-                iconHtml = `<div class="${pulseClass}" style="${baseStyle}"><i class="fa-solid fa-shield-halved" style="${iconStyle}"></i></div>`;
-              }
-              
-              const icon = L.divIcon({
-                className: 'custom-pin',
-                html: iconHtml,
-                iconSize: [24, 24],
-                iconAnchor: [12, 12]
-              });
-              const marker = L.marker([lat, lon], { icon });
-              _policeMarkers.push({ marker, category, latlng: L.latLng(lat, lon) });
-              
-              // Beach-style police tooltip — shares header/section helpers
-              // with hazard/roadwork so a Waze-fed pin reads the same
-              // whether the user lands on Police, Hazards, or Roadwork.
-              const policeType = subtype.includes('camera') ? 'Speed Camera' :
-                                 subtype.includes('hiding') ? 'Police (Hidden)' : 'Police (Visible)';
-              const policeHeader = _ttHeader(
-                'fa-solid fa-shield-halved', policeType, '#3b82f6',
-                '#25d366', '#000', 'WAZE'
-              );
-              let policeBody = '';
-              policeBody += _ttLocationSection(props.street || props.location || '', props.city || '', lat, lon);
-              policeBody += _ttTypeSection(
-                formatWazeType(props.wazeType || 'POLICE'),
-                formatWazeType(props.wazeSubtype || ''),
-                '#60a5fa', '59,130,246'
-              );
-              if (props.thumbsUp > 0 || props.reliability > 0) {
-                let conf = `<div style="display:grid; grid-template-columns:repeat(${(props.thumbsUp > 0 && props.reliability > 0) ? 2 : 1}, 1fr); gap:4px;">`;
-                if (props.thumbsUp > 0) conf += _ttTile('Confirmed', '👍 ' + props.thumbsUp, '#4ade80');
-                if (props.reliability > 0) conf += _ttTile('Reliability', props.reliability + '/10', '#fbbf24');
-                conf += `</div>`;
-                policeBody += _ttSection('Confidence', '#86efac', '74,222,128', conf);
-              }
-              policeBody += _ttTimingSection(props.created, null, null);
-              const tooltip = _ttWrap(policeHeader, policeBody);
-
-              marker.bindTooltip(tooltip, {
-                direction: 'top',
-                offset: [0, -10],
-                opacity: 0.95
-              });
-            }
-          });
-        // Project the flat list into the category sub-layers, honouring
-        // the current viewport (culls off-screen pins out of the DOM).
-        _renderPoliceVisible();
-        // Add sub-layers to main layer based on filter state
-        const totalMarkers = _policeMarkers.length;
-        Object.keys(policeSubLayers).forEach(type => {
-          if (policeFilters[type]) {
-            policeLayer.addLayer(policeSubLayers[type]);
-          }
-        });
-
-        console.log(`Loaded ${totalMarkers} police reports`);
-      } catch (e) {
-        console.error('Police data error', e);
-      }
-    }
-
-    // Roadwork - combines Live Traffic roadwork + Waze construction
+    // Roadwork - state-road and council roadwork
     async function loadRoadworkData(forceRefresh = false) {
       // Skip if layer already has data and not forcing refresh.
       // "Loaded" is judged by the flat marker list, NOT
       // roadworkLayer.getLayers(): markers mount directly onto the layer
-      // (no sub-layergroups like hazards/police), so under viewport
+      // (no sub-layergroups like hazards), so under viewport
       // culling a view with zero roadwork pins reads as an empty layer
       // and would re-trigger the loader on every toggle/refresh.
       if (!forceRefresh && _roadworkMarkers.length > 0) {
@@ -11342,7 +10291,7 @@ function initPagerHoursFromStorage() {
       }
       
       // Fetch data first, then check if it changed before clearing
-      let trafficData, wazeData;
+      let trafficData;
       try {
         const now = Date.now();
         const cached = layerCache.roadwork_merged;
@@ -11369,11 +10318,6 @@ function initPagerHoursFromStorage() {
           };
           layerCache.roadwork_merged = { data: trafficData, timestamp: now };
         }
-        
-        // Waze retired — LiveTraffic roadwork is unaffected. See the hazards
-        // loader above for why this is an empty collection rather than a
-        // rewrite of the merge.
-        wazeData = { features: [] };
       } catch (e) {
         console.error('Error fetching roadwork data:', e);
         return;
@@ -11381,8 +10325,7 @@ function initPagerHoursFromStorage() {
       
       // Check if data has changed - skip redraw if unchanged (no flash!)
       // Gate on the flat list, not getLayers() — see loader head note.
-      const combinedData = { traffic: trafficData, waze: wazeData };
-      if (!hasDataChanged('roadwork', combinedData) && _roadworkMarkers.length > 0) {
+      if (!hasDataChanged('roadwork', trafficData) && _roadworkMarkers.length > 0) {
         console.log('Roadwork data unchanged, skipping redraw');
         return;
       }
@@ -11394,8 +10337,7 @@ function initPagerHoursFromStorage() {
       let totalCount = 0;
 
       // Normalise a raw feature's type into a small, readable bucket.
-      // Waze ships ALL_CAPS_WITH_UNDERSCORES; Live Traffic ships free
-      // text. The fallback bucket is "Roadwork" so anything we can't
+      // The feeds ship free text. The fallback bucket is "Roadwork" so anything we can't
       // classify still shows up under a sensible label.
       // Fixed roadwork taxonomy. Order matters — first match wins, so the
       // sharper patterns sit above the broader ones.
@@ -11416,13 +10358,8 @@ function initPagerHoursFromStorage() {
         ['Scheduled Roadwork',     /scheduled/],
       ];
 
-      const _roadworkClassify = (props, isWaze) => {
+      const _roadworkClassify = (props) => {
         const norm = (s) => String(s || '').trim();
-        if (isWaze) {
-          const sub = norm(props.wazeSubtype).replace(/^CONSTRUCTION_?/i, '').replace(/_/g, ' ').trim();
-          if (sub.toUpperCase() === 'NONE' || !sub) return 'Construction';
-          return sub.toLowerCase().replace(/(^|\s)\w/g, c => c.toUpperCase());
-        }
         // The merged feeds describe the same work in wildly different
         // vocabularies — the state feed uses ~15 curated types, the works
         // aggregate free-texts everything from 'Asphalt Works' to '26
@@ -11440,11 +10377,10 @@ function initPagerHoursFromStorage() {
         return 'General Roadwork';
       };
       
-      // Beach-style roadwork tooltip (Waze + LiveTraffic). Same layout
-      // as buildHazardTooltip with an extra Schedule tile when the
-      // LiveTraffic feed includes a periods[] array.
+      // Beach-style roadwork tooltip. Same layout as buildHazardTooltip
+      // with an extra Schedule tile when the feed includes a periods[]
+      // array.
       function buildRoadworkTooltip(props, lat, lon) {
-        const isWaze = props.source === 'waze';
         // Same header rule as hazards: the record's own title beats the
         // raw category key, and the fallback is title-cased.
         const _rwHeaderRaw = [props.displayType, props.headline, props.title, props.displayName, props.mainCategory]
@@ -11452,18 +10388,16 @@ function initPagerHoursFromStorage() {
         const roadworkHeader = _rwHeaderRaw === props.mainCategory ? _titleCaseCat(_rwHeaderRaw) : _rwHeaderRaw;
         const header = _ttHeader(
           'fa-solid fa-person-digging', roadworkHeader,
-          isWaze ? '#f97316' : '#eab308',
-          isWaze ? '#25d366' : '#3b82f6',
-          isWaze ? '#000' : '#fff',
-          isWaze ? 'WAZE' : 'LIVE TRAFFIC'
+          '#eab308',
+          '#3b82f6',
+          '#fff',
+          'LIVE TRAFFIC'
         );
 
         let body = '';
 
-        const descText = isWaze
-          ? (props.title && props.title !== props.displayType ? props.title : '')
-          : (props.adviceA || props.otherAdvice || '');
-        const descExtra = isWaze ? '' : (props.adviceB && props.adviceB !== props.adviceA ? props.adviceB : '');
+        const descText = props.adviceA || props.otherAdvice || '';
+        const descExtra = props.adviceB && props.adviceB !== props.adviceA ? props.adviceB : '';
         if (descText || descExtra) {
           let descHtml = '';
           if (descText) descHtml += `<div style="color:#e2e8f0; font-size:12px;">${escapeHtml(descText)}</div>`;
@@ -11471,22 +10405,16 @@ function initPagerHoursFromStorage() {
           body += _ttSection('Details', '#fcd34d', '252,211,77', descHtml);
         }
 
-        const street = isWaze ? (props.street || props.location || '') : (props.roads || '');
-        const suburb = isWaze ? (props.city || '') : (props.suburb || props.region || '');
+        const street = props.roads || '';
+        const suburb = props.suburb || props.region || '';
         body += _ttLocationSection(street, suburb, lat, lon);
 
-        let typeLabel = '', subtypeLabel = '';
-        if (isWaze) {
-          typeLabel = formatWazeType(props.wazeType || '');
-          subtypeLabel = formatWazeType(props.wazeSubtype || '');
-        } else {
-          typeLabel = _titleCaseCat(props.mainCategory || '');
-          subtypeLabel = props.subCategory || props.subCategoryB || '';
-        }
+        const typeLabel = _titleCaseCat(props.mainCategory || '');
+        const subtypeLabel = props.subCategory || props.subCategoryB || '';
         body += _ttTypeSection(typeLabel, subtypeLabel, '#fb923c', '251,146,60');
 
-        // LiveTraffic-only schedule block (periods[]).
-        if (!isWaze && Array.isArray(props.periods) && props.periods.length > 0) {
+        // Schedule block (periods[]).
+        if (Array.isArray(props.periods) && props.periods.length > 0) {
           const shortDay = d => {
             if (!d) return '';
             const abbr = {
@@ -11513,16 +10441,7 @@ function initPagerHoursFromStorage() {
           }
         }
 
-        // Waze-only confidence row.
-        if (isWaze && (props.thumbsUp > 0 || props.reliability > 0)) {
-          let conf = `<div style="display:grid; grid-template-columns:repeat(${(props.thumbsUp > 0 && props.reliability > 0) ? 2 : 1}, 1fr); gap:4px;">`;
-          if (props.thumbsUp > 0) conf += _ttTile('Confirmed', '👍 ' + props.thumbsUp, '#4ade80');
-          if (props.reliability > 0) conf += _ttTile('Reliability', props.reliability + '/10', '#fbbf24');
-          conf += `</div>`;
-          body += _ttSection('Confidence', '#86efac', '74,222,128', conf);
-        }
-
-        if (!isWaze && (props.impactingNetwork || props.arrangement)) {
+        if (props.impactingNetwork || props.arrangement) {
           body += _ttSection(
             'Network impact', '#7dd3fc', '125,211,252',
             `<div style="color:#e2e8f0; font-size:11px;"><i class="fa-solid fa-road" style="margin-right:4px;"></i>${escapeHtml(props.impactingNetwork || props.arrangement)}</div>`
@@ -11543,10 +10462,10 @@ function initPagerHoursFromStorage() {
       }
       
       // Helper for roadwork icons
-      function getRoadworkIcon(props, isWaze = false) {
+      function getRoadworkIcon(props) {
         const pulse = isWithinMinutes(props.created, 15);
         const pulseClass = pulse ? 'rfs-pulse' : '';
-        const color = isWaze ? '#f97316' : '#eab308';
+        const color = '#eab308';
         return `<div class="${pulseClass}" style="background:${color}; width:24px; height:24px; border-radius:50%; border:2px solid #fff; box-shadow:0 2px 6px rgba(0,0,0,0.4), 0 0 12px ${color}80; display:flex; align-items:center; justify-content:center;"><i class="fa-solid fa-person-digging" style="font-size:12px; color:#fff; text-shadow:0 1px 2px rgba(0,0,0,0.3);"></i></div>`;
       }
       
@@ -11557,7 +10476,7 @@ function initPagerHoursFromStorage() {
               const [lon, lat] = feature.geometry.coordinates;
               if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
               const props = feature.properties || {};
-              const type = _roadworkClassify(props, false);
+              const type = _roadworkClassify(props);
               // Council roadwork comes from NSW's council feed.
               const state = props.state || 'NSW';
               // An SA job lists its sites along the road: a pin at each
@@ -11573,7 +10492,7 @@ function initPagerHoursFromStorage() {
               pins.forEach(([plat, plon], i) => {
                 const icon = L.divIcon({
                   className: 'custom-pin',
-                  html: getRoadworkIcon(props, false),
+                  html: getRoadworkIcon(props),
                   iconSize: [24, 24],
                   iconAnchor: [12, 12]
                 });
@@ -11586,7 +10505,6 @@ function initPagerHoursFromStorage() {
                 _roadworkMarkers.push({
                   marker,
                   type,
-                  source: 'livetraffic',
                   state,
                   // The second end pin is the same record.
                   extra: i > 0,
@@ -11612,7 +10530,7 @@ function initPagerHoursFromStorage() {
                 });
                 road.bindTooltip(buildRoadworkTooltip(props, lat, lon), { sticky: true, opacity: 0.95 });
                 _roadworkMarkers.push({
-                  marker: road, type, source: 'livetraffic', state,
+                  marker: road, type, state,
                   extra: true, line: true, mbounds: road.getBounds(),
                 });
               }
@@ -11622,39 +10540,6 @@ function initPagerHoursFromStorage() {
         }
       } catch (e) {
         console.error('Traffic roadwork error', e);
-      }
-
-      try {
-        if (wazeData && wazeData.features) {
-          wazeData.features.forEach(feature => {
-            if (feature.geometry && feature.geometry.coordinates) {
-              const [lon, lat] = feature.geometry.coordinates;
-              if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
-              const props = feature.properties || {};
-              const icon = L.divIcon({
-                className: 'custom-pin',
-                html: getRoadworkIcon(props, true),
-                iconSize: [24, 24],
-                iconAnchor: [12, 12]
-              });
-              const marker = L.marker([lat, lon], { icon });
-              marker.bindTooltip(buildRoadworkTooltip(props, lat, lon), {
-                direction: 'top',
-                offset: [0, -10],
-                opacity: 0.95
-              });
-              _roadworkMarkers.push({
-                marker,
-                type: _roadworkClassify(props, true),
-                source: 'waze',
-                latlng: L.latLng(lat, lon),
-              });
-              totalCount++;
-            }
-          });
-        }
-      } catch (e) {
-        console.error('Waze roadwork error', e);
       }
 
       // Recompute the type catalogue. New types default to selected so
@@ -11675,14 +10560,13 @@ function initPagerHoursFromStorage() {
     }
 
     /** Re-project the flat marker list onto roadworkLayer, honoring
-     *  selected types, selected sources, AND viewport culling. Delta-based
+     *  selected types, excluded states, AND viewport culling. Delta-based
      *  so a pan only touches the pins whose visibility flipped. */
     function _renderRoadworkVisible() {
       const bounds = _viewportCullBounds();
       for (const m of _roadworkMarkers) {
         const desired =
           _roadworkSelectedTypes.has(m.type)
-          && _roadworkSelectedSources.has(m.source)
           && !(m.state && _roadworkExcludedStates.has(m.state))
           && _cullEntryInView(m, bounds);
         _lodMount(roadworkLayer, m, desired);
@@ -11695,13 +10579,6 @@ function initPagerHoursFromStorage() {
       _renderRoadworkVisible();
       refreshActiveFilterPanel();
     };
-    function toggleRoadworkSourcePill(src) {
-      if (_roadworkSelectedSources.has(src)) _roadworkSelectedSources.delete(src);
-      else _roadworkSelectedSources.add(src);
-      _renderRoadworkVisible();
-      refreshActiveFilterPanel();
-    }
-    window.toggleRoadworkSourcePill = toggleRoadworkSourcePill;
 
     /** Flip a roadwork type pill on/off. */
     function toggleRoadworkType(t) {
@@ -12003,70 +10880,9 @@ function initPagerHoursFromStorage() {
         console.error('Floods error (Live Traffic)', e);
       }
       
-      // --- Waze flood hazards (FLOOD subtype from waze_hazards) ---
-      // Waze retired; the LiveTraffic flood feed above is unaffected. Left as
-      // an empty collection so the FLOOD-subtype filter below stays intact.
-      try {
-        const wazeData = { features: [] };
-
-        if (wazeData && wazeData.features) {
-          wazeData.features.forEach(feature => {
-            if (feature.geometry && feature.geometry.coordinates) {
-              const props = feature.properties || {};
-              const subtype = (props.wazeSubtype || '').toUpperCase();
-              if (!subtype.includes('FLOOD')) return; // Only flood items
-              
-              const [lon, lat] = feature.geometry.coordinates;
-              if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
-              const pulseClass = isWithinMinutes(props.created, 15) ? 'rfs-pulse' : '';
-
-              // Beach-style Waze flood tooltip.
-              const floodHeader = _ttHeader(
-                'fa-solid fa-water',
-                props.displayType || 'Hazard Weather Flood',
-                '#06b6d4',
-                '#25d366', '#000', 'WAZE'
-              );
-              let floodBody = '';
-              floodBody += _ttLocationSection(props.street || props.location || '', props.city || '', lat, lon);
-              floodBody += _ttTypeSection(
-                formatWazeType(props.wazeType || ''),
-                formatWazeType(props.wazeSubtype || ''),
-                '#06b6d4', '6,182,212'
-              );
-              if (props.thumbsUp > 0 || props.reliability > 0) {
-                let conf = `<div style="display:grid; grid-template-columns:repeat(${(props.thumbsUp > 0 && props.reliability > 0) ? 2 : 1}, 1fr); gap:4px;">`;
-                if (props.thumbsUp > 0) conf += _ttTile('Confirmed', '👍 ' + props.thumbsUp, '#4ade80');
-                if (props.reliability > 0) conf += _ttTile('Reliability', props.reliability + '/10', '#fbbf24');
-                conf += `</div>`;
-                floodBody += _ttSection('Confidence', '#86efac', '74,222,128', conf);
-              }
-              floodBody += _ttTimingSection(props.created, null, null);
-              const tooltip = _ttWrap(floodHeader, floodBody);
-              
-              const icon = L.divIcon({
-                className: 'custom-pin',
-                html: `<div class="${pulseClass}" style="background:linear-gradient(135deg, #06b6d4, #0891b2); width:20px; height:20px; border-radius:50%; border:2px solid #fff; box-shadow:0 0 10px #06b6d4; display:flex; align-items:center; justify-content:center; font-size:10px; color:#fff;"><i class="fa-solid fa-water"></i></div>`,
-                iconSize: [24, 24],
-                iconAnchor: [12, 12]
-              });
-              const marker = L.marker([lat, lon], { icon }).addTo(floodsLayer);
-              marker.bindTooltip(tooltip, {
-                direction: 'top',
-                offset: [0, -10],
-                opacity: 0.95
-              });
-              floodCount++;
-            }
-          });
-        }
-      } catch (e) {
-        console.error('Floods error (Waze)', e);
-      }
-      
       // A reload mounts everything; take the states switched off back off.
       _rebuildFloodLayer();
-      console.log(`Loaded ${floodCount} flood items (Live Traffic + Waze)`);
+      console.log(`Loaded ${floodCount} flood items`);
     }
 
     // NASA FIRMS fire-hotspot polygons. Each feature is the satellite
@@ -12326,7 +11142,7 @@ function initPagerHoursFromStorage() {
     // Layer → floating-filter-panel adapters. Each entry's render() emits
     // pill-style buttons (and any additional controls) that proxy to the
     // existing layer-specific handlers (toggleHazardFilter,
-    // togglePoliceFilter, …). Pill click writes the new value back into
+    // toggleCameraFilter, …). Pill click writes the new value back into
     // the (hidden-on-desktop) inline checkbox so the existing handler
     // keeps working unchanged, then refreshes the active panel.
     // -------------------------------------------------------------------
@@ -12465,19 +11281,9 @@ function initPagerHoursFromStorage() {
           { key: 'hazard',   label: 'Hazards',         color: '#f97316' },
           { key: 'closures', label: 'Closures / Jams', color: '#a855f7' },
         ];
-        // Per-type and per-source counts — only count markers from
-        // sources that are currently selected so the type counts reflect
-        // what's actually visible on the map. Type counts also respect
-        // the waze subtype exclusion set, so toggling a subtype pill
-        // updates the parent type count too.
+        // Per-type counts — only what's actually visible on the map.
         const typeCounts = { accident: 0, hazard: 0, closures: 0 };
-        let ltCount = 0, wzCount = 0;
         for (const m of _hazardMarkers) {
-          if (m.source === 'livetraffic') ltCount++;
-          else if (m.source === 'waze') wzCount++;
-          if (!_hazardSelectedSources.has(m.source)) continue;
-          if (m.source === 'waze' && m.subtypeLabel
-              && _hazardExcludedSubtypes.has(m.subtypeLabel)) continue;
           // Respect the Category, State and Publisher rows too — otherwise
           // excluding one removed pins while these bucket counts stayed put.
           if (m.mainCategory && _hazardExcludedCategories.has(m.mainCategory)) continue;
@@ -12489,50 +11295,11 @@ function initPagerHoursFromStorage() {
           const n = typeCounts[it.key] || 0;
           return _ffPill(hazardFilters[it.key], `${it.label} (${n.toLocaleString()})`, `toggleHazardPill('${it.key}')`);
         }).join('');
-        // Waze source pill removed with the ingest — it would read "Waze (0)"
-        // permanently and toggling it would do nothing. LiveTraffic is now the
-        // only source feeding this layer.
-        const sourcePills = `
-          ${_ffPill(_hazardSelectedSources.has('livetraffic'), `Live Traffic (${ltCount.toLocaleString()})`, "toggleHazardSourcePill('livetraffic')")}
-        `;
-        // Waze subtype pills — shown only when Waze is the active source.
-        // Counts respect the current source + type filters so totals
-        // align with what's on the map. Sorted by count desc; capped at
-        // 24 pills so a noisy long tail doesn't overflow the panel.
-        let subtypeBlock = '';
-        if (_hazardSelectedSources.has('waze')) {
-          const subtypeCounts = new Map();
-          for (const m of _hazardMarkers) {
-            if (m.source !== 'waze' || !m.subtypeLabel) continue;
-            if (!hazardFilters[m.type]) continue;
-            subtypeCounts.set(m.subtypeLabel, (subtypeCounts.get(m.subtypeLabel) || 0) + 1);
-          }
-          if (subtypeCounts.size > 0) {
-            const sorted = [...subtypeCounts.entries()]
-              .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-              .slice(0, 24);
-            const pills = sorted.map(([label, n]) => {
-              const active = !_hazardExcludedSubtypes.has(label);
-              // label derives from raw Waze subtype strings (not a fixed
-              // enum) and the pill is inserted via innerHTML — escape both
-              // the visible label and the onclick-embedded value (incl. "
-              // via escapeHtml, since the handler sits in a double-quoted
-              // attribute). Mirrors the roadwork type pills below.
-              const safe = escapeHtml(String(label).replace(/\\/g, '\\\\').replace(/'/g, "\\'"));
-              return _ffPill(active, `${escapeHtml(String(label))} (${n.toLocaleString()})`, `toggleHazardSubtypePill('${safe}')`);
-            }).join('');
-            subtypeBlock = `
-              <div class="ff-section-label">Waze subtype</div>
-              <div class="floating-filter-pills">${pills}</div>
-            `;
-          }
-        }
         // Real feed categories — the eight the incident feed publishes,
         // counted from what's loaded so the list can't drift from the data.
         const catCounts = {};
         for (const m of _hazardMarkers) {
           if (!m.mainCategory) continue;
-          if (!_hazardSelectedSources.has(m.source)) continue;
           catCounts[m.mainCategory] = (catCounts[m.mainCategory] || 0) + 1;
         }
         // Busiest first, same as the roadwork Type row.
@@ -12545,7 +11312,6 @@ function initPagerHoursFromStorage() {
         const stateCounts = {};
         const publisherCounts = {};
         for (const m of _hazardMarkers) {
-          if (!_hazardSelectedSources.has(m.source)) continue;
           if (m.state) stateCounts[m.state] = (stateCounts[m.state] || 0) + 1;
           if (m.publisher) publisherCounts[m.publisher] = (publisherCounts[m.publisher] || 0) + 1;
         }
@@ -12577,48 +11343,17 @@ function initPagerHoursFromStorage() {
             <div class="floating-filter-pills">${catPills}</div>
           `;
         }
-        // No Source row: Waze is retired, leaving one always-on pill whose
-        // only effect was hiding the whole layer.
         return `
           ${LiveTrafficVocab.panelHeader('incident')}
-          <div class="ff-section-label">Group <span style="opacity:.6;font-weight:400;">(${ltCount.toLocaleString()} total)</span></div>
+          <div class="ff-section-label">Group <span style="opacity:.6;font-weight:400;">(${_hazardMarkers.length.toLocaleString()} total)</span></div>
           <div class="floating-filter-pills">${typePills}</div>
           ${stateBlock}
           ${publisherBlock}
           ${categoryBlock}
-          ${subtypeBlock}
         `;
       },
     };
 
-    // Police (pins on/off + 3 type pills + heatmap toggle + opacity slider).
-    window.togglePolicePinsPill = function () {
-      const chk = document.getElementById('chk-police-pins');
-      const next = chk ? !chk.checked : true;
-      _ffSetCheckbox('chk-police-pins', next);
-      togglePolicePinsMode(next);
-      refreshActiveFilterPanel();
-    };
-    window.togglePoliceTypePill = function (key) {
-      policeFilters[key] = !policeFilters[key];
-      _ffSetCheckbox(`chk-police-${key}`, policeFilters[key]);
-      togglePoliceFilter(key, policeFilters[key]);
-      refreshActiveFilterPanel();
-    };
-    window.togglePoliceHeatmapPill = function () {
-      const chk = document.getElementById('chk-police-heatmap');
-      const next = chk ? !chk.checked : true;
-      _ffSetCheckbox('chk-police-heatmap', next);
-      togglePoliceHeatmapMode(next);
-      refreshActiveFilterPanel();
-    };
-    window.setPoliceHeatmapOpacityFromPanel = function (v) {
-      const el = document.getElementById('heat-opacity');
-      if (el) el.value = String(v);
-      setHeatmapOpacity(v);
-      const lbl = document.querySelector('#floating-filter-panel #ff-heat-opacity-val');
-      if (lbl) lbl.textContent = `${v}%`;
-    };
     // Floods: flooded roads from every state's road feed, and Victoria's
     // and WA's flood warnings — filtered by state. A record's road line and
     // warning area go with its pin.
@@ -12651,49 +11386,6 @@ function initPagerHoursFromStorage() {
         return `
           <h4><i class="fa-solid fa-water" style="color:#06b6d4;"></i> Floods</h4>
           ${stateBlock || `<div style="font-size:11px;color:#94a3b8;">${total.toLocaleString()} record${total === 1 ? '' : 's'}${total ? `, all ${escapeHtml(Object.keys(stateCounts)[0] || '')}` : ''}</div>`}
-        `;
-      },
-    };
-
-    FILTER_REGISTRY.police = {
-      icon: 'fa-shield-halved',
-      label: 'Police Reports',
-      color: '#3b82f6',
-      render() {
-        const pinsOn = document.getElementById('chk-police-pins')?.checked ?? true;
-        const types = [
-          { key: 'visible', label: 'Visible' },
-          { key: 'hidden',  label: 'Hidden' },
-          { key: 'camera',  label: 'Speed Camera' },
-        ];
-        const typePills = types.map((t) =>
-          _ffPill(policeFilters[t.key], t.label, `togglePoliceTypePill('${t.key}')`)
-        ).join('');
-        const heatOn = document.getElementById('chk-police-heatmap')?.checked ?? false;
-        const heatOpacity = document.getElementById('heat-opacity')?.value ?? 100;
-        const heatStats = document.getElementById('heat-stats')?.textContent ?? '';
-        const heatExtras = heatOn ? `
-          <div style="margin-top:8px;">
-            <div style="height:8px;border-radius:4px;background:linear-gradient(to right,rgb(103,232,249) 0%,rgb(37,99,235) 25%,rgb(124,58,237) 50%,rgb(236,72,153) 75%,rgb(239,68,68) 100%);"></div>
-          </div>
-          <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
-            <span style="font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.4px;width:48px;">Opacity</span>
-            <input type="range" min="10" max="100" step="5" value="${heatOpacity}"
-                   oninput="setPoliceHeatmapOpacityFromPanel(this.value)"
-                   style="flex:1;accent-color:#22d3ee;cursor:pointer;">
-            <span id="ff-heat-opacity-val" style="font-size:10px;color:#cbd5e1;width:32px;text-align:right;">${heatOpacity}%</span>
-          </div>
-          <div style="margin-top:6px;font-size:10px;color:#64748b;text-align:right;">${heatStats}</div>
-        ` : '';
-        return `
-          <h4><i class="fa-solid fa-shield-halved" style="color:#3b82f6;"></i> Police Reports</h4>
-          <div class="floating-filter-pills">
-            ${_ffPill(pinsOn, '<i class="fa-solid fa-map-pin"></i> Pins', 'togglePolicePinsPill()')}
-            ${_ffPill(heatOn, '<i class="fa-solid fa-fire"></i> Heatmap', 'togglePoliceHeatmapPill()')}
-          </div>
-          <div class="ff-section-label">Type</div>
-          <div class="floating-filter-pills">${typePills}</div>
-          ${heatExtras}
         `;
       },
     };
@@ -12854,9 +11546,7 @@ function initPagerHoursFromStorage() {
       },
     };
 
-    // Roadwork — pill per discovered type. Counts include both Live
-    // Traffic and Waze contributions to each type; the underlying
-    // markers carry their source so the tooltip stays accurate.
+    // Roadwork — pill per discovered type.
     window.toggleRoadworkPill = function (t) {
       toggleRoadworkType(t);
       refreshActiveFilterPanel();
@@ -12876,12 +11566,11 @@ function initPagerHoursFromStorage() {
         // follow the State row, as the hazard ones do.
         const typeCounts = {};
         const stateCounts = {};
-        let ltCount = 0, wzCount = 0;
+        let ltCount = 0;
         for (const m of _roadworkMarkers) {
           if (m.extra) continue;
           if (m.state) stateCounts[m.state] = (stateCounts[m.state] || 0) + 1;
-          if (m.source === 'livetraffic') ltCount++;
-          else if (m.source === 'waze') wzCount++;
+          ltCount++;
           if (m.state && _roadworkExcludedStates.has(m.state)) continue;
           typeCounts[m.type] = (typeCounts[m.type] || 0) + 1;
         }
@@ -12893,14 +11582,12 @@ function initPagerHoursFromStorage() {
           .sort((a, b) => (typeCounts[b] || 0) - (typeCounts[a] || 0) || String(a).localeCompare(String(b)));
         const typePills = orderedTypes.map((t) => {
           const on = _roadworkSelectedTypes.has(t);
-          // `t` is a roadwork type from the Waze / Live Traffic feeds (not a
+          // `t` is a roadwork type from the road feeds (not a
           // fixed enum), and the pill is inserted via innerHTML — so escape
           // both the visible label and the value embedded in the onclick.
           const safe = escapeHtml(String(t).replace(/'/g, "\\'"));
           return _ffPill(on, `${escapeHtml(String(t))} (${(typeCounts[t] || 0).toLocaleString()})`, `toggleRoadworkPill('${safe}')`);
         }).join('');
-        // No Source row: Waze is retired, so it was a single always-on
-        // pill whose only effect was hiding the entire layer.
         return `
           ${LiveTrafficVocab.panelHeader('roadwork')}
           ${stateBlock}
@@ -21726,7 +20413,7 @@ function initPagerHoursFromStorage() {
     }
 
     // Prefetch data layers in STAGED priority order for faster initial load
-    // Stage 1: Critical (RFS + Waze/Traffic hazards) - loads immediately
+    // Stage 1: Critical (RFS + Traffic hazards) - loads immediately
     // Stage 2: Secondary (cameras, roadwork, floods) - loads after stage 1
     // Stage 3: Tertiary (beaches, weather, outages) - loads in background
     async function prefetchLayerData() {
@@ -21749,10 +20436,6 @@ function initPagerHoursFromStorage() {
               // what the layer loaders fetch themselves, the unwrapped value.
               const body = await res.json();
               const data = endpoints[i].unwrap ? body.data : body;
-              // Don't cache empty Waze results (browser worker may still be starting)
-              if (endpoints[i].key.startsWith('waze_') && data && data.features && data.features.length === 0) {
-                continue;
-              }
               layerCache[endpoints[i].key] = { data, timestamp: now };
               count++;
             } catch {}
@@ -21763,7 +20446,6 @@ function initPagerHoursFromStorage() {
       
       try {
         // STAGE 1: Critical data - RFS + Traffic (most used toggleable layers)
-        // Waze prefetches removed — the ingest is retired (see docs/waze-userscript.md).
         const stage1 = [
           { key: 'rfs_incidents', url: '/api/rfs/incidents' },
           { key: 'traffic_incidents', url: '/api/v1/traffic/incidents' },
@@ -21855,7 +20537,6 @@ function initPagerHoursFromStorage() {
       // Track which layers are visible for logging
       const visibleLayers = [];
       if (map.hasLayer(hazardsLayer)) visibleLayers.push('hazards');
-      if (map.hasLayer(policeLayer)) visibleLayers.push('police');
       if (map.hasLayer(roadworkLayer)) visibleLayers.push('roadwork');
       if (map.hasLayer(floodsLayer)) visibleLayers.push('floods');
       if (map.hasLayer(camerasLayer)) visibleLayers.push('cameras');
@@ -21870,8 +20551,6 @@ function initPagerHoursFromStorage() {
         apiFetch(`${PROXY_BASE}/api/rfs/incidents`).then(r => r.json()).then(d => { layerCache.rfs_incidents = { data: d, timestamp: Date.now() }; }).catch(() => {}),
         // Traffic hazards (most used toggleable layers)
         apiFetch(`${PROXY_BASE}/api/v1/traffic/incidents`).then(r => r.json()).then(d => { layerCache.traffic_incidents = { data: d, timestamp: Date.now() }; }).catch(() => {}),
-        // Waze prefetches removed with the retired ingest — the hazards and
-        // roadwork layers are fed by LiveTraffic, which is unaffected.
         apiFetch(`${PROXY_BASE}/api/v1/traffic/roadwork`).then(r => r.json()).then(d => { layerCache.traffic_roadwork = { data: d, timestamp: Date.now() }; }).catch(() => {}),
         apiFetch(`${PROXY_BASE}/api/v1/traffic/flood`).then(r => r.json()).then(d => { layerCache.traffic_flood = { data: d, timestamp: Date.now() }; }).catch(() => {}),
       ];
@@ -21883,7 +20562,6 @@ function initPagerHoursFromStorage() {
       // Now redraw VISIBLE layers with the fresh cached data
       const redrawTasks = [];
       if (map.hasLayer(hazardsLayer)) redrawTasks.push(loadHazardsData(true));
-      if (map.hasLayer(policeLayer)) redrawTasks.push(loadPoliceData(true));
       if (map.hasLayer(roadworkLayer)) redrawTasks.push(loadRoadworkData(true));
       if (map.hasLayer(floodsLayer)) redrawTasks.push(loadFloodsData());
       if (map.hasLayer(camerasLayer)) redrawTasks.push(loadCamerasData());
@@ -22563,7 +21241,6 @@ function initPagerHoursFromStorage() {
           firms: typeof firmsLayer !== 'undefined' ? firmsLayer : null,
           hazards: typeof hazardsLayer !== 'undefined' ? hazardsLayer : null,
           floods: typeof floodsLayer !== 'undefined' ? floodsLayer : null,
-          police: typeof policeLayer !== 'undefined' ? policeLayer : null,
           cameras: typeof camerasLayer !== 'undefined' ? camerasLayer : null,
           beaches: typeof beachwatchLayer !== 'undefined' ? beachwatchLayer : null,
           sharksmart: typeof sharkLayer !== 'undefined' ? sharkLayer : null,

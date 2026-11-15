@@ -19,7 +19,6 @@ const configMock: Record<string, unknown> = {
   ARCHIVE_FLUSH_INTERVAL_MS: 30_000,
   NSWPSN_API_KEY: 'test-key',
   PORT: 3001,
-  WAZE_INGEST_MAX_AGE_SECS: 2400,
 };
 
 vi.mock('../../../src/sources/shared/http.js', () => ({

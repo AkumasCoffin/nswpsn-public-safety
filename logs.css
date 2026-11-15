@@ -598,7 +598,6 @@ html, body {
 
 .source-icon.rfs { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
 .source-icon.traffic { background: rgba(249, 115, 22, 0.2); color: #f97316; }
-.source-icon.waze { background: rgba(234, 179, 8, 0.2); color: #eab308; }
 .source-icon.police { background: rgba(59, 130, 246, 0.2); color: #3b82f6; }
 .source-icon.pager { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
 .source-icon.endeavour { background: rgba(250, 204, 21, 0.2); color: #facc15; }
@@ -723,22 +722,6 @@ html, body {
 .custom-dropdown-options::-webkit-scrollbar-thumb {
   background: rgba(148, 163, 184, 0.3);
   border-radius: 3px;
-}
-
-.custom-dropdown-group-header {
-  padding: 0.4rem 0.7rem 0.2rem;
-  font-size: 0.65rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--accent);
-  border-top: 1px solid var(--lg-border);
-  margin-top: 0.3rem;
-}
-
-.custom-dropdown-group-header:first-child {
-  border-top: none;
-  margin-top: 0;
 }
 
 /* ============================================================

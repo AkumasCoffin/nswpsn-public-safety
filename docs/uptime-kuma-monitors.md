@@ -132,9 +132,8 @@ the live payload.
   `soft=900` (its 15m cadence) while `SOURCE_THRESHOLDS.firms_hotspots` is
   `3600`.
 
-- **The Waze monitor no longer has anything to report.** Waze was removed as
-  a source — no ingest, no routes, and migrations `071`/`074` dropped its
-  tables — so `sources.waze` is not populated. Drop that monitor.
+- **There is no Waze monitor to keep.** Waze was removed as a source, so
+  `/api/status` has no `sources.waze`. Drop that monitor if it still exists.
 
 - **Endpoint is unauthenticated** so external monitors can hit it without
   juggling API keys. The information surface is intentionally just

@@ -523,7 +523,7 @@ class AlertPoller:
         # Build candidate list and check all at once (one DB query per few
         # hundred instead of one per alert). De-dupe by id WITHIN this cycle:
         # two distinct items can resolve to the same alert id (the
-        # stable-fields fallback for Waze alerts with no upstream uuid
+        # stable-fields fallback for alerts with no upstream id
         # collides when type/subtype/street/rounded-location match — e.g.
         # several flood road-closures on the same street). Without de-duping,
         # filter_unseen_alerts returns that id once per copy and we post

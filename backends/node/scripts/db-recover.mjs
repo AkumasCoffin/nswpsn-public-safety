@@ -27,13 +27,13 @@
  *   --skip-vacuum-full  skip VACUUM FULL (do plain VACUUM only — faster
  *                       but doesn't reclaim disk space)
  *   --skip-reindex      skip step 3
- *   --table=<name>      only process this table (default: all 5)
+ *   --table=<name>      only process this table (default: all 4)
  *
  * Heads-up:
  *   - VACUUM FULL takes an ACCESS EXCLUSIVE lock on each table; nothing
  *     else can read or write it during the rewrite. Acceptable here
  *     because the Node service should be stopped.
- *   - Total runtime on a multi-million-row archive_waze: 5-30 minutes.
+ *   - Total runtime on a multi-million-row table: 5-30 minutes.
  */
 import pg from 'pg';
 
@@ -44,7 +44,6 @@ const ALL_TABLES = [
   'archive_rfs',
   'archive_power',
   'archive_traffic',
-  'archive_waze',
 ];
 
 const argv = process.argv.slice(2);

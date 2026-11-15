@@ -3,8 +3,8 @@
  *
  * Each entry declares:
  *   - `name`: stable identifier (also the LiveStore key)
- *   - `family`: maps to the archive table family (waze | traffic |
- *               rfs | power | misc) for when we wire ArchiveWriter
+ *   - `family`: maps to the archive table family (traffic | rfs |
+ *               power | misc) for when we wire ArchiveWriter
  *   - `intervalMs`: poll cadence. Every source polls on this single
  *                   interval 24/7 (the old active/idle split tied to the
  *                   page-active heartbeat was removed — the bot is a

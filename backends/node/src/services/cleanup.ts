@@ -14,7 +14,6 @@
  *   - last_run_age_secs       last successful cleanup tick
  *   - last_history_deleted    rows removed in the most recent run
  *   - last_pager_ended        unused (legacy python field)
- *   - last_waze_ended         unused (legacy python field)
  *   - last_stats_deleted      stats_snapshots rows pruned
  *   - total_history_deleted   running total since process start
  *   - last_vacuum_age_secs    last successful VACUUM
@@ -251,7 +250,7 @@ export async function runCleanupOnce(retentionDays: number = DEFAULT_RETENTION_D
       // last_autoanalyze (only the leaf partitions get autovacuum'd) —
       // an earlier version of this check therefore thought every parent
       // needed re-ANALYZE on every cleanup pass, which is what was
-      // burning 22 minutes per hour on archive_waze.
+      // burning 22 minutes per hour on the largest archive table.
       //
       // The fix: look at the LATEST PARTITION per parent (the one
       // currently receiving writes; older partitions don't change
@@ -616,7 +615,6 @@ export function cleanupStatsForStatus(): {
   last_history_deleted: number;
   last_stats_deleted: number;
   last_pager_ended: number;
-  last_waze_ended: number;
   last_stale_swept: number;
   total_history_deleted: number;
   last_vacuum_age_secs: number | null;
@@ -629,11 +627,10 @@ export function cleanupStatsForStatus(): {
     last_run_age_secs: stats.lastRunAt ? now - stats.lastRunAt : null,
     last_history_deleted: stats.lastHistoryDeleted,
     last_stats_deleted: stats.lastStatsDeleted,
-    // Legacy fields python tracked separately. The new schema doesn't
-    // distinguish pager-ended vs waze-ended (everything's a partition
-    // drop) so report 0 — keeps the response shape stable.
+    // Legacy field python tracked separately. The new schema doesn't
+    // track pager-ended on its own (everything's a partition drop) so
+    // report 0 — keeps the response shape stable.
     last_pager_ended: 0,
-    last_waze_ended: 0,
     // Number of "stale-as-ended" tombstones inserted in the most
     // recent cleanup pass — counts source_ids that the per-poll diff
     // missed because the poller was failing.

@@ -17,9 +17,6 @@ export default defineConfig({
     // Critical because src/config.ts parses process.env at module load
     // time — anything set in a beforeAll() is too late.
     env: {
-      // WAZE_INGEST_KEY enables the /api/waze/ingest auth middleware in
-      // tests. Without it the middleware returns 403 "ingest disabled".
-      WAZE_INGEST_KEY: 'test-ingest-key',
       // Stable NSWPSN_API_KEY so tests hitting private endpoints can
       // pass it via X-API-Key. Both this and BROWSER_TOKEN_SECRET are
       // REQUIRED by src/config.ts — neither has a default any more, so

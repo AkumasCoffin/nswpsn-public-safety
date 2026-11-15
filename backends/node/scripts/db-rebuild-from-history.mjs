@@ -9,13 +9,13 @@
  *     no leftover bloat, no orphan indexes, no autovacuum state.
  *   - Use this when one or more archive_* tables are corrupt, missing,
  *     or have schema drift you can't reason about anymore. (Production
- *     hit this with archive_waze: doubled row count from the is_latest
+ *     hit this once: a doubled row count from the is_latest
  *     re-queue cascade made VACUUM FULL impractical.)
  *   - TRUNCATE preserves the schema; this one starts from scratch.
  *
  * The SQL inlined below is the union of every archive-creating
- * migration (002 base table + 005 src_ts index + 010 autovacuum + 014
- * waze recreate logic). Idempotent — re-running on a healthy DB does
+ * migration (002 base table + 005 src_ts index + 010 autovacuum).
+ * Idempotent — re-running on a healthy DB does
  * nothing destructive after the DROP step (which only drops what
  * exists; missing tables are skipped).
  *
@@ -24,8 +24,8 @@
  * from data_history into the right archive_<family> table per source.
  *
  * ⚠ DATA LOSS — anything Node wrote since the original cutover that
- * isn't in data_history is gone. Userscript Waze ingest, anything
- * archived after data_history froze, etc. data_history is the only
+ * isn't in data_history is gone — anything archived after
+ * data_history froze. data_history is the only
  * source we can rebuild from.
  *
  * Usage (Node service MUST be stopped):
@@ -49,7 +49,7 @@ const confirmed = argv.includes('--confirm');
 const skipMigrate = argv.includes('--no-migrate'); // schema-only rebuild
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const FAMILIES = ['waze', 'traffic', 'rfs', 'power', 'misc'];
+const FAMILIES = ['traffic', 'rfs', 'power', 'misc'];
 const PARENTS = FAMILIES.map((f) => `archive_${f}`);
 
 async function main() {
@@ -148,16 +148,7 @@ async function main() {
             'CREATE TABLE %I PARTITION OF %I FOR VALUES FROM (%L) TO (%L)',
             part_name, parent_table, start_date, end_date
           );
-          IF parent_table = 'archive_waze' THEN
-            EXECUTE format(
-              'ALTER TABLE %I SET (
-                 autovacuum_vacuum_scale_factor = 0.02,
-                 autovacuum_vacuum_threshold = 1000,
-                 autovacuum_vacuum_cost_limit = 2000,
-                 autovacuum_vacuum_cost_delay = 2,
-                 autovacuum_analyze_scale_factor = 0.05
-               )', part_name);
-          ELSIF parent_table IN ('archive_traffic','archive_misc') THEN
+          IF parent_table IN ('archive_traffic','archive_misc') THEN
             EXECUTE format(
               'ALTER TABLE %I SET (
                  autovacuum_vacuum_scale_factor = 0.1,

@@ -6,7 +6,7 @@
  * bot. It serves *historical* (snapshot) incident data from the
  * partitioned per-family archive tables.
  *
- * New schema: 5 archive_* tables (waze/traffic/rfs/power/misc), each
+ * New schema: 4 archive_* tables (traffic/rfs/power/misc), each
  * append-only, monthly RANGE-partitioned by fetched_at. See
  * src/db/migrations/002_archive_partitions.sql.
  *
@@ -395,7 +395,7 @@ async function runWithTimeout(
   try {
     // Default 60s budget for the data query — wider than python's old
     // 25s because the new partitioned schema hasn't accumulated all
-    // the indexes yet, and on a freshly-backfilled archive_waze
+    // the indexes yet, and on a freshly-backfilled archive table
     // (~257k rows) the DISTINCT ON + COUNT(DISTINCT ...) pair can
     // stretch to 30s+ until the planner caches a stable plan.
     //
@@ -872,8 +872,8 @@ function pickStr(d: Record<string, unknown>, k: string): string | null {
 /**
  * Walk a list of JSONB keys and return the first non-empty string value.
  * Used to derive a record's title from whichever field actually got
- * populated by the upstream — pager rows have data.title, waze rows have
- * data.street, RFS / traffic rows have data.locationDescriptor, etc.
+ * populated by the upstream — pager rows have data.title, RFS /
+ * traffic rows have data.locationDescriptor, etc.
  */
 function pickFirstStr(
   d: Record<string, unknown>,
@@ -941,11 +941,10 @@ function formatRecord(r: ArchiveQueryRow, includeData: boolean): FormattedRecord
     // a single 'title' field, so we pull the most useful per-source
     // alternative if data.title is missing:
     //   pager      → data.title (set by pagerArchiveItems)
-    //   waze_*     → data.street ('A1 - Pacific Hwy', 'Combine St', ...)
     //   pager      → data.alias (defensive — backend already promotes
     //                 this to data.title, but covers older rows)
     //   rfs/traffic → data.locationDescriptor or data.location
-    // Without this every waze record was returning title=null, which
+    // Without this a record with no data.title returned title=null, which
     // logs.html rendered as "Unknown".
     title: pickFirstStr(data, [
       'title',
@@ -1082,7 +1081,7 @@ interface SourceCountRow extends QueryResultRow {
 
 // 5-min response cache for /sources and /stats. Each runs an
 // unbounded COUNT(*) GROUP BY across every monthly partition of all
-// 5 archive tables — multi-second on archive_waze. The numbers don't
+// 4 archive tables — multi-second on the largest. The numbers don't
 // change much within 5 min so caching the response makes the dashboard
 // load instant on repeat hits. Cleared by /api/cache/clear.
 interface SourcesCacheEntry { body: unknown; ts: number; }
@@ -1108,14 +1107,14 @@ function countCacheKey(table: string, sql: string, params: unknown[]): string {
 // 5-min LRU cache for /api/data/history DATA queries — the rows
 // themselves, not just the count. On disk-saturated hosts the per-
 // table DISTINCT ON regularly hits the 30s statement_timeout, and
-// the underlying archive_waze pages get evicted from cache by the
-// concurrent waze ingest writer. Caching the rows means a single
+// the underlying archive pages get evicted from cache by the
+// concurrent archive writer. Caching the rows means a single
 // successful query covers every subsequent identical request inside
 // the window; the bot's per-minute polls and the typical "load
 // page 1, scroll, page-jump" pattern both warm the cache fast.
 //
 // TTL bumped from 60s → 5min after observing repeated 30s timeouts
-// on archive_waze unique=1 queries during heavy waze ingest bursts:
+// on unique=1 queries during heavy ingest bursts:
 // each cache miss took 30s, failed, didn't populate the cache, then
 // the next request faced the same cold path — every refresh hit
 // the timeout. 5 min gives a successful query enough time to absorb

@@ -39,7 +39,7 @@ describe('LiveStore', () => {
 
   it('persists dirty entries to disk and hydrates them back', async () => {
     const { store, dir } = await freshStore();
-    store.set('waze', { alerts: ['a'] });
+    store.set('traffic_incidents', { alerts: ['a'] });
     store.set('rfs', { items: ['b'] });
 
     const result = await store.persistDirty();
@@ -47,14 +47,14 @@ describe('LiveStore', () => {
     expect(result.written).toBe(2);
 
     const files = (await readdir(dir)).sort();
-    expect(files).toEqual(['rfs.json', 'waze.json']);
+    expect(files).toEqual(['rfs.json', 'traffic_incidents.json']);
 
     // Spin up a fresh store on the same dir; it should hydrate.
     const fresh = new LiveStore(dir);
     const hyd = await fresh.hydrateFromDisk();
     expect(hyd.loaded).toBe(2);
     expect(hyd.failed).toBe(0);
-    expect(fresh.get<{ alerts: string[] }>('waze')?.data.alerts).toEqual(['a']);
+    expect(fresh.get<{ alerts: string[] }>('traffic_incidents')?.data.alerts).toEqual(['a']);
     expect(fresh.get<{ items: string[] }>('rfs')?.data.items).toEqual(['b']);
   });
 

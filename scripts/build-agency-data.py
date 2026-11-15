@@ -102,7 +102,7 @@ def slugify(s: str) -> str:
 
 # Extended feeds agency-extended.json; RF (UHF CB frequency list) and nswpsn
 # (GRN site list) are fetched directly by the front-end, not agency TGID data.
-SKIP_DIRS = {"Extended", ".waze-browser-profile", "RF", "nswpsn"}
+SKIP_DIRS = {"Extended", "RF", "nswpsn"}
 
 
 def main():

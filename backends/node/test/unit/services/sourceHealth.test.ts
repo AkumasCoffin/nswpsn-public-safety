@@ -18,7 +18,7 @@ import { registerSource } from '../../../src/services/sourceRegistry.js';
 
 // Snapshot iterates over allSources(), so we register a small set the
 // tests can drive directly. We pick names whose thresholds we know
-// (rfs/waze/etc) plus a name that falls through to defaults.
+// (rfs/pager/etc) plus a name that falls through to defaults.
 beforeEach(() => {
   _resetPollerStateForTests();
   // Re-register on every test so a previous test's state doesn't bleed.
@@ -31,8 +31,8 @@ beforeEach(() => {
     fetch: async () => ({}),
   });
   registerSource({
-    name: 'waze',
-    family: 'waze',
+    name: 'pager',
+    family: 'misc',
     intervalMs: 60_000,
     fetch: async () => ({}),
   });
@@ -158,7 +158,7 @@ describe('clearSourceErrors', () => {
       lastError: 'broken',
       failureCount: 3,
     });
-    _seedSourceStateForTests('waze', {
+    _seedSourceStateForTests('pager', {
       lastSuccessTs: now - 60,
       lastError: 'broken',
       failureCount: 2,
@@ -178,19 +178,19 @@ describe('clearSourceErrors', () => {
       lastError: 'broken',
       failureCount: 3,
     });
-    _seedSourceStateForTests('waze', {
+    _seedSourceStateForTests('pager', {
       lastSuccessTs: now - 60,
       lastError: 'still broken',
       failureCount: 2,
     });
     clearSourceErrors('rfs');
     const rfs = getSourceHealthSnapshot().find((r) => r.name === 'rfs');
-    const waze = getSourceHealthSnapshot().find((r) => r.name === 'waze');
+    const pager = getSourceHealthSnapshot().find((r) => r.name === 'pager');
     expect(rfs?.consec_fails).toBe(0);
     expect(rfs?.last_error).toBeNull();
-    // Waze untouched.
-    expect(waze?.consec_fails).toBe(2);
-    expect(waze?.last_error).toBe('still broken');
+    // Pager untouched.
+    expect(pager?.consec_fails).toBe(2);
+    expect(pager?.last_error).toBe('still broken');
   });
 
   it('preserves last_ok_at on clear (only resets failure state)', () => {

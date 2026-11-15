@@ -250,15 +250,11 @@ def general_picker_types() -> Dict[str, str]:
     """Types offered in the generic setup picker and by "Enable All".
 
     Radio summary opts out via generalPicker:false — it has its own setup flow.
-    `soon` types are excluded for the same reason the dashboard excludes them:
-    a type that is not live yet must not be enableable. No type carries the
-    flag today (The Wire's two dropped it when The Wire went public); the
-    mechanism stays for the next feed that ships ahead of its backend.
     """
     return {
         t['key']: t['botLabel']
         for t in TYPE_DEFS
-        if t.get('generalPicker', True) and not t.get('soon')
+        if t.get('generalPicker', True)
     }
 
 
@@ -266,23 +262,20 @@ def types_for_provider(provider_key: str) -> List[Dict[str, Any]]:
     return [t for t in TYPE_DEFS if t['provider'] == provider_key]
 
 
-def providers_with_types(include_soon: bool = False,
-                         general_only: bool = True) -> List[Dict[str, Any]]:
+def providers_with_types(general_only: bool = True) -> List[Dict[str, Any]]:
     """Providers that have at least one selectable type, in catalog order.
 
-    The defaults suit the SUBSCRIPTION picker: no `soon` types (none today —
-    see general_picker_types) and no generalPicker:false types (radio summary
-    has its own setup flow). The roles picker passes both off — assigning a
-    ping role to a type is not the same as subscribing to it, and roles were
-    assignable for radio summary and the Wire types before this was grouped by
+    The default suits the SUBSCRIPTION picker: no generalPicker:false types
+    (radio summary has its own setup flow). The roles picker passes it off —
+    assigning a ping role to a type is not the same as subscribing to it, and
+    roles were assignable for radio summary before this was grouped by
     provider.
     """
     out = []
     for p in PROVIDERS:
         types = [
             t for t in types_for_provider(p['key'])
-            if (include_soon or not t.get('soon'))
-            and (not general_only or t.get('generalPicker', True))
+            if (not general_only or t.get('generalPicker', True))
         ]
         if types:
             out.append({**p, 'types': types})

@@ -5,7 +5,7 @@
  * Why: scripts/migrate-history.mjs does NOT use ON CONFLICT DO NOTHING
  * and there is no UNIQUE constraint on archive_*. If the backfill ran
  * twice (with --force, or before the marker existed) every row from
- * data_history was copied twice. Effect: archive_waze ends up with ~2×
+ * data_history was copied twice. Effect: a table ends up with ~2×
  * the rows it should have, every COUNT(*) is double, /api/data/history
  * returns duplicate rows when unique=0.
  *
@@ -28,11 +28,11 @@
  *   cd backends/node
  *   node --env-file-if-exists=../.env scripts/dedup-archive.mjs --dry-run
  *   node --env-file-if-exists=../.env scripts/dedup-archive.mjs
- *   node --env-file-if-exists=../.env scripts/dedup-archive.mjs --table=archive_waze
+ *   node --env-file-if-exists=../.env scripts/dedup-archive.mjs --table=archive_traffic
  *
  * Flags:
  *   --dry-run                   report duplicate counts without deleting
- *   --table=<name>              only process this table (default: all 5)
+ *   --table=<name>              only process this table (default: all 4)
  *   --include-null-source-id    also dedup rows whose source_id is NULL
  *   --batch=<N>                 delete in chunks of N (default 50000)
  *
@@ -50,7 +50,6 @@ import pg from 'pg';
 const { Pool } = pg;
 
 const ALL_TABLES = [
-  'archive_waze',
   'archive_traffic',
   'archive_rfs',
   'archive_power',

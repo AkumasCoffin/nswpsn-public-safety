@@ -6,7 +6,7 @@
  * is_latest + is_live columns to ALL archive_* tables and ran a bulk
  * UPDATE on each — which is why production logs show statement
  * timeouts on archive_traffic / archive_rfs / archive_power /
- * archive_misc as well as archive_waze. Migration 013 dropped the
+ * archive_misc. Migration 013 dropped the
  * columns but only marks them logically dropped; the heap still
  * carries the dead tuples + dropped-column slots until rewritten.
  *
@@ -24,9 +24,8 @@
  *   node --env-file-if-exists=../.env scripts/vacuum-full-archive-tables.mjs
  *   pm2 start api-node
  *
- * Runtime depends on table size + disk speed. archive_waze is the
- * heaviest (1-5 min per partition on SSD). The smaller tables
- * (rfs / power / misc / traffic) finish in seconds each.
+ * Runtime depends on table size + disk speed: a multi-million-row
+ * partition takes 1-5 min on SSD, the smaller ones finish in seconds.
  *
  * Iterates per-partition because VACUUM FULL on a partitioned parent
  * isn't supported on PG14; partition-by-partition is the portable
@@ -37,7 +36,6 @@ import pg from 'pg';
 const { Pool } = pg;
 
 const PARENTS = [
-  'archive_waze',
   'archive_traffic',
   'archive_rfs',
   'archive_power',

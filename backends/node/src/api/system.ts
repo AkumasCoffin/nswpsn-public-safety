@@ -259,7 +259,7 @@ systemRouter.get('/api/admin/db/stats', requireRole(isOwner), async (c) => {
   ];
 
   const stats: Record<string, unknown> = {};
-  // archive_waze can be multi-million rows — an unbounded COUNT(*) can
+  // An archive table can be multi-million rows — an unbounded COUNT(*) can
   // park a connection for tens of seconds and starve the writer pool.
   // Wrap each query in BEGIN/SET LOCAL/COMMIT so it's bounded at 30s.
   const client = await pool.connect();
@@ -335,7 +335,7 @@ systemRouter.post('/api/admin/db/vacuum', requireRole(isOwner), async (c) => {
   const client = await pool.connect();
   try {
     // Unlimit statement_timeout for VACUUM — the pool default 30s
-    // kills VACUUM on multi-million-row archive_waze (production
+    // kills VACUUM on a multi-million-row archive table (production
     // confirmed: 30563ms timeout). VACUUM doesn't take ACCESS
     // EXCLUSIVE so this is safe to run for as long as it needs.
     await client.query('SET statement_timeout = 0');
@@ -400,7 +400,7 @@ systemRouter.get('/api/admin/db/active-queries', requireRole(isOwner), async (c)
        ORDER BY query_start ASC NULLS LAST`,
     );
     // Also surface table-level vacuum stats — useful to confirm whether
-    // autovacuum is keeping up with archive_waze.
+    // autovacuum is keeping up with the archive tables.
     const vacstats = await pool.query<{
       relname: string;
       n_live_tup: string;

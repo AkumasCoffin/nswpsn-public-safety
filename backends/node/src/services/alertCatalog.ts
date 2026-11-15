@@ -44,7 +44,6 @@ export interface AlertType {
   extract?: string;
   generalPicker?: boolean;
   aliases?: string[];
-  soon?: boolean;
   color: string;
   icon: string;
   severityScale: string | null;

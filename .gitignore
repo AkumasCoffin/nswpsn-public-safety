@@ -83,10 +83,6 @@ backends/reference/unit_callsigns*
 # run, so we don't track it to avoid spurious diffs / merge churn.
 backends/data/centralwatch_cameras.json
 
-# Local Firefox profile for the Waze userscript ingest browser — cookies,
-# cache, and sqlite session state. Machine-local; never committed.
-backends/data/.waze-browser-profile/
-
 # Backend LiveStore hydration snapshots (one JSON per source). Regenerated at
 # runtime and machine-local — never commit them (they collide with each host's
 # own live state on pull).

@@ -2,7 +2,7 @@
  * LiveStore — the live half of the new architecture.
  *
  * Holds the *current* state of every source in memory. All `/api/*` live
- * endpoints (waze/police, rfs/incidents, traffic/incidents, etc.) read
+ * endpoints (rfs/incidents, traffic/incidents, etc.) read
  * from here — never from Postgres. That separation is the point: the
  * old Python backend put live state and archive in the same table with
  * UPDATE-driven liveness columns, and the resulting write contention
@@ -14,8 +14,8 @@
  *
  * Each source's snapshot is opaque to the store — it's whatever shape
  * the source poller decides. Only requirement is that it's
- * JSON-serializable. Source-specific code (e.g. WazeIngestCache) wraps
- * LiveStore for richer semantics like bbox-keyed sub-snapshots.
+ * JSON-serializable. Source-specific code can wrap LiveStore for
+ * richer semantics.
  */
 import { mkdir, readFile, rename, writeFile, readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';

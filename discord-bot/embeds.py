@@ -639,7 +639,7 @@ def chunk_containers_for_message(containers: list, max_chars: int = 3600,
     displayable text, and 40 total components. We pack up to both budgets
     (max_chars=3600 leaves headroom for button labels / role-ping mentions;
     max_components=36 leaves room for the role-ping TextDisplay added to the
-    first chunk). Packing tightly is what keeps a Waze burst (hundreds of
+    first chunk). Packing tightly is what keeps a burst (hundreds of
     small alerts) from exploding into hundreds of one- or two-alert messages
     that overflow the send queue. `max_per_message` is just a soft backstop;
     the char/component budgets normally bind first.

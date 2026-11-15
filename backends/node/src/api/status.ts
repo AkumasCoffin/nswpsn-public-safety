@@ -45,7 +45,6 @@ import { assertShape, envelope, ErrorBody, okJson, type SameShape } from './v1/s
 const STATUS_DB_TIMEOUT_SECS = 5;
 const STATUS_CACHE_TTL_MS = 5_000;
 const STATUS_WRITER_STALE_SECS = 300;
-const STATUS_WAZE_STALE_SECS = 900;
 const STATUS_FILTER_CACHE_STALE_SECS = 1800;
 const STATUS_HEATMAP_STALE_SECS = 1800;
 const STATUS_BUFFER_WARN_RECORDS = 10_000;
@@ -65,7 +64,6 @@ const DATA_CLEANUP_INTERVAL_SECS = Number.parseInt(
 );
 // Boot grace windows — first heartbeat hasn't fired yet.
 const WRITER_BOOT_GRACE_SECS = 60;
-const WAZE_BOOT_GRACE_SECS = 120;
 const FILTER_CACHE_BOOT_GRACE_SECS = 120;
 
 const PROCESS_START_MS = Date.now();

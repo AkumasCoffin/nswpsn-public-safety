@@ -317,10 +317,6 @@ staff.html ─►  WebSocket /api/node-ws/staff  (auth: first message carrying a
                ADS-B series, pager overview, capcodes, …)
 ```
 
-`map.html` also still fetches `/api/waze/police-heatmap` and `/api/waze/police`.
-**Those routes do not exist.** Waze was removed and its tables dropped
-(migrations `071`, `074`). The fetches are leftovers.
-
 ## Auth on the site
 
 Public auth is Supabase (`auth-common.js`). A signed-in user's JWT is what the

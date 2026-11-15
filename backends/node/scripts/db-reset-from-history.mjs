@@ -5,16 +5,15 @@
  * duplicated to recover via dedup+vacuum.
  *
  * ⚠ WARNING — DATA LOSS
- * This DELETES everything in archive_waze / archive_traffic /
- * archive_rfs / archive_power / archive_misc, including:
- *   - Userscript-ingested Waze data since cutover (`/api/waze/ingest`)
+ * This DELETES everything in archive_traffic / archive_rfs /
+ * archive_power / archive_misc, including:
  *   - Any incidents Node polled and archived after data_history froze
  *
  * data_history (python's table) is the authoritative source for what
  * gets re-migrated. Anything Node wrote that python didn't is lost.
  *
  * Steps:
- *   1. TRUNCATE the 5 archive_* tables (instant on empty / fast on full).
+ *   1. TRUNCATE the 4 archive_* tables (instant on empty / fast on full).
  *   2. Clear the `999_data_history_backfill` row from schema_migrations
  *      so the backfill script will run again.
  *   3. Spawn migrate-history.mjs to re-copy data_history → archive_*.
@@ -41,7 +40,6 @@ const argv = process.argv.slice(2);
 const confirmed = argv.includes('--confirm');
 
 const ARCHIVE_TABLES = [
-  'archive_waze',
   'archive_traffic',
   'archive_rfs',
   'archive_power',

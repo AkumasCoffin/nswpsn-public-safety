@@ -167,6 +167,6 @@ describe('extractSourceTimestampUnix', () => {
     expect(at({ updated: '2026-09-06T13:34:15Z' })).toBe(
       Date.UTC(2026, 8, 6, 13, 34, 15) / 1000,
     );
-    expect(at({ pubMillis: 1757166855000 }, 'waze_alerts')).toBe(1757166855);
+    expect(at({ pubMillis: 1757166855000 })).toBe(1757166855);
   });
 });

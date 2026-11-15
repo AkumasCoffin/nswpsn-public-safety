@@ -107,8 +107,8 @@ export function extractSourceTimestampUnix(
   source?: string,
 ): number | null {
   // Per-source preferred field, then a fallback list of common keys.
-  // RFS feeds carry `pubDate` (RFC 2822). Waze uses pubMillis (epoch
-  // millis). BoM uses `effective`. Traffic uses `lastUpdated`. Power
+  // RFS feeds carry `pubDate` (RFC 2822). BoM uses `effective`.
+  // Traffic uses `lastUpdated`. Power
   // outages use start/endDateTime — we prefer those over fetch time
   // because outage announcements list the announce time as the start.
   const candidates: string[] = [
@@ -140,7 +140,6 @@ export function extractSourceTimestampUnix(
   ];
   // Source-specific overrides at the front of the candidate list.
   if (source) {
-    if (source.startsWith('waze_')) candidates.unshift('pubMillis');
     if (source === 'rfs') candidates.unshift('pubDate');
     if (source.startsWith('bom_')) candidates.unshift('effective');
   }
@@ -239,17 +238,8 @@ function extractSourceId(item: Record<string, unknown>): string | null {
  * archive. Endeavour / Ausgrid / Essential outages carry an
  * `outageType` ("Unplanned"/"Planned"); RFS features carry an
  * `alertLevel`; BoM warnings carry `warningType`; etc.
- *
- * `source` is consulted so waze-specific fallbacks apply only to
- * waze rows: when a waze alert has a `type` but no `subtype`, the
- * subcategory defaults to the category. Mirrors what the legacy
- * frontend rendered when subtype was absent — pins fall back to the
- * category icon/colour rather than rendering as "Unknown".
  */
-function extractCategoryFields(
-  props: Record<string, unknown>,
-  source?: string,
-): {
+function extractCategoryFields(props: Record<string, unknown>): {
   category: string | null;
   subcategory: string | null;
 } {
@@ -262,11 +252,10 @@ function extractCategoryFields(
       props['eventType'] ??
       props['eventCategory'],
   );
-  let sub = asString(
+  const sub = asString(
     props['subcategory'] ??
-      // Waze alerts carry `subtype` lowercase ("POLICE_VISIBLE",
-      // "HAZARD_ON_ROAD_OBJECT", etc.). Live-polled rows missed it
-      // because the previous code only looked at camelCase `subType`.
+      // Some payloads carry `subtype` lowercase rather than camelCase
+      // `subType`; accept both.
       props['subtype'] ??
       props['subType'] ??
       props['fireType'] ??
@@ -278,14 +267,6 @@ function extractCategoryFields(
       // never affects other sources.
       props['incidentType'],
   );
-  // For waze pins specifically: when the upstream alert has a type
-  // but no subtype (e.g. a bare type='POLICE' with no further detail),
-  // surface the category as the subcategory so the frontend's
-  // pin-renderer doesn't show "Unknown" or fall through to a default
-  // icon. User-requested behaviour.
-  if (sub === null && cat !== null && source && source.startsWith('waze_')) {
-    sub = cat;
-  }
   return { category: cat, subcategory: sub };
 }
 
@@ -381,7 +362,7 @@ export function defaultArchiveItems(
       if (!isFeature(f)) continue;
       const props = (f.properties ?? {}) as Record<string, unknown>;
       const { lat, lng } = extractLatLng(f as Record<string, unknown>);
-      const { category, subcategory } = extractCategoryFields(props, source);
+      const { category, subcategory } = extractCategoryFields(props);
       out.push({
         source,
         source_id: extractSourceId(f as Record<string, unknown>),
@@ -403,7 +384,7 @@ export function defaultArchiveItems(
       if (item === null || typeof item !== 'object') continue;
       const obj = item as Record<string, unknown>;
       const { lat, lng } = extractLatLng(obj);
-      const { category, subcategory } = extractCategoryFields(obj, source);
+      const { category, subcategory } = extractCategoryFields(obj);
       out.push({
         source,
         source_id: extractSourceId(obj),

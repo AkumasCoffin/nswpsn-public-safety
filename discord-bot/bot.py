@@ -404,9 +404,6 @@ def _alert_subtype_token(alert_type: str, alert_data: dict):
       rfs              → properties.fireType   ("Bush Fire", "Grass Fire", "MVA/Transport", ...)
       bom_*            → warningType           ("Flood", "Severe Weather", "Wind", ...)
       traffic_*        → properties.incidentType  ("CRASH", "BREAKDOWN", "BUSHFIRE", ...)
-      waze_*           → properties.wazeSubtype, else properties.wazeType
-                         ("HAZARD_WEATHER_FOG", "POLICE_HIDING", "ACCIDENT_MAJOR",
-                         or the bare type "ACCIDENT" when there's no subtype)
       user_incident    → category
     For unsupported types, returns None — subtype_filters has no effect on them.
     """
@@ -428,22 +425,6 @@ def _alert_subtype_token(alert_type: str, alert_data: dict):
     if alert_type and alert_type.startswith('traffic_'):
         props = alert_data.get('properties') or {}
         return (str(props.get('incidentType') or '').strip()) or None
-    if alert_type and alert_type.startswith('waze_'):
-        # The poller passes the GeoJSON feature, whose raw Waze type/subtype
-        # live under properties.wazeType / properties.wazeSubtype — the
-        # feature's top-level `type` is the literal "Feature" and there is no
-        # top-level `subtype`. Mirror the ingest's
-        # `subcategory = rawSubtype || rawType` (api/waze-ingest.ts) so the
-        # token matches the catalogue values the dashboard whitelists
-        # (ACCIDENT, ACCIDENT_MAJOR, POLICE_VISIBLE, HAZARD_ON_ROAD_POT_HOLE…).
-        props = alert_data.get('properties') or {}
-        raw = props.get('wazeSubtype') or props.get('wazeType')
-        if not raw:
-            # Fallback for a raw-alert shape (top-level type/subtype); never
-            # emit the GeoJSON literal "Feature" as a token.
-            t = alert_data.get('type')
-            raw = alert_data.get('subtype') or (t if t != 'Feature' else None)
-        return (str(raw or '').strip()) or None
     if alert_type == 'user_incident':
         raw = alert_data.get('category') or alert_data.get('type')
         return (str(raw or '').strip()) or None
@@ -788,7 +769,7 @@ class NSWPSNBot(commands.Bot):
         self.embed_builder = EmbedBuilder()
         
         # Rate limiting for Discord API. The queue is a large burst buffer so
-        # a busy Waze cycle (hundreds of messages across many channels) is
+        # a busy cycle (hundreds of messages across many channels) is
         # never dropped — it drains over subsequent ticks. Per-tick we drain a
         # big batch and fan it out per channel concurrently; discord.py
         # enforces the actual per-channel + global rate limits, so this can't
@@ -1350,7 +1331,7 @@ class NSWPSNBot(commands.Bot):
     async def process_message_queue(self):
         """Drain a batch from the queue and send it, fanning out per channel
         CONCURRENTLY. A single slow/rate-limited channel no longer blocks the
-        others, which is what let a Waze burst overflow the queue. discord.py
+        others, which is what let a burst overflow the queue. discord.py
         still enforces per-channel + global rate limits, so concurrency can't
         exceed Discord's caps — it just keeps every channel making progress."""
         # Outer guard: a @tasks.loop that raises an unhandled exception STOPS
@@ -2556,7 +2537,7 @@ class NSWPSNBot(commands.Bot):
         ALERT.
 
         This used to pack a poll's alerts for a channel into a single
-        LayoutView. That saved messages when the Waze firehose was running,
+        LayoutView. That saved messages when volume was far higher,
         but it cost two things that matter more now the volume is lower:
 
           - Incident tracking. Only the FIRST incident-bearing alert in a
@@ -4365,7 +4346,7 @@ class SetupRolesSubmenuView(discord.ui.View):
         # assigning a ping role is not the same as subscribing, and roles were
         # assignable for those before this menu was grouped by provider.
         self._providers = alert_catalog.providers_with_types(
-            include_soon=True, general_only=False)
+            general_only=False)
         # Carried across rebuilds so picking a type does not bounce the user
         # back to the first source in the list.
         self._active_provider = active_provider or (
@@ -5087,7 +5068,7 @@ _HELP_CATEGORIES: Dict[str, Dict[str, Any]] = {
              "Remove the pager subscription from a channel."),
         ],
         # Derived from ALERT_TYPES so the list can never drift again
-        # (the old hand-written copy still advertised retired Waze types
+        # (the old hand-written copy still advertised retired types
         # and omitted firms).
         "footer": "Alert types: " + " · ".join(ALERT_TYPES.keys()),
     },

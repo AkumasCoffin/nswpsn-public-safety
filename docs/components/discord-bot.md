@@ -140,7 +140,7 @@ Dispatch is **one message per alert**, each a Components V2 `LayoutView`. Alerts
 keep their poll-result order within a channel and the send queue paces them.
 
 It used to pack a poll's alerts for a channel into a single `LayoutView`, which
-saved messages while the Waze firehose was running but cost two things that matter
+saved messages when volume was far higher but cost two things that matter
 more at today's volume. **Incident tracking**: only the first incident-bearing
 alert in a batch could have its message recorded, because the row stores one
 `jump_url` per message, so every other incident in that batch was never written

@@ -373,13 +373,13 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
   // falling back to last_seen_at when the upstream payload didn't
   // expose a usable timestamp. last_seen_at = "we still see this
   // incident in our polls", which is the natural meaning of "in the
-  // last N hours" — a stable waze incident polled all day stays
+  // last N hours" — a stable incident polled all day stays
   // visible in a 24h window even if its latest_fetched_at is days
   // old.
   //
   // This matches /api/data/history/filters' time filter; previously
   // the data path used latest_fetched_at here, which silently
-  // dropped ~15% of waze rows from logs.html's total while /filters
+  // dropped ~15% of rows from logs.html's total while /filters
   // still reported them.
   //
   // Note: this is the WHERE filter only. The SELECT's effective_ts
@@ -545,7 +545,7 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
   }
   // Seek on k.effective_ts — the SAME key the query orders by. The old
   // seek compared a.fetched_at, but for any source that populates
-  // source_timestamp_unix (waze pubMillis, RFS pubDate, ...) the
+  // source_timestamp_unix (RFS pubDate, ...) the
   // ordering key and the pagination key were different timestamps, so
   // page N+1 both skipped and repeated rows around the boundary.
   const uniqueSeek = buildCursorSeek(
@@ -578,8 +578,8 @@ function buildUniqueQuery(table: ArchiveTable, p: DataHistoryParams): BuiltQuery
   //     changed in our archive — a real-world chronological signal).
   //   - LATERAL ... LIMIT 1 picks exactly one parent row per sidecar
   //     entry. Pre-dedup-writer data has multiple identical (source,
-  //     source_id, fetched_at) rows in the parent (overlapping waze
-  //     bbox polls within one flush window), and a regular JOIN would
+  //     source_id, fetched_at) rows in the parent (overlapping
+  //     polls within one flush window), and a regular JOIN would
   //     return all of them, surfacing dupes in the unique=1 list.
   //     Highest a.id wins arbitrarily but deterministically.
   const sql = `
@@ -789,7 +789,7 @@ export function buildSqlForTable(table: ArchiveTable, p: DataHistoryParams): Bui
     // then JOIN to the parent for full row data.
     //
     // Why this is fast: the prior bounded-DISTINCT-ON pattern scanned
-    // up to 50k recent rows and sorted them — under archive_waze
+    // up to 50k recent rows and sorted them — under heavy
     // ingest pressure this hit the 30s statement_timeout regularly.
     // The sidecar ORDER BY latest_fetched_at DESC LIMIT N is a
     // sub-millisecond index walk; the parent JOIN is N PK-equivalent
@@ -916,7 +916,7 @@ export function buildCountSqlForTable(
 
   const whereClause = acc.parts.length > 0 ? `WHERE ${acc.parts.join(' AND ')}` : '';
 
-  // Cap the count at COUNT_CAP rows so a billion-row archive_waze can't
+  // Cap the count at COUNT_CAP rows so a billion-row archive table can't
   // burn the 60s statement_timeout chasing a number the frontend
   // doesn't need exact. The page-jumper on logs.html only navigates
   // the first ~5000 pages anyway (page * limit > 100k is unusable).
@@ -931,7 +931,7 @@ export function buildCountSqlForTable(
   // idx_archive_*_ts (fetched_at DESC) index instead of doing a
   // partition-by-partition sequential scan. Without it, the planner
   // may walk every partition in storage order looking for matching
-  // rows, which on archive_waze (millions of rows across many monthly
+  // rows, which on a large table (millions of rows across many monthly
   // partitions) blows past the 60s budget even for a 50k cap. With it,
   // the planner walks the index from now backwards and stops at 50k.
   // SELECT shape: a single bigint `total`. The 50k cap rides through
@@ -1066,7 +1066,7 @@ export function buildCountSqlForTable(
   }
 
   // Unique=0 parent count: bounded scan via idx_archive_*_ts so
-  // archive_waze (millions of rows across monthly partitions) can't
+  // a large table (millions of rows across monthly partitions) can't
   // burn the 60s statement_timeout. The frontend's page-jumper only
   // ever navigates the first ~5000 pages anyway.
   const sql = `SELECT COUNT(*)::bigint AS total

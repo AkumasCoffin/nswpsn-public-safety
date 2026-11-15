@@ -10907,7 +10907,6 @@
           secondary: [
             (cl.last_history_deleted   ? { label: 'deleted',  value: cl.last_history_deleted.toLocaleString() } : null),
             (cl.last_pager_ended       ? { label: 'pager✗',   value: cl.last_pager_ended } : null),
-            (cl.last_waze_ended        ? { label: 'waze✗',    value: cl.last_waze_ended  } : null),
             { label: 'total del', value: cl.total_history_deleted != null ? cl.total_history_deleted.toLocaleString() : null },
             (cl.last_vacuum_age_secs != null
               ? { label: 'vacuum',  value: `${_fmtAge(cl.last_vacuum_age_secs)} (${cl.last_vacuum_ms}ms)` }

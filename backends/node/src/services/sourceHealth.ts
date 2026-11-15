@@ -58,7 +58,6 @@ const SOURCE_THRESHOLDS: Record<string, ThresholdEntry> = {
   sapn:              { soft: 900,  hard: 2700, label: 'SA Power Networks outages' },
   westernpower:      { soft: 900,  hard: 2700, label: 'Western Power outages' },
   horizon:           { soft: 900,  hard: 2700, label: 'Horizon Power outages' },
-  waze:              { soft: 600,  hard: 1800, label: 'Waze' },
   pager:             { soft: 1200, hard: 3600, label: 'Pagermon' },
   rdio:              { soft: 3900, hard: 12600, label: 'rdio-scanner' },
   // FIRMS NRT updates every few hours; loose thresholds match its cadence.

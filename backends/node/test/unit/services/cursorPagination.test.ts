@@ -77,11 +77,11 @@ describe('cursorPagination', () => {
   });
 
   it('roundtrips a multi-family cursor with a table segment', () => {
-    const cursor = encodeCursor(1_700_000_000, 12345, 'archive_waze');
+    const cursor = encodeCursor(1_700_000_000, 12345, 'archive_traffic');
     expect(decodeCursor(cursor)).toEqual({
       fetchedAt: 1_700_000_000,
       rowId: 12345,
-      table: 'archive_waze',
+      table: 'archive_traffic',
     });
   });
 
@@ -96,8 +96,8 @@ describe('cursorPagination', () => {
   });
 
   it('rejects a malformed table segment but accepts valid ones', () => {
-    // base64('100:5:archive waze') — space is illegal in a table name.
-    const bad = Buffer.from('100:5:archive waze', 'ascii').toString('base64url');
+    // base64('100:5:archive traffic') — space is illegal in a table name.
+    const bad = Buffer.from('100:5:archive traffic', 'ascii').toString('base64url');
     expect(decodeCursor(bad)).toBeNull();
     // 4+ colon segments are rejected outright.
     const tooMany = Buffer.from('100:5:a:b', 'ascii').toString('base64url');

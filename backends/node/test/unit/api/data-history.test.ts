@@ -128,7 +128,7 @@ describe('GET /api/data/history', () => {
     expect(body['error']).toBe('invalid_cursor');
   });
 
-  it('routes a retired waze source nowhere at all', async () => {
+  it('routes an unrecognised source to the archive_misc catch-all', async () => {
     queryMock.mockImplementation((sql: string) => {
       if (sql.includes('statement_timeout')) return { rows: [] };
       if (sql.includes('SELECT COUNT(*)')) return { rows: [{ n: 0 }] };
@@ -136,7 +136,7 @@ describe('GET /api/data/history', () => {
     });
 
     const app = await setupApp();
-    await app.request('/api/data/history?source=waze_police');
+    await app.request('/api/data/history?source=no_such_source');
     const sqls = queryMock.mock.calls
       .map((call) => call[0] as string)
       .filter(
@@ -147,12 +147,12 @@ describe('GET /api/data/history', () => {
           s !== 'COMMIT' &&
           s !== 'ROLLBACK',
       );
-    // archive_waze is gone (migration 074). waze_* is now simply an
-    // unrecognised source, so it takes the documented catch-all to
-    // archive_misc and returns nothing — rather than naming a dropped table.
+    // A source no family claims (a retired one, or a typo) takes the
+    // documented catch-all to archive_misc and returns nothing — it must
+    // never name a table of its own, which may not exist.
     expect(sqls).toHaveLength(1);
     expect(sqls[0]).toContain('FROM archive_misc');
-    expect(sqls[0]).not.toContain('archive_waze');
+    expect(sqls[0]).not.toContain('archive_no_such');
   });
 
   it('fans out across 4 family tables when no source filter is set', async () => {
@@ -208,7 +208,7 @@ describe('GET /api/data/history', () => {
       return { rows: [] };
     });
     const app = await setupApp();
-    await app.request('/api/data/history?source=waze_police&unique=1');
+    await app.request('/api/data/history?source=traffic_incident&unique=1');
   });
 
   it('refuses the page with 503 when one family\'s data query fails', async () => {
@@ -341,7 +341,7 @@ describe('GET /api/data/history/sources', () => {
     // Sorted by count DESC.
     expect(sources[0]?.['source']).toBe('traffic_incident');
     expect(sources[0]?.['count']).toBe(10);
-    expect(selectCalls).toBe(4); // one SELECT per table (archive_waze dropped in 074)
+    expect(selectCalls).toBe(4); // one SELECT per table
   });
 });
 

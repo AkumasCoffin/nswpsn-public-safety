@@ -33,9 +33,8 @@ def build_table() -> str:
     ]
     for prov in alert_catalog.PROVIDERS:
         for t in alert_catalog.types_for_provider(prov['key']):
-            note = ' _(not yet live)_' if t.get('soon') else ''
-            lines.append('| %s | `%s` | %s | %s%s |' % (
-                prov['label'], t['key'], t['agencyLabel'], t['botLabel'], note))
+            lines.append('| %s | `%s` | %s | %s |' % (
+                prov['label'], t['key'], t['agencyLabel'], t['botLabel']))
     lines += ['', END]
     return '\n'.join(lines)
 

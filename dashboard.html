@@ -408,10 +408,6 @@
     .chip-row {
       display: flex; flex-wrap: wrap; gap: 0.4rem;
     }
-    /* Coming-soon types: visible so people know they're on the way, but
-       clearly inert. */
-    .chip.soon { opacity: 0.55; border-style: dashed; cursor: default; }
-    .pv-count.pv-soon { color: var(--text-muted); font-style: italic; }
     .chip {
       display: inline-flex; align-items: center; gap: 0.4rem;
       padding: 0.35rem 0.75rem;
@@ -1514,9 +1510,6 @@ window.API = API;
 let PROVIDERS = [];
 const _CATALOG_TYPE_DEFS = {};
 const ALERT_TYPES = [];
-// Types marked `soon` are shown but not yet enableable (The Wire hasn't
-// launched) — excluded from Select all and every payload we send.
-const _SOON_TYPES = new Set();
 const _DASH_ALERT_TYPES = [];
 const ALERT_TYPE_LABELS = {};
 
@@ -1536,12 +1529,10 @@ function applyAlertCatalog(cat) {
     types: (p.types || []).map(t => ({
       key: t.key,
       label: t.label,
-      ...(t.soon ? { soon: true } : {}),
     })),
   }));
 
   ALERT_TYPES.length = 0;
-  _SOON_TYPES.clear();
   _DASH_ALERT_TYPES.length = 0;
   for (const k of Object.keys(ALERT_TYPE_LABELS)) delete ALERT_TYPE_LABELS[k];
 
@@ -1549,8 +1540,7 @@ function applyAlertCatalog(cat) {
     for (const t of p.types) {
       ALERT_TYPES.push(t.key);
       ALERT_TYPE_LABELS[t.key] = t.label;
-      if (t.soon) _SOON_TYPES.add(t.key);
-      else _DASH_ALERT_TYPES.push(t.key);
+      _DASH_ALERT_TYPES.push(t.key);
     }
   }
 
@@ -2816,11 +2806,8 @@ function setProviderOpen(presetId, providerKey, open) {
 function _renderProviderSection(provider, selected, opts) {
   // opts: { onToggleType(typeKey), onSelectAll(), presetId, expanded, onExpand(open) }
   const types = provider.types || [];
-  // `soon` types are visible but not enableable — they don't count and the
-  // per-provider power toggle ignores them.
-  const selectable = types.filter(t => !t.soon);
-  const selectedCount = selectable.filter(t => selected.has(t.key)).length;
-  const totalCount = selectable.length;
+  const selectedCount = types.filter(t => selected.has(t.key)).length;
+  const totalCount = types.length;
   const hasSelected = selectedCount > 0;
   const allSelected = selectedCount === totalCount && totalCount > 0;
   const expanded = !!opts.expanded;
@@ -2850,9 +2837,9 @@ function _renderProviderSection(provider, selected, opts) {
     totalCount > 0
       ? el('span', { class: 'pv-count' + (hasSelected ? ' has-selected' : '') },
           `${selectedCount}/${totalCount}`)
-      : el('span', { class: 'pv-count pv-soon' }, 'soon'),
+      : el('span', { class: 'pv-count' }, '0'),
     // Per-source on/off — flips every enableable type in the provider.
-    // Hidden while a provider is all-soon (nothing to flip).
+    // Hidden for a provider with no types (nothing to flip).
     ...(totalCount > 0 ? [el('button', {
       class: 'pv-toggle' + (allSelected ? ' on' : (hasSelected ? ' partial' : '')),
       type: 'button',
@@ -2873,7 +2860,7 @@ function _renderProviderSection(provider, selected, opts) {
 
   if (expanded) {
     const body = el('div', { class: 'provider-body' });
-    // Toolbar: Select all / Clear (per provider). Hidden while all-soon.
+    // Toolbar: Select all / Clear (per provider).
     const allSelected = selectedCount === totalCount && totalCount > 0;
     if (totalCount > 0) body.appendChild(el('div', { class: 'provider-toolbar' }, [
       el('button', {
@@ -2887,20 +2874,6 @@ function _renderProviderSection(provider, selected, opts) {
     // tooltips / quick debug.
     const row = el('div', { class: 'chip-row' });
     for (const t of types) {
-      if (t.soon) {
-        // Not enableable yet — never sent to the backend, which would
-        // reject an unknown key with bad_request on an older deploy.
-        row.appendChild(el('button', {
-          class: 'chip soon',
-          onclick: (e) => {
-            e.stopPropagation();
-            toast('Coming soon — The Wire has not launched yet.', 'info');
-          },
-          title: `${t.key} — coming soon`,
-          type: 'button',
-        }, `${t.label || t.key} · soon`));
-        continue;
-      }
       const active = selected.has(t.key);
       row.appendChild(el('button', {
         class: 'chip' + (active ? ' active' : ''),
@@ -3031,7 +3004,6 @@ function _fillProviderRows(listWrap, preset, selected) {
         // Compute the next alert_types array off the current preset state.
         const cur = new Set(preset.alert_types || []);
         for (const t of provider.types) {
-          if (t.soon) continue;
           if (turnOn) cur.add(t.key); else cur.delete(t.key);
         }
         patchPreset(preset.id, { alert_types: Array.from(cur) });
@@ -4718,7 +4690,6 @@ function renderWizardStep3() {
       },
       onSelectAll: (turnOn) => {
         for (const t of provider.types) {
-          if (t.soon) continue;
           if (turnOn) w.types.add(t.key); else w.types.delete(t.key);
         }
         renderWizardBodyOnly();

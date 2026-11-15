@@ -14,7 +14,7 @@
  *
  * Per-record shape:
  *   {
- *     table: 'archive_waze' | 'archive_traffic' | 'archive_rfs' |
+ *     table: 'archive_traffic' | 'archive_rfs' |
  *            'archive_power' | 'archive_misc',
  *     row:   { source, source_id?, fetched_at, lat?, lng?, category?,
  *              subcategory?, data }
@@ -49,7 +49,7 @@ export type ArchiveTable =
 export const SIDECAR_LOCK_NAMESPACE = 0x51de; // "sidecar"
 
 export interface ArchiveRow {
-  source: string; // e.g. 'waze_police', 'rfs', 'traffic_incident'
+  source: string; // e.g. 'rfs', 'traffic_incident'
   source_id?: string | null;
   /** Epoch seconds when the record was fetched. */
   fetched_at: number;
@@ -333,7 +333,7 @@ export class ArchiveWriter {
     // semantic value the sidecar can't already provide.
 
     // Run per-table inserts in parallel — previously the for-of loop
-    // serialised them, so a slow archive_waze flush blocked the small
+    // serialised them, so one slow table's flush blocked the small
     // archive_misc/rfs/power flushes behind it (production: 24s
     // 5-table flushes). With the dedicated writer pool (8 slots) and
     // chunk-sizes already tuned per family, parallel flush wallclock
@@ -389,14 +389,14 @@ export class ArchiveWriter {
    * INSERT_CHUNK_SIZE sub-batches so each statement finishes well
    * under the (database-default) statement_timeout, even when the
    * archive queue has been growing while a previous flush was stuck.
-   * With archive_waze under heavy ingest the queue can reach 5k+ rows
+   * Under heavy ingest the queue can reach 5k+ rows
    * per flush window, and a single INSERT of that size with 4 indexes
    * + JSONB blobs reliably hit 60s. Chunking keeps each insert in the
    * single-digit-second range.
    *
    * Single transaction across all chunks: previously each chunk had
    * its own BEGIN/SET LOCAL/COMMIT, costing 3 round-trips per chunk
-   * (so a 10-chunk waze flush burnt 40 round trips — measured ~150ms
+   * (so a 10-chunk flush burnt 40 round trips — measured ~150ms
    * pure overhead per flush in production). Now BEGIN once, SET LOCAL
    * once, INSERT each chunk, COMMIT once → 13 round trips for the
    * same flush. Failure semantics unchanged: any chunk error rolls
@@ -411,8 +411,6 @@ export class ArchiveWriter {
   ): Promise<void> {
     if (rows.length === 0) return;
 
-    // archive_waze: 3 compound indexes + partition PK; large chunks
-    // hit timeouts under userscript ingest pressure.
     // archive_power: essential_future polls produce 1000+ rows in a
     // single bucket; on disk-saturated hosts a 500-row chunk has been
     // hitting the 60s timeout (~22 rows/sec sustained insert rate).
@@ -438,7 +436,7 @@ export class ArchiveWriter {
         // since we last stored it. Polls that bring no new info
         // bump sidecar.last_seen_at without touching the parent.
         const allHashed = rows.map((r) => ({ row: r, hash: hashRowData(r) }));
-        // Within-batch dedup pass: when overlapping waze polls land in
+        // Within-batch dedup pass: when overlapping polls land in
         // the same flush, we get the same (source, source_id) row 2-3
         // times — all hash-identical, but the cross-batch sidecar check
         // would admit all of them because the sidecar has no entry yet
@@ -539,7 +537,7 @@ export class ArchiveWriter {
     if (sources.length === 0) return out;
     // unnest($1::text[], $2::text[]) replaces the prior tuple-IN list.
     // Old shape sent 2 params per (source, source_id), so a 5k-incident
-    // waze flush meant 10k params; Postgres switches join strategies
+    // flush meant 10k params; Postgres switches join strategies
     // around 1k tuples and slows down. The array form sends exactly 2
     // params no matter how many keys we're looking up — planner caches
     // the plan once and reuses it forever.

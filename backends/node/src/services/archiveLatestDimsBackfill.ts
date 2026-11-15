@@ -18,8 +18,8 @@
  * chunk scans a bounded WINDOW of candidate rows past a cursor, fills
  * the fillable subset, and advances the cursor past the whole window.
  * The naive version instead LIMIT-ed on *fillable* rows — for tables
- * where most NULL rows are permanently unfillable (archive_waze: the
- * parent rows simply have no category/title), collecting one chunk
+ * where most NULL rows are permanently unfillable (the parent rows
+ * simply have no category/title), collecting one chunk
  * meant scanning ~the whole table joined to the parent, which blew the
  * per-chunk statement_timeout on chunk 0 forever, making zero progress
  * on every boot.
@@ -45,7 +45,7 @@ const ARCHIVE_TABLES = [
 // Smaller chunks + a short per-chunk statement_timeout keep each unit of
 // work brief so the backfill never pins the DB. Previously a 5k-row chunk
 // under a 60s timeout could hold the shared sidecar advisory lock long
-// enough to stall the live Waze writer (33s flushes) and cascade every
+// enough to stall the live archive writer (33s flushes) and cascade every
 // other query into statement-timeout 500s. Tunable via env for ops.
 const CHUNK_SIZE = Math.max(100, Number(process.env['ARCHIVE_DIMS_BACKFILL_CHUNK'] ?? '1000') || 1000);
 const PAUSE_BETWEEN_CHUNKS_MS = 750;

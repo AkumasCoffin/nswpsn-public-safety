@@ -2,7 +2,7 @@
  * Background index builder.
  *
  * The perf indexes used to live in a SQL migration (`008_perf_indexes.sql`),
- * but on a multi-million-row archive_waze each CREATE INDEX takes minutes
+ * but on a multi-million-row archive table each CREATE INDEX takes minutes
  * and kept hitting the pool's default 30s statement_timeout — even after
  * we set timeout=0 in the runner, deploys that didn't rebuild dist/
  * carried the old migrate.js without the fix. Index-build failures
@@ -95,7 +95,7 @@ interface BackfillSpec {
 
 const BACKFILLS: BackfillSpec[] = [
   // One-shot population of filter_facets_daily from each archive_*
-  // table (skipping archive_waze — see migration 016 header). Same
+  // table (see migration 016 header). Same
   // race-avoidance pattern as the police heatmap backfill: scope to
   // days < today so the writer's same-day increments never collide.
   // ON CONFLICT DO NOTHING for re-run safety. One spec per archive
@@ -127,7 +127,7 @@ const BACKFILLS: BackfillSpec[] = [
   ),
   // NOTE: the is_latest backfill from migration 012 was disabled
   // and the columns dropped in migration 013. The bulk UPDATE created
-  // ~366k dead tuples on archive_waze; every query (writes, reads,
+  // ~366k dead tuples on one archive table; every query (writes, reads,
   // heatmap aggregation) competed for disk. Bounded DISTINCT ON in
   // the read path is what we use now.
 ];
@@ -156,7 +156,7 @@ export async function ensurePerfIndexes(): Promise<void> {
     }
     try {
       // Unlimit timeout for this connection — index builds can take
-      // minutes per index on large archive_waze partitions.
+      // minutes per index on large archive partitions.
       await client.query('SET statement_timeout = 0');
 
       // Drop indexes that are hurting us before building the desired set.
@@ -283,7 +283,7 @@ export async function ensurePerfIndexes(): Promise<void> {
       // VACUUM ANALYZE the archive tables a backfill TOUCHED. Was:
       // unconditional ANALYZE on every archive_* table on every boot.
       // ANALYZE on a partitioned parent recurses into every partition,
-      // so on archive_waze that's ~22 minutes of disk hammering at
+      // so on the largest table that was ~22 minutes of disk hammering at
       // every restart on a saturated host. autovacuum keeps each
       // partition's stats fresh on its own threshold; we only need to
       // step in here when a backfill just rewrote a meaningful chunk of

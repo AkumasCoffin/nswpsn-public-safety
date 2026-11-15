@@ -42,7 +42,7 @@ describe('filterCache', () => {
     // dfes, sacfs, samfs) plus bom, livetraffic, the ten electricity
     // distributors (endeavour, ausgrid, essential, then ausnet, citipower,
     // powercor, jemena, sapn, westernpower, horizon), pager, user, rdio,
-    // actas, dorsal. Waze was retired with its ingest.
+    // actas, dorsal.
     expect(facets.providers).toHaveLength(24);
     // Pin the newest one by key as well as by count — a provider missing
     // from PROVIDER_ORDER is silently dropped from the list rather than

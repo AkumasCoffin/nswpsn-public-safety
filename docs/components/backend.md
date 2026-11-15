@@ -993,8 +993,8 @@ traffic, or for a quiet channel the one whose control frequency it decoded.
   (`/api/whisper/history`) that never touches the rdio database, and the bot's
   `/ts` command was retired with it. Do not reinstate either without solving the
   query.
-- Waze: no source, no routes, and migrations `071`/`074` dropped the archive and
-  heatmap tables.
+- Waze: removed. No source, no routes, no config, and migrations `071`/`074`
+  dropped the archive and heatmap tables.
 
 ## Tests
 

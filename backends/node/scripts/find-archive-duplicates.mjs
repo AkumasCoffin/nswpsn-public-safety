@@ -4,7 +4,7 @@
  *
  * The archive_* tables are APPEND-ONLY. Every poll snapshot becomes a
  * row. With one poll every ~30s per source, the natural row count for
- * a given (source, source_id) over N hours is roughly N*120. archive_waze
+ * a given (source, source_id) over N hours is roughly N*120. One table
  * had ~2x that — duplicates leaked in.
  *
  * Two failure modes produce duplicates:
@@ -40,7 +40,6 @@ import pg from 'pg';
 const { Pool } = pg;
 
 const TABLES = [
-  'archive_waze',
   'archive_traffic',
   'archive_rfs',
   'archive_power',

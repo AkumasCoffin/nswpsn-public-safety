@@ -51,13 +51,10 @@ Read these before you read the feature list. They are not temporary.
   unconfigured state with a 200 instead (`/api/whisper/status` returns
   `configured: false`). See `backends/node/src/config.ts`, and the component
   doc for the layer you care about.
-- **Waze is gone.** It was retired as a source and then removed: no ingest, no
-  routes, and migrations `071`/`074` dropped the heatmap and archive tables.
-  Plenty of dead references survive in both the frontend and the backend —
-  including three `map.html` fetches that cannot be answered. They are
-  leftovers, not a feature. See
-  [`docs/architecture.md`](docs/architecture.md#waze-is-gone-and-the-data-with-it)
-  before acting on a `waze` grep hit.
+- **Waze is gone.** It was retired as a source and removed from the code:
+  no ingest, no routes, no map layers, and migrations `071`/`074` dropped the
+  heatmap and archive tables. The only mentions left are those migrations and
+  the changelog, which are a record of what happened.
 
 ## The stack
 

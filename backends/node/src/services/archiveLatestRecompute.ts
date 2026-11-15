@@ -2,7 +2,7 @@
  * Per-incident recompute of sidecar.latest_fetched_at to reflect when
  * each incident's data actually last changed (not when it was last
  * polled). Replaces the giant LAG-over-whole-table SQL in migration 019,
- * which was hours of IO on archive_waze.
+ * which was hours of IO on the largest archive table.
  *
  * Why we need this: migration 017's backfill set latest_fetched_at =
  * max(fetched_at), and under the old append-on-every-poll writer that

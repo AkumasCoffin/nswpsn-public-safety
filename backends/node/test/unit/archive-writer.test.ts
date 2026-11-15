@@ -27,8 +27,8 @@ describe('ArchiveWriter (pure logic)', () => {
 
   it('push grows the queue', () => {
     const w = new ArchiveWriter();
-    w.push('archive_waze', row('waze_police'));
-    w.push('archive_waze', row('waze_hazard'));
+    w.push('archive_traffic', row('traffic_incident'));
+    w.push('archive_traffic', row('traffic_roadwork'));
     expect(w.metrics().queue_size).toBe(2);
   });
 
@@ -40,7 +40,7 @@ describe('ArchiveWriter (pure logic)', () => {
 
   it('flush is a no-op without a DATABASE_URL configured', async () => {
     const w = new ArchiveWriter();
-    w.push('archive_waze', row('waze_police'));
+    w.push('archive_traffic', row('traffic_incident'));
     const r = await w.flush();
     // No DB → flush returns zero counts, queue stays intact.
     expect(r.rows).toBe(0);
@@ -52,9 +52,9 @@ describe('ArchiveWriter (pure logic)', () => {
     // Push 60k rows — past the 50k hard cap.
     const rows: ArchiveRow[] = [];
     for (let i = 0; i < 60_000; i++) {
-      rows.push(row('waze_police', String(i)));
+      rows.push(row('traffic_incident', String(i)));
     }
-    w.pushMany('archive_waze', rows);
+    w.pushMany('archive_traffic', rows);
     const m = w.metrics();
     expect(m.queue_size).toBeLessThanOrEqual(50_000);
     expect(m.dropped).toBeGreaterThan(0);

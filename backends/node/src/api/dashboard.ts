@@ -911,7 +911,7 @@ const AUDIT_FIELDS = [
 
 // Deep-normalise so ordering is never mistaken for a change: arrays are
 // sorted (recursively) and object keys are sorted. This means e.g. a preset
-// whose filters.waze_hazard list is merely re-ordered does NOT register as an
+// whose filters.<alert_type> list is merely re-ordered does NOT register as an
 // edit, and the stored from/to render in a stable order. null/undefined
 // collapse together.
 function auditNormalize(v: unknown): unknown {

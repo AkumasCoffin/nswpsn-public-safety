@@ -27,10 +27,10 @@ beforeEach(() => {
 
 describe('LiveStore.hydrateFromDisk — orphaned temp sweep', () => {
   it('removes pid-stamped temps and keeps the real snapshots', async () => {
-    write('waze.json', snap({ alerts: [1, 2] }));
+    write('traffic_incidents.json', snap({ alerts: [1, 2] }));
     write('pager.json', snap({ hits: [] }));
-    write('waze.json.10328.tmp', snap({ alerts: ['stale'] }));
-    write('waze.json.442512.tmp', snap({ alerts: ['stale'] }));
+    write('traffic_incidents.json.10328.tmp', snap({ alerts: ['stale'] }));
+    write('traffic_incidents.json.442512.tmp', snap({ alerts: ['stale'] }));
     write('traffic_cameras.json.87768.tmp', snap({}));
 
     const store = new LiveStore(DIR);
@@ -38,40 +38,40 @@ describe('LiveStore.hydrateFromDisk — orphaned temp sweep', () => {
 
     expect(res.loaded).toBe(2);
     const left = readdirSync(DIR).sort();
-    expect(left).toEqual(['pager.json', 'waze.json']);
+    expect(left).toEqual(['pager.json', 'traffic_incidents.json']);
     // The live data survived the sweep intact.
-    expect(store.get('waze')).toEqual({ ts: 1_700_000_000, data: { alerts: [1, 2] } });
+    expect(store.get('traffic_incidents')).toEqual({ ts: 1_700_000_000, data: { alerts: [1, 2] } });
   });
 
   it('leaves anything that is not a pid-stamped temp alone', async () => {
-    write('waze.json', snap({ ok: true }));
+    write('traffic_incidents.json', snap({ ok: true }));
     // Near-misses that must survive: no pid, non-numeric pid, and a .json
     // file that merely contains "tmp" in its name.
-    write('waze.json.tmp', 'x');
-    write('waze.json.abc.tmp', 'x');
+    write('traffic_incidents.json.tmp', 'x');
+    write('traffic_incidents.json.abc.tmp', 'x');
     write('tmp_notes.json', snap({ ok: true }));
     write('backup.json.bak', 'x');
 
     await new LiveStore(DIR).hydrateFromDisk();
 
     const left = readdirSync(DIR).sort();
-    expect(left).toEqual(['backup.json.bak', 'tmp_notes.json', 'waze.json', 'waze.json.abc.tmp', 'waze.json.tmp']);
+    expect(left).toEqual(['backup.json.bak', 'tmp_notes.json', 'traffic_incidents.json', 'traffic_incidents.json.abc.tmp', 'traffic_incidents.json.tmp']);
   });
 
   it('is a no-op on a clean directory', async () => {
-    write('waze.json', snap({ ok: true }));
+    write('traffic_incidents.json', snap({ ok: true }));
     const res = await new LiveStore(DIR).hydrateFromDisk();
     expect(res.loaded).toBe(1);
-    expect(readdirSync(DIR)).toEqual(['waze.json']);
+    expect(readdirSync(DIR)).toEqual(['traffic_incidents.json']);
   });
 
   it('does not leave a temp behind on a successful persist', async () => {
     const store = new LiveStore(DIR);
-    store.set('waze', { alerts: [1] });
+    store.set('traffic_incidents', { alerts: [1] });
     const out = await store.persistDirty();
     expect(out.written).toBe(1);
     expect(out.errors).toBe(0);
-    expect(readdirSync(DIR)).toEqual(['waze.json']);
-    expect(existsSync(path.join(DIR, `waze.json.${process.pid}.tmp`))).toBe(false);
+    expect(readdirSync(DIR)).toEqual(['traffic_incidents.json']);
+    expect(existsSync(path.join(DIR, `traffic_incidents.json.${process.pid}.tmp`))).toBe(false);
   });
 });
