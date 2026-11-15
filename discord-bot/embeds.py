@@ -419,10 +419,26 @@ def format_timestamp(ts: str, use_discord_format: bool = True) -> Optional[str]:
         return str(ts) if ts else None
 
 
+# Discord's limit on a link button's URL, and the most of a label the map
+# link carries (the map only shows it beside the pin).
+DISCORD_URL_MAX = 512
+MAP_LABEL_MAX = 120
+
+
 def build_map_url(lat: float, lon: float, label: str = "", layer: str = "incidents", zoom: int = 15) -> str:
-    """Build a URL to the AusAware map"""
-    label_encoded = quote(label, safe='') if label else ''
-    return f"{MAP_BASE_URL}/map.html?lat={lat}&lng={lon}&zoom={zoom}&label={label_encoded}&layer={layer}"
+    """Build a URL to the AusAware map.
+
+    The label is cut to fit: Discord refuses a link button whose URL is over
+    512 characters, and refuses the whole message with it. An outage's label
+    carries its area, which for some distributors is every suburb affected.
+    """
+    label = (label or '')[:MAP_LABEL_MAX]
+    while True:
+        label_encoded = quote(label, safe='') if label else ''
+        url = f"{MAP_BASE_URL}/map.html?lat={lat}&lng={lon}&zoom={zoom}&label={label_encoded}&layer={layer}"
+        if len(url) <= DISCORD_URL_MAX or not label:
+            return url
+        label = label[:-8]
 
 
 # Only build URLs for paths that match exactly what the uploader generates.
@@ -1400,6 +1416,9 @@ class EmbedBuilder:
             for label, url in link_buttons[:5]:
                 # Discord-safe: label max 80 chars, URL max 512 chars.
                 safe_label = label[:80] if label else 'Open'
+                if len(url) > DISCORD_URL_MAX:
+                    # One over-long link must not cost the whole alert.
+                    continue
                 try:
                     row.add_item(discord.ui.Button(
                         style=discord.ButtonStyle.link,
