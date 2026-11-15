@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -37,6 +38,7 @@ import (
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/activityship"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/agentcfg"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/chanmgr"
+	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/localweb"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/queue"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/rdioctl"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/relay"
@@ -247,6 +249,9 @@ func controlService(action, configPath string) error {
 	if err != nil {
 		return err
 	}
+	if action == "uninstall" {
+		removeLocalListenFirewall()
+	}
 	return service.Control(s, action)
 }
 
@@ -384,6 +389,22 @@ func runAgent(ctx context.Context, configPath string) error {
 	// node shedding traffic is visible on the fleet page instead of silent.
 	ws.SetDropProvider(listener)
 
+	// The owner's own listener page on their network, in front of the local
+	// rdio (which stays on loopback). Optional: a failure to start it is
+	// logged, never fatal — the node feeds the same without it.
+	var lan *localweb.Server
+	if cfg.LocalListenEnabled() {
+		if lan, err = localweb.New(cfg.LocalListenAddr, localRdioAdminURL); err != nil {
+			log.Printf("localweb: %v; listener page disabled", err)
+			lan = nil
+		} else {
+			ws.SetLocalListener(lan)
+			if _, port, perr := net.SplitHostPort(cfg.LocalListenAddr); perr == nil {
+				ensureLocalListenFirewall(port)
+			}
+		}
+	}
+
 	// Re-import the last-applied config into the freshly-launched sdrtrunk-vce
 	// once its control server answers, so it always runs the agent's current
 	// config (not whatever its SQLite database held from the last session) and
@@ -488,6 +509,13 @@ func runAgent(ctx context.Context, configPath string) error {
 			errCh <- fmt.Errorf("relay listener: %w", lerr)
 		}
 	}()
+	if lan != nil {
+		go func() {
+			if lerr := lan.Run(ctx); lerr != nil {
+				log.Printf("localweb: %v; listener page not available", lerr)
+			}
+		}()
+	}
 	go q.RunSender(ctx, sender.send)
 	go ws.Run(ctx)
 

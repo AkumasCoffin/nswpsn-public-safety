@@ -88,3 +88,46 @@ describe('buildConfigPayload (pager)', () => {
     expect(on.configVersion).not.toEqual(capOff.configVersion);
   });
 });
+
+describe('buildConfigPayload (pager testing mode)', () => {
+  const bench = [{ label: 'BENCH', mhz: 153.35 }, { label: 'BENCH2', mhz: 153.6 }];
+
+  it('replaces the state plan with the hand-entered frequencies', async () => {
+    const p = await buildConfigPayload(pagerNode({ config_override: { pagerTesting: true, pagerTestFrequencies: bench } }));
+    expect(p.pager!.frequencies).toEqual(bench);
+  });
+
+  it('turning testing on or off changes the version, so the node re-syncs', async () => {
+    const plain = await buildConfigPayload(pagerNode());
+    const on = await buildConfigPayload(pagerNode({ config_override: { pagerTesting: true, pagerTestFrequencies: bench } }));
+    expect(on.configVersion).not.toEqual(plain.configVersion);
+  });
+
+  it('a list kept while testing is off leaves the plan and version untouched', async () => {
+    const plain = await buildConfigPayload(pagerNode());
+    const off = await buildConfigPayload(pagerNode({ config_override: { pagerTestFrequencies: bench } }));
+    expect(off.pager!.frequencies.map((f) => f.label)).toEqual(['NSWRFS', 'FRNSW']);
+    expect(off.configVersion).toEqual(plain.configVersion);
+  });
+
+  it('drops bad stored entries and repeated labels', async () => {
+    const p = await buildConfigPayload(pagerNode({
+      config_override: {
+        pagerTesting: true,
+        pagerTestFrequencies: [
+          { label: 'BENCH', mhz: 153.35 },
+          { label: 'BENCH', mhz: 160 },        // repeated label
+          { label: 'bad label', mhz: 150 },    // not a token
+          { label: 'LOW', mhz: 10 },           // below RTL range
+          { label: 'NAN', mhz: 'x' },          // not a number
+        ],
+      },
+    }));
+    expect(p.pager!.frequencies).toEqual([{ label: 'BENCH', mhz: 153.35 }]);
+  });
+
+  it('testing with nothing valid stored falls back to the state plan', async () => {
+    const p = await buildConfigPayload(pagerNode({ config_override: { pagerTesting: true, pagerTestFrequencies: [] } }));
+    expect(p.pager!.frequencies.map((f) => f.label)).toEqual(['NSWRFS', 'FRNSW']);
+  });
+});

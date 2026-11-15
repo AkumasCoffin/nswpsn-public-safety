@@ -21,6 +21,8 @@ const m = vi.hoisted(() => ({
   trails: null as unknown,
   /** How far the track archive has written (null: nothing yet this run). */
   through: null as number | null,
+  /** The `recent` values the handlers asked the source for. */
+  recentAsked: [] as Array<[string, number]>,
 }));
 
 vi.mock('../../../src/sources/shared/http.js', async (orig) => ({
@@ -44,9 +46,22 @@ vi.mock('../../../src/sources/adsb.js', async (orig) => ({
   ...(await orig<typeof import('../../../src/sources/adsb.js')>()),
   adsbSnapshot: () => m.snapshot,
   adsbTrailsSnapshot: () => m.trails,
+  adsbRecentAircraft: (sec: number) => {
+    m.recentAsked.push(['aircraft', sec]);
+    return { ...(m.snapshot as object), count: 1 };
+  },
+  adsbRecentTrails: (sec: number) => {
+    m.recentAsked.push(['trails', sec]);
+    return RECENT_TRAILS;
+  },
 }));
 
-const IN_SCOPE = ['/api/adsb/aircraft', '/api/adsb/history', '/api/adsb/trails', '/api/adsb/photo/:hex'];
+const RECENT_TRAILS = {
+  trails: { '7c6b2d': [[-33.85, 151.2, 1400, 1_800_000_000_000], [-33.86, 151.21, null, 1_800_000_001_000]] },
+  fetched_at: '2026-10-28T04:00:00.000Z',
+};
+
+const IN_SCOPE = ['/api/adsb/aircraft', '/api/adsb/history', '/api/adsb/trails', '/api/adsb/photo/:hex', '/api/adsb/info/:hex'];
 
 async function app() {
   const { adsbRouter } = await import('../../../src/api/adsb.js');
@@ -107,15 +122,37 @@ beforeEach(() => {
   m.snapshot = SNAPSHOT;
   m.trails = TRAILS;
   m.through = null;
+  m.recentAsked = [];
 });
 afterEach(() => {
   vi.useRealTimers();
 });
 
+/** What the handler serves for SNAPSHOT: each aircraft gains seenAt, the
+ *  moment it was heard (fetched_at less its age). */
+const SERVED = {
+  ...SNAPSHOT,
+  aircraft: SNAPSHOT.aircraft.map((x) => ({
+    ...x,
+    seenAt: new Date(Date.parse(SNAPSHOT.fetched_at) - x.ageSec * 1000).toISOString(),
+  })),
+};
+
 describe('GET /api/adsb/aircraft and /api/v1/adsb/aircraft', () => {
+  it('stamps each aircraft with when it was heard', async () => {
+    const a = await app();
+    const res = (await (await a.request('/api/v1/adsb/aircraft')).json()) as {
+      data: { aircraft: Array<{ hex: string; seenAt: string }> };
+    };
+    expect(res.data.aircraft.map((x) => [x.hex, x.seenAt])).toEqual([
+      ['7c6b2d', '2026-10-28T03:59:57.600Z'],
+      ['~2a01f0', '2026-10-28T03:59:46.000Z'],
+    ]);
+  });
+
   it('the snapshot plus the history window — bare on the old path, in data on v1', async () => {
     const a = await app();
-    const body = { ...SNAPSHOT, history: { retentionDays: DATA_RETENTION_DAYS, oldestMs: OLDEST, newestMs: NOW } };
+    const body = { ...SERVED, history: { retentionDays: DATA_RETENTION_DAYS, oldestMs: OLDEST, newestMs: NOW } };
 
     const old = await a.request('/api/adsb/aircraft');
     expect(old.status).toBe(200);
@@ -138,6 +175,81 @@ describe('GET /api/adsb/trails and /api/v1/adsb/trails', () => {
     const v1 = await a.request('/api/v1/adsb/trails');
     expect(v1.status).toBe(200);
     expect(await v1.text()).toBe(JSON.stringify({ data: TRAILS }));
+  });
+});
+
+describe('?recent= on the live aircraft and trails', () => {
+  it('serves the recent aircraft, cached for 2 s, on both paths', async () => {
+    const a = await app();
+    const body = { ...SERVED, count: 1, history: { retentionDays: DATA_RETENTION_DAYS, oldestMs: OLDEST, newestMs: NOW } };
+    const v1 = await a.request('/api/v1/adsb/aircraft?recent=15');
+    expect(v1.status).toBe(200);
+    expect(v1.headers.get('Cache-Control')).toBe('public, max-age=2');
+    expect(await v1.text()).toBe(JSON.stringify({ data: body }));
+    const old = await a.request('/api/adsb/aircraft?recent=15');
+    expect(await old.text()).toBe(JSON.stringify(body));
+    expect(m.recentAsked).toEqual([['aircraft', 15], ['aircraft', 15]]);
+  });
+
+  it('serves the recent trail points with their times, cached for 2 s', async () => {
+    const a = await app();
+    const v1 = await a.request('/api/v1/adsb/trails?recent=15');
+    expect(v1.status).toBe(200);
+    expect(v1.headers.get('Cache-Control')).toBe('public, max-age=2');
+    expect(await v1.text()).toBe(JSON.stringify({ data: RECENT_TRAILS }));
+    expect(m.recentAsked).toEqual([['trails', 15]]);
+  });
+
+  it('ignores a recent that is not a whole number in range, and serves the full answer', async () => {
+    const a = await app();
+    for (const bad of ['abc', '0', '61', '2.5', '']) {
+      const res = await a.request(`/api/v1/adsb/aircraft?recent=${bad}`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('Cache-Control')).toBeNull();
+      const t = await a.request(`/api/v1/adsb/trails?recent=${bad}`);
+      expect(await t.text()).toBe(JSON.stringify({ data: TRAILS }));
+    }
+    expect(m.recentAsked).toEqual([]);
+  });
+});
+
+describe('detail on the live aircraft', () => {
+  const DETAILED = {
+    ...SNAPSHOT,
+    aircraft: [
+      { ...SNAPSHOT.aircraft[0]!, baroRateFpm: -640, posSource: 'adsb', iasKt: 118, rssiDb: -9.5, navAltFt: 2000 },
+      SNAPSHOT.aircraft[1]!,
+    ],
+  };
+  type Body = { data: { count: number; aircraft: Array<Record<string, unknown>> } };
+
+  it('the plain list carries three detail fields; detail=1 carries them all', async () => {
+    m.snapshot = DETAILED as never;
+    const a = await app();
+    const lean = ((await (await a.request('/api/v1/adsb/aircraft')).json()) as Body).data.aircraft[0]!;
+    expect(lean).toMatchObject({ baroRateFpm: -640, posSource: 'adsb' });
+    for (const k of ['iasKt', 'rssiDb', 'navAltFt']) expect(lean).not.toHaveProperty(k);
+    const full = ((await (await a.request('/api/v1/adsb/aircraft?detail=1')).json()) as Body).data.aircraft[0]!;
+    expect(full).toMatchObject({ baroRateFpm: -640, iasKt: 118, rssiDb: -9.5, navAltFt: 2000 });
+  });
+
+  it('hex returns that one aircraft with everything, cached for 2 s', async () => {
+    m.snapshot = DETAILED as never;
+    const a = await app();
+    const res = await a.request('/api/v1/adsb/aircraft?hex=7C6B2D');
+    expect(res.headers.get('Cache-Control')).toBe('public, max-age=2');
+    const body = ((await res.json()) as Body).data;
+    expect(body.count).toBe(1);
+    expect(body.aircraft.map((x) => x.hex)).toEqual(['7c6b2d']);
+    expect(body.aircraft[0]).toMatchObject({ iasKt: 118, seenAt: '2026-10-28T03:59:57.600Z' });
+  });
+
+  it('hex for an aircraft that is not tracked is an empty list, and a bad hex is ignored', async () => {
+    const a = await app();
+    const none = ((await (await a.request('/api/v1/adsb/aircraft?hex=abcdef')).json()) as Body).data;
+    expect([none.count, none.aircraft]).toEqual([0, []]);
+    const bad = ((await (await a.request('/api/v1/adsb/aircraft?hex=zzz')).json()) as Body).data;
+    expect(bad.aircraft).toHaveLength(2);
   });
 });
 
@@ -271,7 +383,7 @@ describe('GET /api/adsb/photo/:hex and /api/v1/adsb/photo/:hex', () => {
     link: 'https://www.planespotters.net/photo/1234',
     photographer: 'A. Spotter',
   };
-  const SERVED = { src: PHOTO.thumbnail_large.src, link: PHOTO.link, photographer: PHOTO.photographer };
+  const SERVED = { src: PHOTO.thumbnail_large.src, link: PHOTO.link, photographer: PHOTO.photographer, source: 'planespotters' };
 
   it('by hex: the photo, bare on the old path and in data on v1', async () => {
     m.fetchJson.mockResolvedValue({ photos: [PHOTO] });
@@ -295,6 +407,44 @@ describe('GET /api/adsb/photo/:hex and /api/v1/adsb/photo/:hex', () => {
       'https://api.planespotters.net/pub/photos/hex/7c0002',
       'https://api.planespotters.net/pub/photos/reg/VH-ABC',
     ]);
+  });
+
+  it('airport-data.com is the backup when Planespotters has none', async () => {
+    m.fetchJson.mockImplementation(async (url: string) =>
+      url.includes('airport-data.com')
+        ? { status: 200, count: 1, data: [{ image: 'https://airport-data.com/images/aircraft/thumbnails/001/939/001939643.jpg', link: 'https://airport-data.com/aircraft/photo/001939643', photographer: 'PhilR' }] }
+        : { photos: [] });
+    const a = await app();
+    const v1 = await a.request('/api/v1/adsb/photo/7c4925?reg=vh-oqf');
+    expect(await v1.json()).toEqual({
+      data: {
+        photo: {
+          src: 'https://airport-data.com/images/aircraft/thumbnails/001/939/001939643.jpg',
+          link: 'https://airport-data.com/aircraft/photo/001939643',
+          photographer: 'PhilR',
+          source: 'airport-data',
+        },
+      },
+    });
+    expect(m.fetchJson.mock.calls.map((c) => c[0])).toEqual([
+      'https://api.planespotters.net/pub/photos/hex/7c4925',
+      'https://api.planespotters.net/pub/photos/reg/VH-OQF',
+      'https://airport-data.com/api/ac_thumb.json?m=7C4925&n=1&r=VH-OQF',
+    ]);
+  });
+
+  it('the backup is used when Planespotters is down, and "none" is not cached off a failed lookup', async () => {
+    const { HttpError } = await import('../../../src/sources/shared/http.js');
+    m.fetchJson.mockImplementation(async (url: string) => {
+      if (url.includes('planespotters')) throw new HttpError('HTTP 503', 503, url);
+      throw new HttpError('HTTP 404', 404, url); // airport-data knows none
+    });
+    const a = await app();
+    expect(await (await a.request('/api/adsb/photo/7c0aa1')).text()).toBe('{"photo":null}');
+    const before = m.fetchJson.mock.calls.length;
+    // Asked again: nothing was cached, so both are tried again.
+    await a.request('/api/adsb/photo/7c0aa1');
+    expect(m.fetchJson.mock.calls.length).toBeGreaterThan(before);
   });
 
   it('a lookup that fails is no photo, on both paths', async () => {
@@ -357,5 +507,103 @@ describe('what is not mirrored', () => {
     await app();
     const adsb = mirroredRoutes().filter((r) => r.path.startsWith('/api/v1/adsb/'));
     expect(adsb.map((r) => `${r.method} ${r.legacyPath}`).sort()).toEqual(IN_SCOPE.map((p) => `GET ${p}`).sort());
+  });
+});
+
+describe('GET /api/adsb/info/:hex and /api/v1/adsb/info/:hex (adsbdb)', () => {
+  const AIRCRAFT = {
+    response: {
+      aircraft: {
+        type: 'A380 842', icao_type: 'A388', manufacturer: 'Airbus', mode_s: '7C4925',
+        registration: 'VH-OQF', registered_owner_country_iso_name: 'AU',
+        registered_owner_country_name: 'Australia', registered_owner_operator_flag_code: 'QFA',
+        registered_owner: 'Qantas', url_photo: null, url_photo_thumbnail: null,
+      },
+    },
+  };
+  const ROUTE = {
+    response: {
+      flightroute: {
+        callsign: 'QFA1', callsign_icao: 'QFA1', callsign_iata: 'QF1',
+        airline: { name: 'Qantas', icao: 'QFA', iata: 'QF', country: 'Australia', country_iso: 'AU', callsign: 'QANTAS' },
+        origin: { country_iso_name: 'AU', country_name: 'Australia', elevation: 21, iata_code: 'SYD', icao_code: 'YSSY', latitude: -33.9461, longitude: 151.177, municipality: 'Sydney', name: 'Sydney Kingsford Smith International Airport' },
+        destination: { country_iso_name: 'SG', country_name: 'Singapore', elevation: 22, iata_code: 'SIN', icao_code: 'WSSS', latitude: 1.35, longitude: 103.99, municipality: 'Singapore', name: 'Singapore Changi Airport' },
+      },
+    },
+  };
+  beforeEach(async () => {
+    const { _resetAdsbInfoForTests } = await import('../../../src/api/adsb.js');
+    _resetAdsbInfoForTests();
+  });
+
+  it('the airframe and the usual route, compacted', async () => {
+    m.fetchJson.mockImplementation(async (url: string) => (url.includes('/callsign/') ? ROUTE : AIRCRAFT));
+    const a = await app();
+    const res = await a.request('/api/adsb/info/7c4925?callsign=qfa1');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      aircraft: {
+        manufacturer: 'Airbus', type: 'A380 842', icaoType: 'A388', registration: 'VH-OQF',
+        owner: 'Qantas', ownerCountry: 'Australia',
+      },
+      route: {
+        callsign: 'QFA1',
+        airline: 'Qantas',
+        origin: { icao: 'YSSY', iata: 'SYD', name: 'Sydney Kingsford Smith International Airport', municipality: 'Sydney', country: 'AU', lat: -33.9461, lon: 151.177 },
+        destination: { icao: 'WSSS', iata: 'SIN', name: 'Singapore Changi Airport', municipality: 'Singapore', country: 'SG', lat: 1.35, lon: 103.99 },
+        midpoint: null,
+      },
+    });
+    expect(m.fetchJson.mock.calls.map((c) => c[0]).sort()).toEqual([
+      'https://api.adsbdb.com/v0/aircraft/7C4925',
+      'https://api.adsbdb.com/v0/callsign/QFA1',
+    ]);
+    // Cached: a second ask goes nowhere. On v1 the same answer, in data.
+    const v1 = await a.request('/api/v1/adsb/info/7c4925?callsign=QFA1');
+    expect(v1.status).toBe(200);
+    expect(((await v1.json()) as { data: { route: { callsign: string } } }).data.route.callsign).toBe('QFA1');
+    expect(m.fetchJson).toHaveBeenCalledTimes(2);
+  });
+
+  it('unknown to adsbdb (404) is null, and one half failing leaves the other', async () => {
+    const { HttpError } = await import('../../../src/sources/shared/http.js');
+    m.fetchJson.mockImplementation(async (url: string) => {
+      if (url.includes('/callsign/')) throw new HttpError('HTTP 503', 503, url);
+      throw new HttpError('HTTP 404', 404, url);
+    });
+    const a = await app();
+    const res = await a.request('/api/adsb/info/7c0bb1?callsign=JST501');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ aircraft: null, route: null });
+  });
+
+  it('a TIS-B id skips the airframe lookup; no callsign skips the route', async () => {
+    m.fetchJson.mockResolvedValue(ROUTE);
+    const a = await app();
+    expect(await (await a.request('/api/adsb/info/~7c0cc1?callsign=QFA1')).json()).toMatchObject({ aircraft: null });
+    expect(m.fetchJson.mock.calls.map((c) => c[0])).toEqual(['https://api.adsbdb.com/v0/callsign/QFA1']);
+    m.fetchJson.mockClear();
+    m.fetchJson.mockResolvedValue(AIRCRAFT);
+    expect(await (await a.request('/api/adsb/info/7c0cc2')).json()).toMatchObject({ route: null });
+    expect(m.fetchJson.mock.calls.map((c) => c[0])).toEqual(['https://api.adsbdb.com/v0/aircraft/7C0CC2']);
+  });
+
+  it('bad input: the old bodies, validation_failed on v1', async () => {
+    const a = await app();
+    const cases: Array<[string, string, string]> = [
+      ['zz', '{"error":"invalid hex"}', 'hex'],
+      ['7c0dd1?callsign=QF%201!', '{"error":"invalid callsign"}', 'callsign'],
+    ];
+    for (const [tail, oldBody, field] of cases) {
+      const old = await a.request(`/api/adsb/info/${tail}`);
+      expect(old.status, tail).toBe(400);
+      expect(await old.text(), tail).toBe(oldBody);
+      const v1 = await a.request(`/api/v1/adsb/info/${tail}`);
+      expect(v1.status, tail).toBe(400);
+      const body = (await v1.json()) as { error: { code: string; details: { issues: Array<{ path: string }> } } };
+      expect(body.error.code, tail).toBe('validation_failed');
+      expect(body.error.details.issues[0]!.path, tail).toBe(field);
+    }
+    expect(m.fetchJson).not.toHaveBeenCalled();
   });
 });

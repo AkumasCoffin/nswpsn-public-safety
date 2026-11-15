@@ -23,8 +23,8 @@ Read [`../../OPERATING-RULES.md`](../../OPERATING-RULES.md) before changing anyt
 
 AusAware already fans out across adsb.lol, adsb.fi and airplanes.live
 (`backends/node/src/sources/adsb.ts`, 8s). The node fleet is a different thing:
-its own hardware, three times fresher than the aggregators' roughly 15s effective
-cadence, and with coverage and range statistics AusAware owns.
+its own hardware, several times fresher than the aggregators' roughly 15-20s
+effective cadence, and with coverage and range statistics AusAware owns.
 
 Both exist side by side. Do not conflate them — `/api/adsb/aircraft` is the
 aggregator fan-out; the node path is `/api/node-ingest/adsb-upload` and the
@@ -39,7 +39,7 @@ aggregator fan-out; the node path is `/api/node-ingest/adsb-upload` and the
                                │
                 internal/decoderjson reads both files
                                │
-                  snapshot loop, every 5 seconds
+                  snapshot loop, every 2 seconds
                                │
                 internal/queue  (disk FIFO, 90s age bound)
                                │
@@ -171,14 +171,44 @@ queues it, and keeps the heartbeat figures current.
 of this receiver's view, not a delta — which is what lets the queue drop stale
 entries on age alone, with no reconciliation.
 
-`snapshotInterval` is **5 seconds**, and the number is chosen against three
-constraints at once:
+`snapshotInterval` is **2 seconds** (5 seconds before agent 0.1.16), and the
+number is chosen against three constraints at once:
 
-- three times fresher than the public aggregators' ~15s effective cadence, which
-  is much of the point of running the hardware;
-- well inside the queue's **90s age bound**, so a network blip of ~18 snapshots
+- several times fresher than the public aggregators' ~15-20s effective cadence,
+  which is much of the point of running the hardware. The public map polls
+  `/api/v1/adsb/aircraft?recent=15` and `/api/v1/adsb/trails?recent=15` every 3s
+  and moves the aircraft a receiver hears, so this interval is what sets how far
+  behind the real aircraft their markers sit;
+- well inside the queue's **90s age bound**, so a network blip of ~45 snapshots
   still drains rather than expiring;
-- 12 uploads a minute, comfortably under the server's 20-per-minute limiter.
+- 30 uploads a minute, under the server's 45-per-minute limiter.
+
+The decoder is read every second either way (`sampleInterval`), and the points
+between uploads ride along in each snapshot, so the interval changes how soon a
+position arrives, not how many there are. The per-day `snapshots` and
+`positions` counters do count per upload, so they run about 2.5× higher from
+0.1.16 on.
+
+### What each aircraft carries
+
+Up to 0.1.16 an uploaded aircraft was its position and little else: `hex`,
+`flight`, `lat`, `lon`, `alt_baro`, `gs`, `track`, `squawk`, `emergency`,
+`category`, `seen_pos`, and the positions seen between uploads. From **0.1.17**
+it also carries whatever the decoder holds of: `alt_geom`, `baro_rate`,
+`geom_rate`, `ias`, `tas`, `mach`, `true_heading`, `mag_heading`, `roll`,
+`nav_altitude_mcp`, `nav_altitude_fms`, `nav_heading`, `nav_qnh`, `nav_modes`,
+`nic`, `nac_p`, `sil`, `rc`, `version`, `rssi`, `messages`, and `type`.
+
+- Each is omitted when the decoder has no value. Most aircraft send only some.
+- `type` says how the position was obtained, in readsb's words. dump1090-fa has
+  no such field, so the agent works it out: `mlat` when `lat` is listed in the
+  record's `mlat` array, `tisb_icao`/`tisb_other` likewise, else `adsb_icao`.
+- The backend range-checks every value (`detailOf` in `sources/adsb.ts`) and
+  drops what no aircraft could report. It also checks aircraft one at a time,
+  drops any more than 800 km from the receiver's pin, and accepts bodies up to
+  512 KB (`api/node-ingest.ts`).
+- None of it is stored. It is on the live aircraft only
+  (`/api/v1/adsb/aircraft?detail=1` or `?hex=`).
 
 ## Adaptive gain
 

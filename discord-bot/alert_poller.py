@@ -180,6 +180,17 @@ class AlertPoller:
                 return f"{alert_type}_{suburb}_{street}"
             return hashlib.md5(str(item).encode(), usedforsecurity=False).hexdigest()[:16]
 
+        elif alert_type in alert_catalog.keys_with_shape('outage_v1'):
+            # The merged outage feed (/api/v1/outages): the distributor's own
+            # id, which is unique with the distributor. Keyed on the id alone,
+            # so a customer count or restore time that moves is not a second
+            # outage.
+            props = item.get('properties') or {}
+            outage_id = props.get('id')
+            if outage_id:
+                return f"{props.get('distributor') or alert_type}_{outage_id}"
+            return hashlib.md5(str(item).encode(), usedforsecurity=False).hexdigest()[:16]
+
         elif alert_type in alert_catalog.keys_with_shape('geo_fire_warning'):
             props = item.get('properties', {})
             guid = props.get('guid', '') or props.get('title', '')
@@ -378,6 +389,13 @@ class AlertPoller:
                     except Exception:
                         pass
 
+            elif alert_type in alert_catalog.keys_with_shape('outage_v1'):
+                # The merged outage feed: start_at is ISO 8601 UTC, or null
+                # when the distributor gives none (then "now", below).
+                ts = (item.get('properties') or {}).get('start_at') or ''
+                if ts:
+                    return _aware(datetime.fromisoformat(str(ts).replace('Z', '+00:00')))
+
             elif alert_type == 'user_incident':
                 # User incidents use created_at (ISO format)
                 ts = item.get('created_at', '')
@@ -463,6 +481,16 @@ class AlertPoller:
         """The state a record says it is in (properties.state), '' for none."""
         props = item.get('properties') if isinstance(item, dict) else None
         return str(props.get('state') or '') if isinstance(props, dict) else ''
+
+    @staticmethod
+    def _outage_feed_unread(data: Any) -> bool:
+        """True when a merged outage feed answer says a distributor in it has
+        not been read: sources[].updated_at is null. An answer with no
+        `sources` at all is taken as read."""
+        sources = data.get('sources') if isinstance(data, dict) else None
+        if not isinstance(sources, list):
+            return False
+        return any(isinstance(s, dict) and not s.get('updated_at') for s in sources)
 
     async def _new_alerts_for(self, loop, alert_type: str, data: Any) -> List[Dict[str, Any]]:
         """The alerts in one fetched feed that have not been seen, marked seen."""
@@ -623,6 +651,17 @@ class AlertPoller:
             if (alert_type.startswith('wire_') and isinstance(data, dict)
                     and data.get('visible') is False):
                 logger.debug(f"  → {alert_type}: The Wire is not live — skipping")
+                continue
+
+            # The merged outage feed answers 200 with no features for a
+            # distributor the backend has not read (not yet since a restart,
+            # or switched off), and says so in sources[].updated_at. Skip it
+            # like The Wire above, without consuming the bootstrap: an empty
+            # bootstrap would be followed by every outage under way arriving
+            # as new on the backend's first read.
+            if (alert_type in alert_catalog.keys_with_shape('outage_v1')
+                    and self._outage_feed_unread(data)):
+                logger.debug(f"  → {alert_type}: distributor not read yet — skipping")
                 continue
 
             # A source that fails here (a database error on its ids, say) is

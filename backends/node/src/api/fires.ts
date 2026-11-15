@@ -262,6 +262,55 @@ const Query = z.object({
   all: flag('1 includes closed records as well'),
 });
 
+/** What narrows the merged list; nothing given is every service's open records. */
+export interface FiresFilter {
+  source?: readonly string[] | undefined;
+  state?: readonly string[] | undefined;
+  layer?: readonly string[] | undefined;
+  kind?: readonly string[] | undefined;
+  /** Closed records as well. */
+  all?: boolean;
+}
+
+/**
+ * Every service's records in the shared shape, with what each feed gave. Reads
+ * the LiveStore only. /api/fires answers with it, and the per-state stats
+ * (api/stats.ts) count from it.
+ */
+export function mergedFires(q: FiresFilter = {}): { features: FireFeature[]; sources: Array<z.infer<typeof ServiceStatus>> } {
+  const states = new Set<string>(q.state ?? []);
+  const layers = new Set<string>(q.layer ?? []);
+  const kinds = new Set<string>(q.kind ?? []);
+  const wanted = SERVICES.filter(
+    (s) =>
+      (!q.source?.length || q.source.includes(s.source)) &&
+      (!states.size || states.has(s.state)) &&
+      (!kinds.size || kinds.has(s.kind)),
+  );
+  const features: FireFeature[] = [];
+  const sources: Array<z.infer<typeof ServiceStatus>> = [];
+  for (const svc of wanted) {
+    const ts = liveStore.get(svc.store)?.ts;
+    let count = 0;
+    for (const f of svc.snapshot().features) {
+      const fire = toFire(f, svc);
+      if (!q.all && !fire.properties.is_active) continue;
+      if (layers.size && !layers.has(fire.properties.layer)) continue;
+      features.push(fire);
+      count++;
+    }
+    sources.push({
+      source: svc.source as z.infer<typeof ServiceStatus>['source'],
+      name: svc.name,
+      state: svc.state,
+      kind: svc.kind,
+      count,
+      updated_at: ts ? new Date(ts * 1000).toISOString() : null,
+    });
+  }
+  return { features, sources };
+}
+
 firesRouter.get(
   '/api/fires',
   SCOPE_FIRES,
@@ -282,36 +331,7 @@ firesRouter.get(
   queryValidator(Query),
   (c) => {
     const q = c.req.valid('query');
-    const states = new Set<string>(q.state ?? []);
-    const layers = new Set<string>(q.layer ?? []);
-    const kinds = new Set<string>(q.kind ?? []);
-    const wanted = SERVICES.filter(
-      (s) =>
-        (!q.source?.length || q.source.includes(s.source)) &&
-        (!states.size || states.has(s.state)) &&
-        (!kinds.size || kinds.has(s.kind)),
-    );
-    const features: FireFeature[] = [];
-    const sources: Array<z.infer<typeof ServiceStatus>> = [];
-    for (const svc of wanted) {
-      const ts = liveStore.get(svc.store)?.ts;
-      let count = 0;
-      for (const f of svc.snapshot().features) {
-        const fire = toFire(f, svc);
-        if (q.all !== '1' && !fire.properties.is_active) continue;
-        if (layers.size && !layers.has(fire.properties.layer)) continue;
-        features.push(fire);
-        count++;
-      }
-      sources.push({
-        source: svc.source as z.infer<typeof ServiceStatus>['source'],
-        name: svc.name,
-        state: svc.state,
-        kind: svc.kind,
-        count,
-        updated_at: ts ? new Date(ts * 1000).toISOString() : null,
-      });
-    }
+    const { features, sources } = mergedFires({ source: q.source, state: q.state, layer: q.layer, kind: q.kind, all: q.all === '1' });
     return geo(c, { type: 'FeatureCollection', features, count: features.length, sources } satisfies z.infer<typeof Fires>);
   },
 );

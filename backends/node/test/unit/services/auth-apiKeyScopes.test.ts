@@ -27,6 +27,7 @@ import {
   type ScopeNeed,
 } from '../../../src/services/auth/apiKeyScopes.js';
 import { catalog } from '../../../src/services/alertCatalog.js';
+import { DISTRIBUTOR_INFO, OUTAGE_SOURCES, OUTAGE_STORES } from '../../../src/sources/outages/common.js';
 
 const FIRES_LIVE = ['fires:live'];
 const FIRES: ScopeNeed = { feed: 'fires', window: 'live' };
@@ -366,9 +367,7 @@ describe('the feeds stay aligned with the alert catalog', () => {
     actas: ['ambulance'],
     bom: ['warnings'],
     livetraffic: ['roads'],
-    endeavour: ['outages'],
-    ausgrid: ['outages'],
-    essential: ['outages'],
+    power: ['outages'],
     rdio: ['summaries'],
     dorsal: ['beaches'],
   };
@@ -392,6 +391,14 @@ describe('the feeds stay aligned with the alert catalog', () => {
       expect(PROVIDER_FEEDS[t.provider], t.archiveSource).toContain(feed);
     }
     for (const never of [...NEVER, 'essential_energy_cancelled']) expect(HISTORY_SOURCES[never], never).toBeUndefined();
+  });
+
+  it('every source the merged outage feed files a record under is readable through outages history', () => {
+    // The catalog names only the distributors the bot alerts on (Horizon
+    // Power is not read), so the test above does not reach every one of the
+    // other states' distributors.
+    for (const source of OUTAGE_SOURCES) expect(HISTORY_SOURCES[source], source).toBe('outages');
+    for (const store of OUTAGE_STORES) expect(FEEDS.outages.covers, store).toContain(DISTRIBUTOR_INFO[store].name);
   });
 
   it('every archived source names a feed that offers history', () => {
@@ -441,8 +448,12 @@ describe('stored history: a route spanning feeds, narrowed per key', () => {
     expect(historySourcesFor(['warnings:history', 'pager:history']).sort()).toEqual(
       ['bom_land', 'bom_marine', 'pager'],
     );
+    // The NSW distributors under their feeds' names, every other one under its own.
     expect(historySourcesFor(['outages:history']).sort()).toEqual(
-      ['ausgrid', 'endeavour_current', 'endeavour_maintenance', 'endeavour_planned', 'essential_current', 'essential_future', 'essential_planned'],
+      [
+        'ausgrid', 'ausnet', 'citipower', 'endeavour_current', 'endeavour_maintenance', 'endeavour_planned',
+        'essential_current', 'essential_future', 'essential_planned', 'horizon', 'jemena', 'powercor', 'sapn', 'westernpower',
+      ],
     );
     // A live cell reads no history, and a history cell with nothing archived reads none either.
     expect(historySourcesFor(['fires:live'])).toEqual([]);

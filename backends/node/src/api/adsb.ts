@@ -18,8 +18,15 @@
  *                            to the registration. Cached 24 h — photos
  *                            for a given airframe essentially never
  *                            change and Planespotters rate-limits.
+ *                            airport-data.com is the backup when
+ *                            Planespotters has none or is down.
  *
- * These two, /api/adsb/history and /api/adsb/trails are also served at
+ *   GET /api/adsb/info/:hex?callsign=QFA1
+ *                          — the airframe (maker, type, operator) and the
+ *                            callsign's usual route, from adsbdb.com.
+ *                            Public (aircraft:live), credited in its docs.
+ *
+ * These, /api/adsb/history, /api/adsb/trails and /api/adsb/info are also served at
  * /api/v1/ (server.ts mirrors them), wrapped in `data` there
  * (api/v1/respond.ts). /api/adsb/receivers is not: it is node status, for
  * the site's own map.
@@ -30,6 +37,11 @@ import { describeRoute, resolver } from 'hono-openapi';
 import {
   adsbSnapshot,
   adsbTrailsSnapshot,
+  adsbRecentAircraft,
+  adsbRecentTrails,
+  withoutFullDetail,
+  ADSB_RECENT_MAX_SEC,
+  type AdsbRecentTrails,
   type AdsbSnapshot,
   type AdsbTrailsSnapshot,
 } from '../sources/adsb.js';
@@ -106,6 +118,47 @@ const AdsbAircraftRecord = z.object({
     .boolean()
     .describe('true when the position is dead-reckoned from the last heading and speed, not received — show it as a guess'),
   estimatedSec: z.number().int().nullable().describe('When estimated, seconds since the last real fix; otherwise null'),
+  // ---- Detail. Each is absent when the source did not send it. Only
+  // baroRateFpm, posSource and emergency are on the plain list; the rest
+  // come with `detail=1` or `hex`. ----
+  baroRateFpm: z.number().optional().describe('Vertical rate from pressure altitude, feet per minute; negative is descending'),
+  posSource: z
+    .enum(['adsb', 'mlat', 'tisb', 'adsr', 'adsc', 'modes', 'other'])
+    .optional()
+    .describe("How the position was obtained. adsb is the aircraft's own GPS; mlat (multilateration) and tisb (ground radar rebroadcast) are worked out by others and are less exact"),
+  emergency: z
+    .string()
+    .optional()
+    .describe('The emergency the aircraft has declared, when there is one: general, lifeguard, minfuel, nordo, unlawful, downed'),
+  geomRateFpm: z.number().optional().describe('Vertical rate from GPS altitude, feet per minute'),
+  altGeomFt: z.number().optional().describe('GPS (geometric) altitude, feet above the WGS84 ellipsoid'),
+  iasKt: z.number().optional().describe('Indicated airspeed, knots'),
+  tasKt: z.number().optional().describe('True airspeed, knots'),
+  mach: z.number().optional().describe('Mach number'),
+  trueHeadingDeg: z.number().optional().describe('Where the nose points, degrees true; differs from trackDeg by the wind'),
+  magHeadingDeg: z.number().optional().describe('Heading, degrees magnetic'),
+  rollDeg: z.number().optional().describe('Bank angle, degrees; negative is left'),
+  navAltFt: z.number().optional().describe('Altitude selected on the autopilot, feet'),
+  navHeadingDeg: z.number().optional().describe('Heading selected on the autopilot, degrees'),
+  navQnhHpa: z.number().optional().describe('Altimeter setting, hPa'),
+  navModes: z.array(z.string()).optional().describe('Engaged autopilot modes: autopilot, vnav, althold, approach, lnav, tcas'),
+  windDirDeg: z.number().optional().describe("Wind direction, degrees, as an aggregator derived it from the aircraft's own data"),
+  windKt: z.number().optional().describe('Wind speed, knots (derived, as windDirDeg)'),
+  oatC: z.number().optional().describe('Outside air temperature, °C (derived)'),
+  nic: z.number().optional().describe('Navigation integrity category, 0 to 11; higher is better'),
+  nacp: z.number().optional().describe('Position accuracy category, 0 to 11; higher is better'),
+  sil: z.number().optional().describe('Source integrity level, 0 to 3'),
+  rcM: z.number().optional().describe('Radius of containment, metres: the position is within this of the truth'),
+  adsbVersion: z.number().optional().describe('ADS-B version the transponder speaks, 0 to 2'),
+  rssiDb: z.number().optional().describe('Signal strength at the receiver that heard it, dBFS (negative; nearer 0 is stronger)'),
+  messages: z.number().int().optional().describe('Messages that receiver has had from this aircraft'),
+  flags: z
+    .array(z.enum(['military', 'interesting', 'pia', 'ladd']))
+    .optional()
+    .describe("Flags from the aggregator's aircraft database"),
+  desc: z.string().optional().describe("Airframe description from the aggregator's database, e.g. BOEING 737-800"),
+  operator: z.string().optional().describe("Operator from the aggregator's database"),
+  year: z.string().optional().describe('Year of manufacture'),
 });
 
 const AdsbSnapshotSchema = z.object({
@@ -133,7 +186,51 @@ const AdsbSnapshotSchema = z.object({
 });
 assertShape<SameShape<z.infer<typeof AdsbSnapshotSchema>, AdsbSnapshot>>();
 
+const AdsbAircraftOut = AdsbAircraftRecord.extend({
+  seenAt: z
+    .string()
+    .describe(
+      'When the position was heard, ISO 8601; for an estimated one, when its last real fix was. '
+        + 'Count "seconds ago" from this rather than ageSec, which is only true at fetched_at',
+    ),
+});
+
+/** The served aircraft, each with `seenAt`: fetched_at less its age. Memoised
+ *  per snapshot object (the full one changes per poll, the recent one per
+ *  second), so many viewers cost one pass. */
+type AircraftOut = AdsbSnapshot['aircraft'][number] & { seenAt: string };
+const _seenAtMemo = { lean: new WeakMap<AdsbSnapshot, AircraftOut[]>(), full: new WeakMap<AdsbSnapshot, AircraftOut[]>() };
+function withSeenAt(
+  snap: AdsbSnapshot,
+  /** Keep every detail field; otherwise only the three the list carries. */
+  detail: boolean = false,
+): Omit<AdsbSnapshot, 'aircraft'> & { aircraft: AircraftOut[] } {
+  const memo = detail ? _seenAtMemo.full : _seenAtMemo.lean;
+  let aircraft = memo.get(snap);
+  if (!aircraft) {
+    const at = Date.parse(snap.fetched_at);
+    const base = Number.isFinite(at) ? at : Date.now();
+    // Rounded here, once per snapshot. A projected position and a re-aged
+    // receiver age are raw floats (-33.86000000000001, 3.4000000000000004):
+    // 5 dp is about a metre and a tenth of a second is finer than anything
+    // shown, and across a thousand aircraft the digits were a real share of
+    // an answer every viewer downloads every 15 s.
+    aircraft = snap.aircraft.map((a) => ({
+      ...(detail ? a : withoutFullDetail(a)),
+      lat: Math.round(a.lat * 1e5) / 1e5,
+      lon: Math.round(a.lon * 1e5) / 1e5,
+      ageSec: Math.round(a.ageSec * 10) / 10,
+      seenAt: new Date(base - Math.max(0, a.ageSec) * 1000).toISOString(),
+    }));
+    memo.set(snap, aircraft);
+  }
+  return { ...snap, aircraft };
+}
+
 const AdsbAircraft = AdsbSnapshotSchema.extend({
+  aircraft: z
+    .array(AdsbAircraftOut)
+    .describe('Those with an esTag or emergencySquawk first, then by altitude, lowest first; no altitude (including on the ground) last'),
   history: z
     .object({
       retentionDays: z.number().int().describe('Days of history kept'),
@@ -187,6 +284,72 @@ const AdsbHistoryQuery = z.object({
     .describe(`Minutes of track before the instant, 0 to 30 (rounded, and held to that range). Default ${HISTORY_TRAIL_DEFAULT_MIN}.`),
 });
 
+// `recent` on the live aircraft and trails: only what changed in the last few
+// seconds, for a client that polls often. Never refused — anything that is not
+// a whole number in range is simply absent, and the full answer is served.
+const RECENT_CACHE = 'public, max-age=2';
+const AdsbRecentQuery = z.object({
+  recent: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(ADSB_RECENT_MAX_SEC)
+    .optional()
+    .catch(undefined)
+    .describe(
+      `Seconds, 1 to ${ADSB_RECENT_MAX_SEC}. Only what was heard in that many seconds: positions no older, or track points no older. AusAware's own receivers report every couple of seconds, so for the aircraft they hear this is how to follow them closely; aggregator positions change about every 15 seconds. Cached for 2 seconds.`,
+    ),
+});
+const AdsbAircraftQuery = AdsbRecentQuery.extend({
+  detail: z
+    .string()
+    .optional()
+    .catch(undefined)
+    .describe(
+      'Set to 1 for every detail field on every aircraft (speeds, headings, autopilot settings, accuracy, signal…). Without it the list carries only baroRateFpm, posSource and emergency, which keeps it small.',
+    ),
+  hex: z
+    .string()
+    .optional()
+    .catch(undefined)
+    .describe(
+      "One aircraft's ICAO address. Only that aircraft is returned, with every detail field and its freshest position (a couple of seconds old where AusAware's receivers hear it); an empty list when it is not being tracked. Cached for 2 seconds.",
+    ),
+});
+const HEX_RE = /^~?[0-9a-f]{4,8}$/;
+/** The query's `hex`, lowercased, or null when absent or not an address. */
+function hexOf(raw: string | undefined): string | null {
+  const h = (raw ?? '').trim().toLowerCase();
+  return HEX_RE.test(h) ? h : null;
+}
+
+/**
+ * One aircraft as a snapshot of its own. The freshest record wins: the merge
+ * with our receivers' current fixes if it is in that, else whatever the last
+ * poll holds (a held or estimated position). Each keeps the fetched_at its
+ * ageSec is measured to.
+ */
+function oneAircraft(hex: string, nowMs: number): AdsbSnapshot {
+  const only = (snap: AdsbSnapshot, a: AdsbSnapshot['aircraft'][number] | undefined): AdsbSnapshot => ({
+    ...snap,
+    aircraft: a ? [a] : [],
+    count: a ? 1 : 0,
+    emergency_count: a && a.esTag !== null ? 1 : 0,
+  });
+  const live = adsbRecentAircraft(ADSB_RECENT_MAX_SEC, nowMs);
+  const fresh = live.aircraft.find((a) => a.hex === hex);
+  if (fresh) return only(live, fresh);
+  const snap = adsbSnapshot();
+  return only(snap, snap.aircraft.find((a) => a.hex === hex));
+}
+
+/** The query's `recent`, or null when absent or invalid. */
+function recentOf(raw: string | undefined): number | null {
+  if (raw === undefined || raw === '') return null;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 1 && n <= ADSB_RECENT_MAX_SEC ? n : null;
+}
+
 const AdsbTrails = z
   .object({
     trails: z
@@ -199,6 +362,18 @@ const AdsbTrails = z
   .meta({ id: 'AdsbTrails' });
 assertShape<SameShape<z.infer<typeof AdsbTrails>, AdsbTrailsSnapshot>>();
 
+const AdsbRecentTrailsSchema = z
+  .object({
+    trails: z
+      .record(z.string(), z.array(z.tuple([z.number(), z.number(), z.number().nullable(), z.number()])))
+      .describe(
+        'With `recent`: by aircraft hex, the track points heard in that window, oldest first, each [latitude, longitude, altitude in feet or null, unix milliseconds of the fix]. Aircraft with none are left out.',
+      ),
+    fetched_at: z.string().describe('When this answer was built, ISO 8601'),
+  })
+  .meta({ id: 'AdsbRecentTrails' });
+assertShape<SameShape<z.infer<typeof AdsbRecentTrailsSchema>, AdsbRecentTrails>>();
+
 adsbRouter.get(
   '/api/adsb/aircraft',
   SCOPE_AIRCRAFT,
@@ -207,19 +382,29 @@ adsbRouter.get(
     tags: ['Aircraft'],
     summary: 'Aircraft over Australia',
     description:
-      "Aircraft over Australia now, merged from four public ADS-B aggregators (adsb.lol, adsb.fi, airplanes.live, ADSB One) and AusAware's own receivers, one record per ICAO address. Polled about every 15 seconds. An aircraft that stops reporting is held at its last position for a while; one in flight with a known heading and speed is then projected forward, marked `estimated`, until its last real fix is three minutes old.",
+      "Aircraft over Australia now, merged from public ADS-B aggregators (adsb.lol, adsb.fi, airplanes.live, ADSB One, and FlyItalyADSB over NSW) and AusAware's own receivers, one record per ICAO address. Records whose `sources` include `flyitaly` carry flight data from FlyItalyADSB (flyitalyadsb.com), CC BY-SA 4.0, which must be credited where you show them. Polled about every 15 seconds. An aircraft that stops reporting is held at its last position for a while; one in flight with a known heading and speed is then projected forward, marked `estimated`, until its last real fix is three minutes old. With `recent`, only aircraft whose position is no older than that many seconds, merged the same way: for aircraft AusAware's receivers hear, that is a position a couple of seconds old. Each aircraft can carry much more than its position (vertical rate, GPS altitude, airspeeds, heading, autopilot settings, position accuracy, signal strength): the list has three of those fields, `detail=1` adds the rest, and `hex` returns one aircraft with all of them. Detail fields are absent when the source did not send them, and none of them is kept in history.",
     responses: {
       ...okJson(envelope(AdsbAircraft), 'Every aircraft, with how each source fared and the history window'),
       ...GATED_ERRORS,
     },
   }),
+  queryValidator(AdsbAircraftQuery),
   (c) => {
     // The history block rides along on the live poll rather than getting its own
     // endpoint: the map already fetches this every 15s, and the date picker
     // needs the window bounds before it can offer a first scrub.
     const now = Date.now();
+    const recent = recentOf(c.req.query('recent'));
+    const hex = hexOf(c.req.query('hex'));
+    const detail = hex !== null || ['1', 'true'].includes((c.req.query('detail') ?? '').toLowerCase());
+    // Set here, not left to CACHEABLE_PATHS: that list ignores the query, and
+    // the full answer must stay uncached for the 15 s refresh.
+    if (recent !== null || hex !== null) c.header('Cache-Control', RECENT_CACHE);
+    const snap = hex !== null
+      ? oneAircraft(hex, now)
+      : recent !== null ? adsbRecentAircraft(recent, now) : adsbSnapshot();
     return ok(c, {
-      ...adsbSnapshot(),
+      ...withSeenAt(snap, detail),
       history: {
         retentionDays: DATA_RETENTION_DAYS,
         oldestMs: adsbHistoryOldestMs(now),
@@ -360,13 +545,21 @@ adsbRouter.get(
     tags: ['Aircraft'],
     summary: 'Aircraft tracks',
     description:
-      'The track each aircraft has flown while tracked, rebuilt after every poll of the live aircraft. A track ends ten minutes after its aircraft was last seen.',
+      'The track each aircraft has flown while tracked, kept up to date as positions arrive (within a couple of seconds for aircraft AusAware receivers hear). A track ends ten minutes after its aircraft was last seen. With `recent`, only the points from the last few seconds, each with the time it was heard, for a client extending tracks it already holds.',
     responses: {
-      ...okJson(envelope(AdsbTrails), 'A track per aircraft'),
+      ...okJson(envelope(z.union([AdsbTrails, AdsbRecentTrailsSchema])), 'A track per aircraft; with `recent`, only the newest points, each with its time'),
       ...GATED_ERRORS,
     },
   }),
-  (c) => ok(c, adsbTrailsSnapshot()),
+  queryValidator(AdsbRecentQuery),
+  (c) => {
+    const recent = recentOf(c.req.query('recent'));
+    if (recent === null) return ok(c, adsbTrailsSnapshot());
+    // Overrides the 30 s CACHEABLE_PATHS default, which would otherwise apply
+    // because that list ignores the query.
+    c.header('Cache-Control', RECENT_CACHE);
+    return ok(c, adsbRecentTrails(recent));
+  },
 );
 
 interface PlanespottersPhoto {
@@ -385,6 +578,8 @@ export interface AdsbPhoto {
   src: string;
   link: string | null;
   photographer: string | null;
+  /** Whose photo it is, for the credit. */
+  source: 'planespotters' | 'airport-data';
 }
 
 const PLANESPOTTERS_BASE = 'https://api.planespotters.net/pub/photos';
@@ -407,10 +602,81 @@ function firstPhoto(body: PlanespottersResponse): AdsbPhoto | null {
     src,
     link: p?.link ?? null,
     photographer: p?.photographer ?? null,
+    source: 'planespotters',
   };
 }
 
+// airport-data.com: the backup when Planespotters has no photo or can't be
+// reached. Its API documents a 429 but no figure, so a 429 stands it down for
+// a while rather than retrying on every miss.
+const AIRPORT_DATA_THUMB = 'https://airport-data.com/api/ac_thumb.json';
+const AIRPORT_DATA_COOLDOWN_MS = 10 * 60_000;
+let _airportDataRestUntil = 0;
+
+interface AirportDataThumbResponse {
+  status?: number;
+  data?: Array<{ image?: string; link?: string; photographer?: string }>;
+}
+
+async function airportDataPhoto(hex: string, reg: string): Promise<AdsbPhoto | null> {
+  // Its lookup is by Mode-S address; a TIS-B id is not one.
+  if (hex.startsWith('~')) return null;
+  if (Date.now() < _airportDataRestUntil) throw new Error('airport-data: resting after a 429');
+  let body: AirportDataThumbResponse;
+  try {
+    body = await fetchJson<AirportDataThumbResponse>(
+      `${AIRPORT_DATA_THUMB}?m=${encodeURIComponent(hex.toUpperCase())}&n=1`
+        + (reg ? `&r=${encodeURIComponent(reg)}` : ''),
+      { timeoutMs: 8_000 },
+    );
+  } catch (err) {
+    const status = (err as { status?: number | null }).status;
+    if (status === 404) return null; // it knows no photo of this aircraft
+    if (status === 429) _airportDataRestUntil = Date.now() + AIRPORT_DATA_COOLDOWN_MS;
+    throw err;
+  }
+  const p = body.data?.[0];
+  if (!p?.image) return null;
+  return {
+    src: p.image,
+    link: p.link ?? null,
+    photographer: p.photographer ?? null,
+    source: 'airport-data',
+  };
+}
+
+/** TEST-ONLY. */
+export function _resetAdsbPhotoForTests(): void {
+  _airportDataRestUntil = 0;
+  photoCache.clear();
+}
+
+/**
+ * Planespotters first, airport-data.com second.
+ *
+ * "No photo" is only an answer when Planespotters actually answered: if it
+ * failed and the backup found nothing, that is thrown rather than returned, so
+ * a 24-hour "none" is never cached on the strength of a lookup that didn't run.
+ */
 async function lookupPhoto(hex: string, reg: string): Promise<AdsbPhoto | null> {
+  let primaryErr: unknown = null;
+  try {
+    const p = await planespottersPhoto(hex, reg);
+    if (p) return p;
+  } catch (err) {
+    primaryErr = err;
+  }
+  try {
+    const p = await airportDataPhoto(hex, reg);
+    if (p) return p;
+  } catch (err) {
+    if (primaryErr === null) throw err;
+  }
+  if (primaryErr !== null) throw primaryErr;
+  return null;
+}
+
+async function planespottersPhoto(hex: string, reg: string): Promise<AdsbPhoto | null> {
   // TIS-B targets ('~'-prefixed) have synthetic ids Planespotters can't
   // know — go straight to the registration for those.
   if (!hex.startsWith('~')) {
@@ -432,15 +698,16 @@ async function lookupPhoto(hex: string, reg: string): Promise<AdsbPhoto | null> 
 }
 
 const AdsbPhotoRecord = z.object({
-  src: z.string().describe("The image's URL, as Planespotters gives it (their large thumbnail where there is one)"),
-  link: z.string().nullable().describe("The photo's page on Planespotters"),
+  src: z.string().describe("The image's URL, as the source gives it (Planespotters' large thumbnail where there is one)"),
+  link: z.string().nullable().describe("The photo's page on the source's site"),
   photographer: z.string().nullable(),
+  source: z.enum(['planespotters', 'airport-data']).describe('Whose photo it is: Planespotters.net, or airport-data.com when Planespotters has none. Credit the photographer and the source.'),
 });
 assertShape<SameShape<z.infer<typeof AdsbPhotoRecord>, AdsbPhoto>>();
 
 const AdsbPhotoAnswer = z
   .object({
-    photo: AdsbPhotoRecord.nullable().describe('null when Planespotters has none, or could not be reached'),
+    photo: AdsbPhotoRecord.nullable().describe('null when neither source has one, or neither could be reached'),
   })
   .meta({ id: 'AdsbPhoto' });
 
@@ -461,7 +728,7 @@ adsbRouter.get(
     tags: ['Aircraft'],
     summary: 'A photo of an aircraft',
     description:
-      'A photo of the aircraft from Planespotters.net, looked up by its ICAO address and then, failing that, by `reg`. A TIS-B id (one starting with ~) is looked up by `reg` alone. Answers are kept for a day.',
+      'A photo of the aircraft from Planespotters.net, looked up by its ICAO address and then, failing that, by `reg`; airport-data.com is asked when Planespotters has none or cannot be reached. A TIS-B id (one starting with ~) is looked up on Planespotters by `reg` alone. Answers are kept for a day.',
     parameters: [
       {
         in: 'path',
@@ -518,5 +785,276 @@ adsbRouter.get(
       log.warn({ err, hex }, 'adsb: photo lookup failed');
       return ok(c, { photo: null } satisfies z.infer<typeof AdsbPhotoAnswer>);
     }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Aircraft and route details (adsbdb.com)
+// ---------------------------------------------------------------------------
+//
+// adsbdb answers by Mode-S address (the airframe: maker, type, operator) and
+// by callsign (the airline and the route that callsign usually flies). The
+// route is the usual one for the callsign, not a flight plan, and the card
+// says so.
+//
+// Public on the owner's decision (aircraft:live, mirrored on /api/v1). The
+// route data is compiled by David Taylor and Jim Mason, whose terms ask for
+// permission before it is republished; the endpoint's description credits
+// them and adsbdb.com.
+
+const ADSBDB_BASE = 'https://api.adsbdb.com/v0';
+
+interface AdsbdbAirport {
+  icao_code?: string;
+  iata_code?: string;
+  name?: string;
+  municipality?: string;
+  country_iso_name?: string;
+  latitude?: number;
+  longitude?: number;
+}
+interface AdsbdbAircraftResponse {
+  response?: {
+    aircraft?: {
+      type?: string;
+      icao_type?: string;
+      manufacturer?: string;
+      registration?: string;
+      registered_owner?: string;
+      registered_owner_country_name?: string;
+    };
+  };
+}
+interface AdsbdbCallsignResponse {
+  response?: {
+    flightroute?: {
+      callsign?: string;
+      airline?: { name?: string; icao?: string; iata?: string } | null;
+      origin?: AdsbdbAirport;
+      destination?: AdsbdbAirport;
+      midpoint?: AdsbdbAirport | null;
+    };
+  };
+}
+
+export interface AdsbAirframe {
+  manufacturer: string | null;
+  type: string | null;
+  icaoType: string | null;
+  registration: string | null;
+  owner: string | null;
+  ownerCountry: string | null;
+}
+export interface AdsbRouteAirport {
+  icao: string | null;
+  iata: string | null;
+  name: string | null;
+  municipality: string | null;
+  country: string | null;
+  lat: number | null;
+  lon: number | null;
+}
+export interface AdsbRoute {
+  callsign: string;
+  airline: string | null;
+  origin: AdsbRouteAirport;
+  destination: AdsbRouteAirport;
+  midpoint: AdsbRouteAirport | null;
+}
+
+const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
+const num = (v: unknown, lim: number): number | null =>
+  typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= lim ? v : null;
+
+function airport(a: AdsbdbAirport | null | undefined): AdsbRouteAirport | null {
+  if (!a) return null;
+  const out = {
+    icao: str(a.icao_code),
+    iata: str(a.iata_code),
+    name: str(a.name),
+    municipality: str(a.municipality),
+    country: str(a.country_iso_name),
+    lat: num(a.latitude, 90),
+    lon: num(a.longitude, 180),
+  };
+  return out.icao || out.iata || out.name ? out : null;
+}
+
+// An airframe's maker and operator change rarely; a callsign's usual route
+// more often. Unknowns are cached too, so a miss isn't asked again each click.
+const airframeCache = new SwrCache<AdsbAirframe | null>(4000);
+const routeCache = new SwrCache<AdsbRoute | null>(4000);
+const AIRFRAME_FRESH_MS = 7 * 24 * 3600_000;
+const AIRFRAME_STALE_MS = 30 * 24 * 3600_000;
+const ROUTE_FRESH_MS = 12 * 3600_000;
+const ROUTE_STALE_MS = 3 * 24 * 3600_000;
+
+/** fetchJson, with adsbdb's 404 ("unknown aircraft" / "unknown callsign") as null. */
+async function adsbdbGet<T>(path: string): Promise<T | null> {
+  try {
+    return await fetchJson<T>(`${ADSBDB_BASE}${path}`, { timeoutMs: 8_000 });
+  } catch (err) {
+    if ((err as { status?: number | null }).status === 404) return null;
+    throw err;
+  }
+}
+
+export async function lookupAirframe(hex: string): Promise<AdsbAirframe | null> {
+  const body = await adsbdbGet<AdsbdbAircraftResponse>(`/aircraft/${encodeURIComponent(hex.toUpperCase())}`);
+  const a = body?.response?.aircraft;
+  if (!a) return null;
+  return {
+    manufacturer: str(a.manufacturer),
+    type: str(a.type),
+    icaoType: str(a.icao_type),
+    registration: str(a.registration),
+    owner: str(a.registered_owner),
+    ownerCountry: str(a.registered_owner_country_name),
+  };
+}
+
+export async function lookupRoute(callsign: string): Promise<AdsbRoute | null> {
+  const body = await adsbdbGet<AdsbdbCallsignResponse>(`/callsign/${encodeURIComponent(callsign)}`);
+  const r = body?.response?.flightroute;
+  if (!r) return null;
+  const origin = airport(r.origin);
+  const destination = airport(r.destination);
+  if (!origin || !destination) return null;
+  return {
+    callsign: str(r.callsign) ?? callsign,
+    airline: str(r.airline?.name),
+    origin,
+    destination,
+    midpoint: airport(r.midpoint),
+  };
+}
+
+/** TEST-ONLY. */
+export function _resetAdsbInfoForTests(): void {
+  airframeCache.clear();
+  routeCache.clear();
+}
+
+const AdsbAirframeRecord = z.object({
+  manufacturer: z.string().nullable().describe('e.g. Airbus'),
+  type: z.string().nullable().describe('The model as registered, e.g. A380 842'),
+  icaoType: z.string().nullable().describe('ICAO type designator, e.g. A388'),
+  registration: z.string().nullable(),
+  owner: z.string().nullable().describe('Registered owner or operator'),
+  ownerCountry: z.string().nullable(),
+});
+assertShape<SameShape<z.infer<typeof AdsbAirframeRecord>, AdsbAirframe>>();
+
+const AdsbRouteAirportRecord = z.object({
+  icao: z.string().nullable(),
+  iata: z.string().nullable(),
+  name: z.string().nullable(),
+  municipality: z.string().nullable(),
+  country: z.string().nullable().describe('ISO country code'),
+  lat: z.number().nullable(),
+  lon: z.number().nullable(),
+});
+assertShape<SameShape<z.infer<typeof AdsbRouteAirportRecord>, AdsbRouteAirport>>();
+
+const AdsbRouteRecord = z.object({
+  callsign: z.string(),
+  airline: z.string().nullable(),
+  origin: AdsbRouteAirportRecord,
+  destination: AdsbRouteAirportRecord,
+  midpoint: AdsbRouteAirportRecord.nullable().describe('A stop between, on the few routes that have one'),
+});
+assertShape<SameShape<z.infer<typeof AdsbRouteRecord>, AdsbRoute>>();
+
+const AdsbInfoAnswer = z
+  .object({
+    aircraft: AdsbAirframeRecord.nullable().describe('null when adsbdb does not know the address, could not be reached, or the id is TIS-B'),
+    route: AdsbRouteRecord.nullable().describe('null without a callsign, or when adsbdb knows no route for it'),
+  })
+  .meta({ id: 'AdsbInfo' });
+
+const AdsbInfoQuery = z.object({
+  callsign: z
+    .string()
+    .optional()
+    .describe("The flight's callsign, e.g. QFA1, for its usual route: 2 to 8 letters or digits, in any case"),
+});
+
+adsbRouter.get(
+  '/api/adsb/info/:hex',
+  SCOPE_AIRCRAFT,
+  describeRoute({
+    operationId: 'getAdsbInfo',
+    tags: ['Aircraft'],
+    summary: 'An aircraft and its usual route',
+    description:
+      "The airframe behind an ICAO address (maker, type, registration, operator) and, given a `callsign`, the airline and the route that callsign usually flies, from adsbdb.com. The route is the callsign's usual one, not a flight plan. Airframes are kept for a week and routes for 12 hours. Credit: aircraft and route details from adsbdb.com (aircraft data from PlaneBase; route data compiled by David Taylor and Jim Mason).",
+    parameters: [
+      {
+        in: 'path',
+        name: 'hex',
+        required: true,
+        schema: { type: 'string' },
+        description: 'ICAO 24-bit address as the live aircraft give it: 4 to 8 hex digits, optionally after a ~',
+      },
+    ],
+    responses: {
+      ...okJson(envelope(AdsbInfoAnswer), 'The aircraft and route, either of which may be null'),
+      ...GATED_ERRORS,
+      400: errorJson('The hex or callsign is not valid (validation_failed)'),
+    },
+  }),
+  queryValidator(AdsbInfoQuery),
+  async (c) => {
+  const hex = c.req.param('hex').trim().toLowerCase();
+  const callsign = (c.req.query('callsign') ?? '').trim().toUpperCase();
+  if (!/^~?[0-9a-f]{4,8}$/.test(hex)) {
+    return fail(
+      c,
+      400,
+      'validation_failed',
+      'hex: not an ICAO address (4 to 8 hex digits, optionally after a ~)',
+      { error: 'invalid hex' },
+      { issues: [{ path: 'hex', message: 'not an ICAO address (4 to 8 hex digits, optionally after a ~)' }] },
+    );
+  }
+  if (callsign && !/^[A-Z0-9]{2,8}$/.test(callsign)) {
+    return fail(
+      c,
+      400,
+      'validation_failed',
+      'callsign: not a callsign (2 to 8 letters or digits)',
+      { error: 'invalid callsign' },
+      { issues: [{ path: 'callsign', message: 'not a callsign (2 to 8 letters or digits)' }] },
+    );
+  }
+
+  // Each half fails on its own: a route that can't be looked up still leaves
+  // the airframe, and the card just shows less. Nothing here is worth a 5xx.
+  const safe = async <T>(p: Promise<{ value: T }>, what: string): Promise<T | null> => {
+    try {
+      return (await p).value;
+    } catch (err) {
+      log.warn({ err, hex, callsign }, `adsb: ${what} lookup failed`);
+      return null;
+    }
+  };
+  const [aircraft, route] = await Promise.all([
+    // A TIS-B id is not a Mode-S address adsbdb could know.
+    hex.startsWith('~')
+      ? Promise.resolve(null)
+      : safe(airframeCache.get(hex, () => lookupAirframe(hex), {
+          fresh: AIRFRAME_FRESH_MS,
+          stale: AIRFRAME_STALE_MS,
+          onError: (err) => log.warn({ err, hex }, 'adsb: airframe refresh failed'),
+        }), 'airframe'),
+    callsign
+      ? safe(routeCache.get(callsign, () => lookupRoute(callsign), {
+          fresh: ROUTE_FRESH_MS,
+          stale: ROUTE_STALE_MS,
+          onError: (err) => log.warn({ err, callsign }, 'adsb: route refresh failed'),
+        }), 'route')
+      : Promise.resolve(null),
+  ]);
+  return ok(c, { aircraft, route } satisfies z.infer<typeof AdsbInfoAnswer>);
   },
 );

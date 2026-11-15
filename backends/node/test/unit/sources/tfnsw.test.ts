@@ -50,6 +50,7 @@ import {
   fetchTfnswAlerts,
   routeNameFromId,
   tfnswConfigured,
+  decodeFeedLeniently,
   _resetTfnswForTests,
   _testables,
   type TfnswPosition,
@@ -350,6 +351,21 @@ describe('fetchTfnswPositions', () => {
     expect(fetchBufferMock).toHaveBeenCalledTimes(1);
   });
 
+  it('parks a feed the key is not allowed (401): nothing changes that between requests', async () => {
+    fetchBufferMock.mockRejectedValue(Object.assign(new Error('HTTP 401'), { status: 401 }));
+    expect(await _testables.fetchFeed('/v1/gtfs/alerts/buses')).toBeNull();
+    expect(await _testables.fetchFeed('/v1/gtfs/alerts/buses')).toBeNull();
+    expect(fetchBufferMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('parks a feed whose 200 body is not GTFS-realtime, rather than decoding it again on every request', async () => {
+    // A leading zero byte is field number 0, which protobuf refuses.
+    fetchBufferMock.mockResolvedValue(new Uint8Array([0x00, 0x01, 0x02]));
+    expect(await _testables.fetchFeed('/v2/gtfs/alerts/all')).toBeNull();
+    expect(await _testables.fetchFeed('/v2/gtfs/alerts/all')).toBeNull();
+    expect(fetchBufferMock).toHaveBeenCalledTimes(1);
+  });
+
   it('parks a 404 feed for the long window', async () => {
     fetchBufferMock.mockRejectedValue(Object.assign(new Error('HTTP 404'), { status: 404 }));
     await _testables.fetchFeed('/v1/gtfs/vehiclepos/lightrail/innerwest');
@@ -420,6 +436,39 @@ describe('alerts', () => {
   it('returns [] when unconfigured', async () => {
     configMock.TFNSW_API_KEY = undefined;
     expect(await fetchTfnswAlerts()).toEqual([]);
+  });
+
+  it('a combined feed with one entity that will not decode still gives its other alerts', async () => {
+    // The real feed that prompted this: a good header, hundreds of alerts,
+    // and a strict decode that stopped at "illegal tag: field number 0".
+    const good = encodeAlertFeed();
+    const badEntity = Uint8Array.from([0x12, 0x02, 0x00, 0x00]); // field 2 (entity), 2 bytes, both zero
+    const feed = new Uint8Array(good.length + badEntity.length);
+    feed.set(good, 0);
+    feed.set(badEntity, good.length);
+    expect(() => rt.FeedMessage.decode(feed)).toThrow();
+    const salvaged = decodeFeedLeniently(feed);
+    expect(salvaged?.skipped).toBe(1);
+    expect(salvaged?.message.entity.map((e) => e.id)).toEqual(['alert-1', 'no-alert']);
+
+    fetchBufferMock.mockResolvedValue(feed);
+    const alerts = await fetchTfnswAlerts();
+    expect(alerts.map((a) => a.id)).toEqual(['alert-1']);
+    expect(fetchBufferMock).toHaveBeenCalledTimes(1); // the combined feed answered; no fallbacks asked
+  });
+
+  it('zero padding after the last entity ends the feed, it does not fail it', () => {
+    const good = encodeAlertFeed();
+    const padded = new Uint8Array(good.length + 3);
+    padded.set(good, 0);
+    expect(decodeFeedLeniently(padded)).toMatchObject({ skipped: 0 });
+    expect(decodeFeedLeniently(padded)?.message.entity).toHaveLength(2);
+  });
+
+  it('bytes that are not a feed at all are not salvaged', () => {
+    expect(decodeFeedLeniently(Uint8Array.from([0x00, 0x01, 0x02]))).toBeNull();
+    expect(decodeFeedLeniently(new TextEncoder().encode('{"error":"nope"}'))).toBeNull();
+    expect(decodeFeedLeniently(new Uint8Array(0))).toBeNull();
   });
 
   it('falls back to the per-mode feeds, and takes what answers', async () => {

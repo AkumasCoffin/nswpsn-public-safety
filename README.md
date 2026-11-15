@@ -112,8 +112,10 @@ and its own archive family. Registration happens at boot
 | Bureau of Meteorology | Weather warnings, land and marine | 60s |
 | LiveTraffic NSW | Seven hazard kinds — incidents, roadwork, flood, fire, major events, alpine, council-submitted | 60s–5m |
 | Endeavour Energy | Current, planned and maintenance outages | 60s–5m |
-| Ausgrid | Outages, with per-outage detail enrichment | **off** — upstream has 404'd for months |
+| Ausgrid | Outages from Ausgrid's outage map, with planned work 30 days ahead | 2m |
 | Essential Energy | Current and future outages | 3m |
+| AusNet, CitiPower, Powercor, Jemena (VIC) | Outages; AusNet also publishes planned work | 3–5m |
+| SA Power Networks, Western Power | Unplanned outages and planned work | 3m |
 | Pagermon (self-hosted) | Pager messages | 60s |
 | ACT Ambulance | Incidents | 60s |
 | QLD, VIC, WA, SA, NT fire and warning feeds | Incidents and warnings | 2–5m |

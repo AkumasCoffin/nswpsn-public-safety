@@ -2950,8 +2950,9 @@ function systemSiteList(
 // Feeder-facing per-node summary — a LIGHT slice of the Data page, scoped to
 // one node the contributor owns. Backs GET /api/feeder/nodes/:id/stats so a
 // volunteer can see their own node's calls/receptions + top talkgroup / unit /
-// site + a short recent-activity feed, WITHOUT the staff Data page's full
-// drill-downs. Reads node_radio_events scoped to one node_id + window only.
+// site, WITHOUT the staff Data page's full drill-downs. (The recent-call feed
+// was dropped: the owner page no longer shows it, and it grouped the whole
+// window on every 15s poll.) Reads node_radio_events scoped to one node_id + window only.
 // ---------------------------------------------------------------------------
 export interface FeederRadioStats {
   window: DetailWindow;
@@ -2966,20 +2967,6 @@ export interface FeederRadioStats {
     receptions: number;
     lastSeen: string;
   }>;
-  activity: Array<{
-    id: number;
-    at: string;
-    talkgroup: number | null;
-    talkgroupLabel: string | null;
-    system: number | null;
-    sourceUnit: number | null;
-    sourceAlias: string | null;
-    rfss: number | null;
-    site: number | null;
-    siteName: string | null;
-    encrypted: boolean;
-    receptions: number;
-  }>;
 }
 
 export async function feederRadioStats(
@@ -2990,12 +2977,9 @@ export async function feederRadioStats(
   const params: unknown[] = [WINDOW_INTERVAL[window], nodeId];
   // $2 = node id, $1 = window interval. Shared by every query below.
   const where = () => `node_id = $2 AND received_at >= now() - $1::interval`;
-  const [detail, siteMap, labels, tgColorsFeeder, evRadioDisp, siteQ, actQ] = await Promise.all([
+  const [detail, siteMap, siteQ] = await Promise.all([
     scopedRadioDetail(pool, where, params),
     siteNames(pool),
-    talkgroupLabels(),
-    talkgroupColors(),
-    radioDisplay(),
     pool.query<{
       rfss: number;
       site: number;
@@ -3018,44 +3002,6 @@ export async function feederRadioStats(
         LIMIT 5`,
       params,
     ),
-    pool.query<{
-      id: string;
-      at: Date;
-      talkgroup: number | null;
-      system: number | null;
-      source_unit: number | null;
-      source_alias: string | null;
-      rfss: number | null;
-      site: number | null;
-      encrypted: boolean;
-      receptions: unknown;
-    }>(
-      // One row per logical call (deduped receptions), newest first — the
-      // per-field array_agg prefers the ACTION='CALL' reception for the
-      // identity fields, mirroring the Data page's events list.
-      `SELECT logical_call_id::text AS id,
-              MAX(received_at) AS at,
-              (array_agg(talkgroup ORDER BY (action = 'CALL') DESC, received_at DESC)
-                 FILTER (WHERE talkgroup IS NOT NULL))[1] AS talkgroup,
-              (array_agg(system ORDER BY received_at DESC)
-                 FILTER (WHERE system IS NOT NULL))[1] AS system,
-              (array_agg(source_unit ORDER BY (action = 'CALL') DESC, received_at DESC)
-                 FILTER (WHERE source_unit IS NOT NULL))[1] AS source_unit,
-              (array_agg(source_alias ORDER BY received_at DESC)
-                 FILTER (WHERE source_alias IS NOT NULL AND source_alias <> source_unit::text))[1] AS source_alias,
-              (array_agg(site_rfss ORDER BY received_at DESC)
-                 FILTER (WHERE site_rfss IS NOT NULL))[1] AS rfss,
-              (array_agg(site_id ORDER BY received_at DESC)
-                 FILTER (WHERE site_id IS NOT NULL))[1] AS site,
-              bool_or(encrypted) AS encrypted,
-              COUNT(*)::int AS receptions
-         FROM node_radio_events
-        WHERE ${where()} AND ${CALL_GROUP}
-        GROUP BY logical_call_id
-        ORDER BY at DESC
-        LIMIT 15`,
-      params,
-    ),
   ]);
   return {
     window,
@@ -3069,27 +3015,6 @@ export async function feederRadioStats(
       calls: num(r.calls),
       receptions: num(r.receptions),
       lastSeen: iso(r.last_seen),
-    })),
-    activity: actQ.rows.map((r) => ({
-      id: Number(r.id),
-      at: iso(r.at),
-      talkgroup: r.talkgroup,
-      talkgroupLabel: r.talkgroup != null ? labels.get(r.talkgroup) ?? null : null,
-      talkgroupColor: r.talkgroup != null ? tgColorsFeeder.get(r.talkgroup) ?? null : null,
-      system: r.system,
-      sourceUnit: r.source_unit,
-      // The OTA alias this event carried (what the radio transmitted), plus
-      // the radio's configured alias + agency colour, which are properties of
-      // the UID rather than of the event.
-      sourceAlias: r.source_alias,
-      sourceUnitAlias: r.source_unit != null ? evRadioDisp.labels.get(r.source_unit) ?? null : null,
-      sourceAgency: r.source_unit != null ? evRadioDisp.agencies.get(r.source_unit) ?? null : null,
-      sourceColor: r.source_unit != null ? evRadioDisp.colors.get(r.source_unit) ?? null : null,
-      rfss: r.rfss,
-      site: r.site,
-      siteName: siteNameFor(siteMap, r.system, r.rfss, r.site),
-      encrypted: r.encrypted === true,
-      receptions: num(r.receptions),
     })),
   };
 }
@@ -6375,6 +6300,137 @@ nodeDataRouter.get('/api/node-data/live', requireRole(canViewNodeData), async (c
   }
 });
 
+/**
+ * One node's decode health over time, one series per site it decodes: the
+ * owner's "is my node healthy" chart on feeder.html.
+ *
+ * Same samples and the same rules as the staff site chart (site-decode): a
+ * zero reading means "not measured", buckets are gap-filled so silence shows
+ * as a gap, and the range stops at the samples' 7-day retention. Sites are
+ * the ones this node actually reported in the range, busiest first, capped
+ * so the chart stays readable.
+ *
+ * A site is keyed by (rfss, site), not by system: the node logs readings it
+ * took before it identified the system under system -1, so one tower showed
+ * up twice (Knights Hill under 721 and under -1). A site heard for less than
+ * FEEDER_DECODE_MIN_SAMPLES readings in the range is a passing glimpse, not
+ * one the node decodes, and is left out.
+ */
+export const FEEDER_DECODE_RANGES: Record<string, { interval: string; bucketMinutes: number }> = {
+  '24h': { interval: '24 hours', bucketMinutes: 10 },
+  '7d': { interval: '7 days', bucketMinutes: 60 },
+};
+const FEEDER_DECODE_MAX_SITES = 8;
+const FEEDER_DECODE_MIN_SAMPLES = 30; // ~30 minutes of per-minute readings
+
+export interface FeederNodeDecode {
+  range: string;
+  bucketMinutes: number;
+  /** Bucket start times, shared by every series. */
+  at: string[];
+  sites: Array<{
+    system: number;
+    rfss: number;
+    site: number;
+    name: string | null;
+    /** Average decode % per bucket; null where nothing was measured. */
+    decodePct: Array<number | null>;
+    /** Worst reading in each bucket: an average hides a short drop. */
+    decodeMin: Array<number | null>;
+    /** The latest bucket with a reading, for a one-glance figure. */
+    latestPct: number | null;
+    /** Mean over the buckets with a reading. */
+    avgPct: number | null;
+    /** When the automatic channel manager held this site's channel
+     *  (auto-stopped, or probing), clamped to the range: the same intervals
+     *  the staff site chart shades. */
+    holds: ChanMgrHold[];
+  }>;
+}
+
+export async function feederNodeDecode(
+  pool: Pool,
+  nodeId: string,
+  rangeRaw: string,
+): Promise<FeederNodeDecode> {
+  const range = FEEDER_DECODE_RANGES[rangeRaw] ? rangeRaw : '24h';
+  const { interval, bucketMinutes } = FEEDER_DECODE_RANGES[range]!;
+  const [r, siteMap] = await Promise.all([
+    pool.query<{
+      system_id: number;
+      rfss: number;
+      site_id: number;
+      bucket: Date;
+      decode_pct: string | null;
+      decode_min: string | null;
+      samples: number;
+    }>(
+      // MAX(system_id): the real system wins over the -1 placeholder.
+      `SELECT MAX(system_id) AS system_id, rfss, site_id,
+              to_timestamp(floor(extract(epoch FROM sampled_at) / ${bucketMinutes * 60})
+                           * ${bucketMinutes * 60}) AS bucket,
+              AVG(decode_pct) FILTER (WHERE decode_pct > 0) AS decode_pct,
+              MIN(decode_pct) FILTER (WHERE decode_pct > 0) AS decode_min,
+              COUNT(*) FILTER (WHERE decode_pct > 0)::int AS samples
+         FROM node_site_decode_samples
+        WHERE node_id = $1 AND sampled_at >= now() - $2::interval
+        GROUP BY rfss, site_id, bucket`,
+      [nodeId, interval],
+    ),
+    siteNames(pool),
+  ]);
+
+  const bucketMs = bucketMinutes * 60_000;
+  const nowMs = Date.now();
+  const startMs = Math.floor((nowMs - intervalMs(interval)) / bucketMs) * bucketMs;
+  const at: string[] = [];
+  for (let t = startMs; t <= nowMs; t += bucketMs) at.push(new Date(t).toISOString());
+
+  const bySite = new Map<string, { system: number; rfss: number; site: number; samples: number;
+    pct: Map<number, number>; min: Map<number, number> }>();
+  for (const x of r.rows) {
+    if (x.decode_pct === null) continue;
+    const key = `${x.rfss}:${x.site_id}`;
+    let e = bySite.get(key);
+    if (!e) {
+      e = { system: x.system_id, rfss: x.rfss, site: x.site_id, samples: 0, pct: new Map(), min: new Map() };
+      bySite.set(key, e);
+    }
+    if (x.system_id > e.system) e.system = x.system_id;
+    e.samples += num(x.samples);
+    const t = new Date(x.bucket).getTime();
+    e.pct.set(t, Number(x.decode_pct));
+    if (x.decode_min !== null) e.min.set(t, Number(x.decode_min));
+  }
+
+  const shown = [...bySite.values()]
+    .filter((e) => e.samples >= FEEDER_DECODE_MIN_SAMPLES)
+    .sort((a, b) => b.samples - a.samples)
+    .slice(0, FEEDER_DECODE_MAX_SITES);
+  // Two small queries per site, at most eight sites, all at once.
+  const holds = await Promise.all(
+    shown.map((e) => siteChanMgrHolds(pool, e.system, e.rfss, e.site, nodeId, startMs, nowMs)),
+  );
+  const sites = shown
+    .map((e, idx) => {
+      const decodePct = at.map((iso) => e.pct.get(new Date(iso).getTime()) ?? null);
+      const decodeMin = at.map((iso) => e.min.get(new Date(iso).getTime()) ?? null);
+      let latestPct: number | null = null;
+      for (let i = decodePct.length - 1; i >= 0; i--) {
+        if (decodePct[i] != null) { latestPct = decodePct[i]!; break; }
+      }
+      const read = decodePct.filter((v): v is number => v != null);
+      const avgPct = read.length ? read.reduce((a, b) => a + b, 0) / read.length : null;
+      return {
+        system: e.system, rfss: e.rfss, site: e.site,
+        name: siteNameFor(siteMap, e.system, e.rfss, e.site),
+        decodePct, decodeMin, latestPct, avgPct,
+        holds: holds[idx] ?? [],
+      };
+    });
+  return { range, bucketMinutes, at, sites };
+}
+
 /** Millisecond length of the site-decode range intervals ('1 hour' etc.). */
 function intervalMs(interval: string): number {
   const m = /^(\d+)\s+(hour|hours|day|days)$/.exec(interval);
@@ -6393,6 +6449,40 @@ function intervalMs(interval: string): number {
  * log keeps ~50 rows per node, so a very busy manager can out-run a 7-day
  * window — missing holds degrade to "red" shading, never to false data.
  */
+/**
+ * One hold, plus what the owner's tooltip says about it. The staff chart reads
+ * only from/to; the rest is parsed from the agent's log text (chanmgr.go),
+ * which carries the figures: "auto-stopped — decode 42%, below 70% for 10m0s",
+ * "test failed — median decode 55% still below 70%; retry in 30m0s",
+ * "test passed — median decode 92%; channel restored".
+ */
+export interface ChanMgrHold {
+  from: string;
+  to: string;
+  /** The decode % the stop was decided on; null when it never locked. */
+  stopPct: number | null;
+  /** 'lowDecode': below the threshold for the dwell. 'noLock': never locked. */
+  stopReason: 'lowDecode' | 'noLock';
+  /** The latest re-check inside the hold, if one ran. */
+  lastCheckAt: string | null;
+  /** Its median decode %; null when it could not lock or measure. */
+  lastCheckPct: number | null;
+  /** Still stopped: when the agent will check it next. */
+  nextCheckAt: string | null;
+  /** Ended: 'passed' (a re-check restored it) or 'released' (handed back). */
+  endedBy: 'passed' | 'released' | null;
+}
+
+// The agent's retest cadence (chanmgr.go firstProbeDelay / probeInterval):
+// used only when the node is offline and its live schedule is unknown.
+const CHANMGR_FIRST_PROBE_MS = 10 * 60_000;
+const CHANMGR_PROBE_INTERVAL_MS = 30 * 60_000;
+
+function chanMgrPct(text: string): number | null {
+  const m = /decode (\d+(?:\.\d+)?)%/.exec(text);
+  return m ? Number(m[1]) : null;
+}
+
 async function siteChanMgrHolds(
   pool: Pool,
   system: number,
@@ -6401,7 +6491,7 @@ async function siteChanMgrHolds(
   nodeId: string | null,
   startMs: number,
   nowMs: number,
-): Promise<Array<{ from: string; to: string }>> {
+): Promise<ChanMgrHold[]> {
   try {
     const chanParams: unknown[] = [system, rfss, site];
     let chanWhere = 'system_id = $1 AND rfss = $2 AND site_id = $3 AND channel_name IS NOT NULL';
@@ -6418,45 +6508,106 @@ async function siteChanMgrHolds(
     const names = [...new Set(chans.rows.map((x) => x.channel_name.trim()))];
     const pairKey = new Set(chans.rows.map((x) => `${x.node_id}\u0000${x.channel_name.trim()}`));
 
-    const ev = await pool.query<{ node_id: string; at_ms: string; channel: string; kind: string }>(
-      `SELECT node_id, at_ms, channel, kind FROM node_chanmgr_log
+    const ev = await pool.query<{ node_id: string; at_ms: string; channel: string; kind: string; text: string }>(
+      `SELECT node_id, at_ms, channel, kind, text FROM node_chanmgr_log
         WHERE node_id = ANY($1::text[]) AND channel = ANY($2::text[]) AND at_ms >= $3
         ORDER BY at_ms ASC`,
       [nodes, names, startMs - 86400_000], // a day of lookback catches holds opened before the window
     );
 
-    const open = new Map<string, number>();
-    const raw: Array<{ from: number; to: number }> = [];
+    type Raw = {
+      from: number; to: number; nodeId: string; channel: string;
+      stopPct: number | null; stopReason: 'lowDecode' | 'noLock';
+      checks: number; lastCheckAt: number | null; lastCheckPct: number | null;
+      endedBy: 'passed' | 'released' | null;
+    };
+    const open = new Map<string, Raw>();
+    const raw: Raw[] = [];
+    const opened = (e: { node_id: string; channel: string }, from: number, text: string | null): Raw => {
+      const pct = text === null ? null : chanMgrPct(text);
+      return {
+        from, to: nowMs, nodeId: e.node_id, channel: e.channel.trim(),
+        stopPct: pct, stopReason: text !== null && pct === null ? 'noLock' : 'lowDecode',
+        checks: 0, lastCheckAt: null, lastCheckPct: null, endedBy: null,
+      };
+    };
     for (const e of ev.rows) {
       const key = `${e.node_id}\u0000${e.channel.trim()}`;
       if (!pairKey.has(key)) continue; // same name on an unrelated node
       const at = Number(e.at_ms);
+      const text = e.text ?? '';
       if (e.kind === 'stopped' || e.kind === 'recovered') {
-        if (!open.has(key)) open.set(key, at);
+        // A 'recovered' (agent restart) re-opens a stop whose own record may
+        // have fallen out of the log; it carries no stop figures.
+        if (!open.has(key)) open.set(key, opened(e, at, e.kind === 'stopped' ? text : null));
       } else if (e.kind === 'probeFail') {
-        if (!open.has(key)) open.set(key, Math.max(startMs, at - 20 * 60_000));
+        let h = open.get(key);
+        if (!h) { h = opened(e, Math.max(startMs, at - 20 * 60_000), null); open.set(key, h); }
+        h.checks += 1;
+        h.lastCheckAt = at;
+        h.lastCheckPct = chanMgrPct(text);
       } else if (e.kind === 'probePass' || e.kind === 'released') {
-        const from = open.get(key);
-        if (from !== undefined) {
-          raw.push({ from, to: at });
+        const h = open.get(key);
+        if (h) {
+          h.to = at;
+          if (e.kind === 'probePass') {
+            h.checks += 1;
+            h.lastCheckAt = at;
+            h.lastCheckPct = chanMgrPct(text);
+            h.endedBy = 'passed';
+          } else {
+            h.endedBy = 'released';
+          }
+          raw.push(h);
           open.delete(key);
         }
       }
     }
-    for (const from of open.values()) raw.push({ from, to: nowMs });
+    for (const h of open.values()) raw.push(h);
 
-    // Clamp + merge.
+    // Still stopped: when it will be checked next. The node's live schedule
+    // when it is connected (the agent reports nextProbeAtMs per channel),
+    // else the agent's fixed cadence from the last check or the stop.
+    const nextCheck = (h: Raw): number | null => {
+      if (h.endedBy !== null) return null;
+      const cm = (hub.liveStatus(h.nodeId).status as { channelManager?: { channels?: Record<string, { nextProbeAtMs?: number }> } } | null)
+        ?.channelManager?.channels?.[h.channel];
+      if (cm && typeof cm.nextProbeAtMs === 'number') return cm.nextProbeAtMs;
+      return (h.lastCheckAt ?? h.from) + (h.checks === 0 ? CHANMGR_FIRST_PROBE_MS : CHANMGR_PROBE_INTERVAL_MS);
+    };
+
+    // Clamp + merge. Overlapping holds (two channels on one site) become one
+    // interval that keeps the earliest stop and the latest check.
     const clamped = raw
-      .map((h) => ({ from: Math.max(h.from, startMs), to: Math.min(h.to, nowMs) }))
+      .map((h) => ({ ...h, from: Math.max(h.from, startMs), to: Math.min(h.to, nowMs), next: nextCheck(h) }))
       .filter((h) => h.to > h.from)
       .sort((x, y) => x.from - y.from);
     const merged: typeof clamped = [];
     for (const h of clamped) {
       const last = merged[merged.length - 1];
-      if (last && h.from <= last.to) last.to = Math.max(last.to, h.to);
-      else merged.push({ ...h });
+      if (last && h.from <= last.to) {
+        last.to = Math.max(last.to, h.to);
+        if ((h.lastCheckAt ?? 0) > (last.lastCheckAt ?? 0)) {
+          last.lastCheckAt = h.lastCheckAt;
+          last.lastCheckPct = h.lastCheckPct;
+        }
+        if (h.next !== null) last.next = last.next === null ? h.next : Math.min(last.next, h.next);
+        if (h.endedBy === null) last.endedBy = null;
+      } else {
+        merged.push({ ...h });
+      }
     }
-    return merged.map((h) => ({ from: new Date(h.from).toISOString(), to: new Date(h.to).toISOString() }));
+    const isoOrNull = (ms: number | null) => (ms === null ? null : new Date(ms).toISOString());
+    return merged.map((h) => ({
+      from: new Date(h.from).toISOString(),
+      to: new Date(h.to).toISOString(),
+      stopPct: h.stopPct,
+      stopReason: h.stopReason,
+      lastCheckAt: isoOrNull(h.lastCheckAt),
+      lastCheckPct: h.lastCheckPct,
+      nextCheckAt: isoOrNull(h.next),
+      endedBy: h.endedBy,
+    }));
   } catch (err) {
     log.warn({ err }, 'site-decode holds lookup failed');
     return [];

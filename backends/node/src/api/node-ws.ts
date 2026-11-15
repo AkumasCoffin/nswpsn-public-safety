@@ -39,6 +39,7 @@ import {
 import { buildConfigPayload } from '../services/nodes/configMerge.js';
 import { shapeNodeLive } from '../services/nodeLive.js';
 import { liveCallWindow } from '../services/nodeCallWindow.js';
+import { parseLocalListen } from '../services/nodes/localListen.js';
 import { ingestChanMgrLog } from '../services/nodes/chanmgrLog.js';
 import { maybeStartInstallSurvey, handleSurveyCommand, noteSurveyStatus } from '../services/siteSurvey.js';
 
@@ -483,7 +484,11 @@ async function handleAgentMessage(
       return;
     }
     case 'status': {
-      const st = (data ?? {}) as StatusData;
+      // The owner's listener-page address comes off the frame before anything
+      // stores it: everything below can reach staff, and that link is for the
+      // node's owner only (localListen.ts).
+      const { localListen, ...st } = (data ?? {}) as StatusData & { localListen?: unknown };
+      hub.setLocalListen(ctx.nodeId, parseLocalListen(localListen));
       // Fold the frame into the call window BEFORE the hub fans it out:
       // recordStatus triggers the reshape, and the shaper reads the window, so
       // observing afterwards would broadcast the previous frame's calls.

@@ -91,6 +91,8 @@ interface Pending {
    *  mid-day starts with an empty envelope, and writing that straight out
    *  would replace the morning's picture with the afternoon's. */
   hydrated: boolean;
+  /** The envelope as last written, so a pass with nothing new writes nothing. */
+  written: string | null;
 }
 
 /** Keyed `${nodeId}|${day}`, the same shape accumulateAdsbDaily uses. */
@@ -126,6 +128,7 @@ export function foldCoverage(
       top1: emptyEnvelope(),
       top2: emptyEnvelope(),
       hydrated: false,
+      written: null,
     };
     pending.set(key, cur);
   }
@@ -190,12 +193,18 @@ export async function flushAdsbCoverage(): Promise<number> {
       // Promote only what has been seen twice. An observation still sitting in
       // top1 alone is uncorroborated and is not written.
       mergeEnvelopes(cur.envelope, cur.top2);
+      // The envelope only ever grows, and after the first hour of a day it
+      // rarely does. Restating an unchanged one every minute was a row
+      // rewrite per receiver per minute for nothing.
+      const json = JSON.stringify(cur.envelope);
+      if (json === cur.written) continue;
       await pool.query(
         `INSERT INTO node_adsb_coverage (node_id, day, buckets)
          VALUES ($1, $2::date, $3::jsonb)
          ON CONFLICT (node_id, day) DO UPDATE SET buckets = EXCLUDED.buckets`,
-        [nodeId, day, JSON.stringify(cur.envelope)],
+        [nodeId, day, json],
       );
+      cur.written = json;
       written += 1;
     } catch (err) {
       // A deleted node (FK violation) or a transient blip. Left in `pending`,

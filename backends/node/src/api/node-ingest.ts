@@ -29,7 +29,8 @@ import { log } from '../lib/log.js';
 import { describeRelayError } from '../lib/relayError.js';
 import { resolveNodeToken } from '../services/auth/nodeToken.js';
 import { ingestSurveyResults } from '../services/siteSurvey.js';
-import { bumpNodeCallStat, getNode, touchNodeSeenThrottled } from '../services/nodes/registry.js';
+import { bumpNodeCallStat, getNode, touchNodeSeenThrottled, type NodeRow } from '../services/nodes/registry.js';
+import { pagerTestingOf } from '../services/nodes/configMerge.js';
 import { getPagerIngest } from '../services/nodes/globalConfig.js';
 import { hub } from '../services/nodes/hub.js';
 import { markNodeSeen } from '../services/nodes/nodeUptime.js';
@@ -39,9 +40,11 @@ import {
   snapshotRangeKm,
   accumulateAdsbDaily,
   adsbNodeSourceId,
+  distanceKm,
   recordAdsbAuthFailure,
 } from '../services/nodes/adsbNodeStore.js';
 import { foldCoverage } from '../services/nodes/adsbCoverage.js';
+import { foldLightcone } from '../services/nodes/adsbLightcone.js';
 import { maybeFlushNodeTracks } from '../services/nodes/nodeTrackArchive.js';
 import { normalizeNodeUploadWithTrails, ingestNodeTrailPoints } from '../sources/adsb.js';
 import {
@@ -826,7 +829,7 @@ type PagerRelayOutcome =
 
 async function relayOnePagerMessage(
   node: { id: string; feed_enabled: boolean },
-  nodeRow: { name?: string | null; state?: string | null } | null,
+  nodeRow: NodeRow | null,
   ingest: { url: string; apiKey: string },
   parsed: z.infer<typeof PagerMsgSchema>,
 ): Promise<PagerRelayOutcome> {
@@ -846,6 +849,23 @@ async function relayOnePagerMessage(
   }
 
   log.info(`pager rx node=${node.id.slice(0, 8)} addr=${parsed.address} src=${parsed.source} freq=${parsed.freqMhz ?? '?'}`);
+
+  // Testing mode: the node is on hand-programmed frequencies, so its pages are
+  // shown in the staff drawer only — never forwarded to Pagermon and never
+  // stored, which keeps them out of the map, /logs and the pager stats. Acked
+  // like Feed off so the agent deletes them from its queue.
+  if (pagerTestingOf(nodeRow)) {
+    hub.recordPagerMessage(node.id, {
+      address: parsed.address,
+      message: parsed.message,
+      source: parsed.source,
+      freqMhz: typeof parsed.freqMhz === 'number' ? parsed.freqMhz : null,
+      at: Date.now(),
+      testing: true,
+    });
+    log.info(`pager relay: TESTING, not forwarded addr=${parsed.address} node=${node.id.slice(0, 8)}`);
+    return { acked: true, fed: false };
+  }
 
   try {
     const tsMs = parsed.timestamp ? new Date(parsed.timestamp).getTime() : NaN;
@@ -1116,22 +1136,24 @@ function normalisePagerDatetime(ts: string | undefined): string {
 // POST /api/node-ingest/adsb-upload
 //
 // One aircraft snapshot from an ADS-B feeder node: everything its decoder can
-// currently see, plus that decoder's own statistics. Sent every ~5s, so each
+// currently see, plus that decoder's own statistics. Sent every ~2s, so each
 // upload SUPERSEDES the last — nothing here is a durable record of individual
 // positions, and nothing needs to be. What is durable is the per-node daily
 // aggregate powering the staff Data tab.
 // ---------------------------------------------------------------------------
 
-// A busy site tracks a few hundred aircraft; 500 records at ~200 bytes each is
-// ~100 KB, so this caps a snapshot at roughly 2.5x the realistic worst case.
-const MAX_ADSB_BYTES = 256 * 1024;
+// A busy site tracks a few hundred aircraft. With the detail fields (agent
+// 0.1.17 on) a fully equipped airliner is about 550 bytes, so the 500-aircraft
+// limit is about 275 KB plus the carried positions (~70 KB at their own cap):
+// this sits clear of that worst case, where 256 KB would have refused it.
+const MAX_ADSB_BYTES = 512 * 1024;
 
-// Per-node rate limit. Snapshots are every 5s = 12/min; 20 leaves room for a
-// queue draining after a network blip without letting a compromised node
-// hammer the merge. Excess is ACK'd and dropped, never 429'd: a stale snapshot
+// Per-node rate limit. Snapshots are every 2s = 30/min (agent 0.1.16 on;
+// earlier agents send every 5s); 45 leaves room for a queue draining after a
+// network blip without letting a compromised node hammer the merge. Excess is ACK'd and dropped, never 429'd: a stale snapshot
 // is superseded by the next one, so making the agent retry it would waste both
 // ends' effort on data that is already worthless.
-const adsbRateOk = makeNodeRateLimiter(20, 60_000);
+const adsbRateOk = makeNodeRateLimiter(45, 60_000);
 
 const AdsbAircraftSchema = z.object({
   // Lowercase ICAO hex; readsb/dump1090 prefix non-ICAO TIS-B ids with '~'.
@@ -1148,6 +1170,33 @@ const AdsbAircraftSchema = z.object({
   category: z.string().max(3).nullish(),
   // Seconds since this position was received, relative to the snapshot's `at`.
   seen_pos: z.number().min(0).max(3600),
+  // Detail, from agent 0.1.17 on (see AdsbDetail in sources/adsb.ts). All
+  // optional and only loosely typed here: detailOf range-checks each one and
+  // drops what is out of range, so a decoder quirk costs a field, not the
+  // whole upload.
+  alt_geom: z.number().nullish(),
+  baro_rate: z.number().nullish(),
+  geom_rate: z.number().nullish(),
+  ias: z.number().nullish(),
+  tas: z.number().nullish(),
+  mach: z.number().nullish(),
+  true_heading: z.number().nullish(),
+  mag_heading: z.number().nullish(),
+  roll: z.number().nullish(),
+  nav_altitude_mcp: z.number().nullish(),
+  nav_altitude_fms: z.number().nullish(),
+  nav_heading: z.number().nullish(),
+  nav_qnh: z.number().nullish(),
+  nav_modes: z.array(z.string().max(12)).max(8).nullish(),
+  // How the position was obtained, in readsb's words (adsb_icao, mlat, tisb_icao…).
+  type: z.string().max(16).nullish(),
+  nic: z.number().nullish(),
+  nac_p: z.number().nullish(),
+  sil: z.number().nullish(),
+  rc: z.number().nullish(),
+  version: z.number().nullish(),
+  rssi: z.number().nullish(),
+  messages: z.number().nullish(),
   // Positions seen between uploads, oldest first, as
   // [secondsBeforeAt, lat, lon, altFt]. Sent from agent 0.1.8 on: the decoder
   // has them at about 2 Hz, but aircraft.json only holds the current one, so
@@ -1165,9 +1214,64 @@ const AdsbAircraftSchema = z.object({
     .nullish(),
 });
 
+/**
+ * No receiver hears this far. Line of sight to an airliner at cruise is about
+ * 450 km; ducting stretches it now and then, which is what the slack is for.
+ * A position beyond it is a bad decode or an invented one, and either way it
+ * must not reach a public map under a real aircraft's address.
+ */
+const ADSB_MAX_KM_FROM_PIN = 800;
+
+/** Values outside what an aircraft can report become "not reported". */
+function inRange(v: number | null | undefined, min: number, max: number): number | null {
+  return typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max ? v : null;
+}
+
+/**
+ * The aircraft worth keeping from one upload, and how many were not.
+ *
+ * Each is checked on its own. Validating the array as a whole meant one
+ * malformed aircraft rejected all five hundred, and the agent then retried
+ * the same snapshot, with the same aircraft in it, until it expired.
+ */
+export function acceptAdsbAircraft(
+  raw: readonly unknown[],
+  pin: { lat: number; lon: number } | null,
+): { aircraft: Array<z.infer<typeof AdsbAircraftSchema>>; invalid: number; tooFar: number } {
+  const aircraft: Array<z.infer<typeof AdsbAircraftSchema>> = [];
+  let invalid = 0;
+  let tooFar = 0;
+  for (const item of raw) {
+    const r = AdsbAircraftSchema.safeParse(item);
+    if (!r.success) {
+      invalid += 1;
+      continue;
+    }
+    const a = r.data;
+    if (pin && distanceKm(pin.lat, pin.lon, a.lat, a.lon) > ADSB_MAX_KM_FROM_PIN) {
+      tooFar += 1;
+      continue;
+    }
+    if (typeof a.alt_baro === 'number') a.alt_baro = inRange(a.alt_baro, -2_000, 100_000);
+    a.gs = inRange(a.gs, 0, 1_500);
+    a.track = inRange(a.track, 0, 360);
+    if (a.positions) {
+      a.positions = a.positions
+        .filter((p) => !pin || distanceKm(pin.lat, pin.lon, p[1], p[2]) <= ADSB_MAX_KM_FROM_PIN)
+        .map((p) => [p[0], p[1], p[2], inRange(p[3], -2_000, 100_000)]);
+    }
+    aircraft.push(a);
+  }
+  return { aircraft, invalid, tooFar };
+}
+
+/** nodeId -> when a dropped-aircraft warning was last logged. */
+const _adsbDropLoggedAt = new Map<string, number>();
+
 const AdsbUploadSchema = z.object({
   at: z.string().max(40),
-  aircraft: z.array(AdsbAircraftSchema).max(500),
+  // Checked one by one in acceptAdsbAircraft, not here.
+  aircraft: z.array(z.unknown()).max(500),
   stats: z
     .object({
       msgRate: z.number().nullish(),
@@ -1238,9 +1342,9 @@ nodeIngestRouter.post('/api/node-ingest/adsb-upload', async (c) => {
   }
 
   // 4. Parse + validate.
-  let parsed: z.infer<typeof AdsbUploadSchema>;
+  let envelope: z.infer<typeof AdsbUploadSchema>;
   try {
-    parsed = AdsbUploadSchema.parse(await c.req.json());
+    envelope = AdsbUploadSchema.parse(await c.req.json());
   } catch (err) {
     log.warn(
       { err, node: r.nodeId.slice(0, 8) },
@@ -1257,14 +1361,31 @@ nodeIngestRouter.post('/api/node-ingest/adsb-upload', async (c) => {
   //    antenna pin is what the range is measured FROM, and range belongs to
   //    that same performance record.
   const nodeRow = await getNode(r.nodeId).catch(() => null);
-  const positioned = parsed.aircraft.filter(
-    (a): a is typeof a & { lat: number; lon: number } =>
-      typeof a.lat === 'number' && typeof a.lon === 'number',
-  );
+  const pin = typeof nodeRow?.lat === 'number' && typeof nodeRow?.lon === 'number'
+    ? { lat: nodeRow.lat, lon: nodeRow.lon }
+    : null;
+  const kept = acceptAdsbAircraft(envelope.aircraft, pin);
+  if (kept.invalid + kept.tooFar > 0
+      && Date.now() - (_adsbDropLoggedAt.get(r.nodeId) ?? 0) > 60_000) {
+    _adsbDropLoggedAt.set(r.nodeId, Date.now());
+    log.warn(
+      { node: r.nodeId.slice(0, 8), invalid: kept.invalid, tooFar: kept.tooFar, kept: kept.aircraft.length },
+      'adsb ingest: aircraft dropped from an upload',
+    );
+  }
+  const parsed = { ...envelope, aircraft: kept.aircraft };
+  const positioned = parsed.aircraft;
   //    One walk over the aircraft does both jobs: the furthest one (the range
   //    figure) and its bearing (the coverage envelope). Neither costs more
   //    than the trig on a loop that has to run anyway.
-  const rangeKm = foldCoverage(r.nodeId, nodeRow?.lat, nodeRow?.lon, positioned);
+  //    The positions carried between uploads count too. The tracks are drawn
+  //    from them, so an envelope built from the two-second snapshots alone sat
+  //    just inside its own tracks wherever an aircraft was heading outbound.
+  const everyFix = positioned.flatMap((a) => [
+    { lat: a.lat, lon: a.lon },
+    ...(a.positions ?? []).map((p) => ({ lat: p[1], lon: p[2] })),
+  ]);
+  const rangeKm = foldCoverage(r.nodeId, nodeRow?.lat, nodeRow?.lon, everyFix);
   //    Nearest as well as furthest: on its own, "range" moves whenever the
   //    furthest aircraft leaves, so it described the traffic as much as the
   //    receiver. The pair describes the slice of sky actually in view.
@@ -1282,8 +1403,11 @@ nodeIngestRouter.post('/api/node-ingest/adsb-upload', async (c) => {
   //    Recording them after the gate left a paused node showing a coverage
   //    envelope with no tracks inside it.
   const { records, trails } = normalizeNodeUploadWithTrails(
-    parsed, adsbNodeSourceId(r.nodeId, nodeRow?.name ?? null));
+    parsed, adsbNodeSourceId(r.nodeId, nodeRow?.name ?? null), Date.now(), r.nodeId);
   recordNodeAdsbReception(r.nodeId, records, range);
+  //    The 3D coverage cells: every airborne position, by altitude, plus the
+  //    "reported recently" set the missed-aircraft count compares against.
+  foldLightcone(r.nodeId, nodeRow?.lat, nodeRow?.lon, nodeRow?.antenna_height_m, records, trails);
   // Persist the traces so the eight-hour map survives a restart. Rate-limits
   // itself to a minute, and is driven from here so it can only ever read
   // traces this upload has finished writing.

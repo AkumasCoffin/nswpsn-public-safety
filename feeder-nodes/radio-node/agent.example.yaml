@@ -27,6 +27,12 @@ data_dir: "./data"
 # address — the local rdio-scanner's downstream points here.
 relay_addr: "127.0.0.1:17390"
 
+# Your node's own rdio listener page, open to your home network: browse to
+# http://<this machine's IP>:17380 to hear what this node decodes. Only the
+# listener page passes — rdio's admin page and API are blocked. The Feeder page
+# shows the link. Set "off" to disable. Default "0.0.0.0:17380".
+local_listen_addr: "0.0.0.0:17380"
+
 # REST port of the SDR-Trunk headless control server the agent launches
 # sdrtrunk with. The spectrum WebSocket listens on this port + 1. The agent
 # appends "--headless --control-port <port>" to the sdrtrunk args and injects a

@@ -91,7 +91,7 @@ func (p Params) Args() []string {
 		"--quiet",
 		"--write-json", p.JSONDir,
 		// 1 Hz: matches the file cadence tar1090 expects and is well inside
-		// our 5s snapshot interval.
+		// our 2s snapshot interval.
 		"--write-json-every", "1",
 	}
 	if p.GainDB != nil {

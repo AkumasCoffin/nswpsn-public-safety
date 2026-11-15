@@ -95,7 +95,7 @@ describe('catalog integrity', () => {
     // A fire service, ACT Ambulance or a power distributor serves one state,
     // so a preset's States filter has to know which: without it, every
     // alert of the type would pass as "state unknown".
-    const ONE_STATE_SHAPES = new Set(['geo_fire', 'geo_fire_warning', 'geo_act', 'endeavour', 'ausgrid', 'essential']);
+    const ONE_STATE_SHAPES = new Set(['geo_fire', 'geo_fire_warning', 'geo_act', 'endeavour', 'ausgrid', 'essential', 'outage_v1']);
     for (const t of ALERT_TYPE_DEFS) {
       if (ONE_STATE_SHAPES.has((t as { feedShape?: string }).feedShape ?? '')) {
         expect(t.state, `${t.key} has no home state`).toBeTruthy();

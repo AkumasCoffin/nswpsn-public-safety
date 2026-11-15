@@ -33,7 +33,7 @@ import {
   listSessions,
 } from '../services/activityMode.js';
 import type { EndeavourOutage } from '../sources/endeavour.js';
-import type { AusgridOutagesPayload } from '../sources/ausgrid.js';
+import { ausgridScheduled, type AusgridOutagesPayload } from '../sources/ausgrid.js';
 import type { EssentialOutage } from '../sources/essential.js';
 import type { TrafficSnapshot, TrafficCamerasSnapshot } from '../sources/traffic.js';
 import type { RfsSnapshot } from '../sources/rfs.js';
@@ -42,6 +42,10 @@ import { log } from '../lib/log.js';
 import { requireRole, isOwner } from '../services/auth/roles.js';
 import type { BomSnapshot } from '../sources/bom.js';
 import type { BeachsafeBeach } from '../sources/beach.js';
+import { INTERSTATE_STORES } from '../sources/interstateRoads.js';
+import { mergedFires } from './fires.js';
+import { DISTRIBUTOR_INFO, DISTRIBUTORS, mergedOutages, type Distributor, type Outage } from './outages.js';
+import { roadFeed } from './traffic.js';
 
 export const statsRouter = new Hono();
 
@@ -82,12 +86,49 @@ function unwrapSnapshotData(raw: unknown): Record<string, unknown> {
  *  plus a little headroom. */
 const MAX_HISTORY_ROWS = 2200;
 
+const HISTORY_SQL = `SELECT "timestamp", data FROM (
+         SELECT "timestamp", data FROM stats_snapshots
+          WHERE "timestamp" >= $1
+          ORDER BY "timestamp" DESC
+          LIMIT $2
+       ) recent
+       ORDER BY "timestamp" ASC`;
+
+// One row per step bucket: the newest in each. The same range scan over the
+// "timestamp" index as above (at most the 7 days the table keeps, ~2,000
+// rows); the buckets are then sorted and picked in memory. "timestamp" is a
+// positive BIGINT, so the integer division is the floor.
+const HISTORY_STEP_SQL = `SELECT "timestamp", data FROM (
+         SELECT DISTINCT ON ("timestamp" / $3::bigint) "timestamp", data
+           FROM stats_snapshots
+          WHERE "timestamp" >= $1
+          ORDER BY "timestamp" / $3::bigint DESC, "timestamp" DESC
+          LIMIT $2
+       ) recent
+       ORDER BY "timestamp" ASC`;
+
+const MIN_STEP_MINUTES = 5;
+const MAX_STEP_MINUTES = 1440;
+
+/**
+ * ?step= in minutes: one row per that many minutes. Null when it is absent or
+ * not a whole number, which leaves every row in; otherwise held to 5..1440.
+ */
+export function parseHistoryStep(raw: string | null | undefined): number | null {
+  if (raw == null || !/^\s*-?\d+\s*$/.test(raw)) return null;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n)) return null;
+  return Math.min(MAX_STEP_MINUTES, Math.max(MIN_STEP_MINUTES, n));
+}
+
 statsRouter.get('/api/stats/history', async (c) => {
   const url = new URL(c.req.url);
   const hoursParam = url.searchParams.get('hours');
   let hours = Number.parseInt(hoursParam ?? '1', 10);
   if (!Number.isFinite(hours) || hours <= 0) hours = 1;
   hours = Math.min(hours, 168); // 7-day cap, matches python.
+
+  const stepMinutes = parseHistoryStep(url.searchParams.get('step'));
 
   const pool = await getPool();
   if (!pool) return c.json([]);
@@ -99,16 +140,10 @@ statsRouter.get('/api/stats/history', async (c) => {
     // capped at 7 days and the archiver writes one row per 5 minutes, so an
     // honest request is inside the limit; what the limit stops is a response
     // (and a parse, on a phone) that grows with every extra row in the table.
-    const result = await pool.query<StatsHistoryRow>(
-      `SELECT "timestamp", data FROM (
-         SELECT "timestamp", data FROM stats_snapshots
-          WHERE "timestamp" >= $1
-          ORDER BY "timestamp" DESC
-          LIMIT $2
-       ) recent
-       ORDER BY "timestamp" ASC`,
-      [cutoffMs, MAX_HISTORY_ROWS],
-    );
+    const result =
+      stepMinutes === null
+        ? await pool.query<StatsHistoryRow>(HISTORY_SQL, [cutoffMs, MAX_HISTORY_ROWS])
+        : await pool.query<StatsHistoryRow>(HISTORY_STEP_SQL, [cutoffMs, MAX_HISTORY_ROWS, stepMinutes * 60_000]);
     return c.json(
       result.rows.map((r) => ({
         timestamp: Number(r.timestamp),
@@ -143,8 +178,45 @@ interface PowerSummary {
   };
   total_outages: number;
   total_customers: number;
+  by_distributor: Record<string, { outages: number; customers: number }>;
 }
 
+/**
+ * Every distributor's outages off now, from the merged list
+ * (/api/v1/outages?status=active), and the distributors read so far. The
+ * merged list has an outage once per feed that lists it (Endeavour's current
+ * and maintenance overlap), so a distributor's id counts once.
+ */
+function outagesUnderWay(): { outages: Outage[]; read: Set<Distributor> } {
+  const merged = mergedOutages({ status: ['active'] });
+  const seen = new Set<string>();
+  const outages = merged.outages.filter((o) => {
+    if (!o.id) return true;
+    const key = `${o.distributor}:${o.id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return { outages, read: merged.read };
+}
+
+/** Customers as a whole number, never negative. */
+const wholeCustomers = (o: Outage): number => Math.max(0, Math.round(o.customers_affected) || 0);
+
+/**
+ * The power block of /api/stats/summary.
+ *
+ * `ausgrid`, `endeavour`, `essential`, `total_outages` and `total_customers`
+ * are as they have always been: the three NSW distributors, each counted in
+ * its own terms, and the totals are theirs alone. The Discord bot and the
+ * archived snapshots read them, so they do not change as other states'
+ * distributors are added.
+ *
+ * `by_distributor` is every distributor in one measure: outages under way
+ * and the customers they have off, as the merged feed and by_state count
+ * them. A distributor that has not been read yet (or is switched off) is
+ * absent from it, not zero.
+ */
 export function summarisePower(): PowerSummary {
   const power: PowerSummary = {
     ausgrid: { unplanned: 0, planned: 0, customers_affected: 0, total: 0 },
@@ -158,14 +230,18 @@ export function summarisePower(): PowerSummary {
     essential: { unplanned: 0, planned: 0, future: 0, total: 0, customers_affected: 0 },
     total_outages: 0,
     total_customers: 0,
+    by_distributor: {},
   };
 
-  // --- Ausgrid: derived from the markers payload. We don't have the
-  // upstream `GetCurrentOutageStats` aggregate banner here, so we
-  // approximate from the markers themselves: outageType + customers.
+  // --- Ausgrid: counted from the markers themselves. The snapshot also
+  // lists planned work up to 30 days ahead (about 1,300 records); that has
+  // not cut anyone off yet, so only outages under way are counted, as
+  // Endeavour's future bucket is left out of its totals below.
   const ag = liveStore.getData<AusgridOutagesPayload>('ausgrid');
   if (ag && Array.isArray(ag.Markers)) {
+    const now = Date.now();
     for (const m of ag.Markers) {
+      if (ausgridScheduled(m, now)) continue;
       if (m.outageType === 'Planned') power.ausgrid.planned += 1;
       else power.ausgrid.unplanned += 1;
       power.ausgrid.customers_affected += m.customersAffected ?? 0;
@@ -216,6 +292,21 @@ export function summarisePower(): PowerSummary {
   power.essential.total = essAll.length;
   power.total_outages += essAll.length;
   power.total_customers += power.essential.customers_affected;
+
+  // --- Every distributor, in the order the merged feed lists them.
+  const underWay = outagesUnderWay();
+  const counted = new Map<Distributor, { outages: number; customers: number }>();
+  for (const o of underWay.outages) {
+    let row = counted.get(o.distributor);
+    if (!row) counted.set(o.distributor, (row = { outages: 0, customers: 0 }));
+    row.outages += 1;
+    row.customers += wholeCustomers(o);
+  }
+  for (const distributor of DISTRIBUTORS) {
+    const row = counted.get(distributor);
+    if (row) power.by_distributor[distributor] = row;
+    else if (underWay.read.has(distributor)) power.by_distributor[distributor] = { outages: 0, customers: 0 };
+  }
 
   return power;
 }
@@ -430,6 +521,110 @@ export function summariseEnvironment(): EnvironmentSummary {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// by_state — the same things counted per state, for the national dashboard's
+// trend lines. Counted from the merged lists the public feeds answer with
+// (api/fires.ts, api/traffic.ts, api/outages.ts), so a state's number here is
+// the number of records its feed lists. LiveStore reads only.
+// ---------------------------------------------------------------------------
+
+const STATE_METRICS = [
+  'fires',
+  'fire_warnings',
+  'roads',
+  'roadwork',
+  'road_floods',
+  'major_events',
+  'outages',
+  'customers',
+] as const;
+export type StateMetric = (typeof STATE_METRICS)[number];
+/** Whole numbers; a metric is absent where no feed read so far covers it for the state. */
+export type StateStats = Partial<Record<StateMetric, number>>;
+
+/** The order the states are listed in. */
+const STATE_ORDER = ['NSW', 'QLD', 'VIC', 'SA', 'ACT', 'WA', 'NT', 'TAS'];
+
+/** /api/traffic/<path> → its metric. */
+const ROAD_FEEDS: ReadonlyArray<readonly [string, StateMetric]> = [
+  ['incidents', 'roads'],
+  ['roadwork', 'roadwork'],
+  ['flood', 'road_floods'],
+  ['majorevent', 'major_events'],
+];
+
+/**
+ * Which road metrics each other state's feed can give (the record types
+ * sources/interstateRoads.ts makes for it): SA's has no floods or events,
+ * the ACT's no floods. NSW has a feed of its own for each.
+ */
+const INTERSTATE_ROAD_METRICS: Readonly<Record<keyof typeof INTERSTATE_STORES, readonly StateMetric[]>> = {
+  QLD: ['roads', 'roadwork', 'road_floods', 'major_events'],
+  VIC: ['roads', 'roadwork', 'road_floods', 'major_events'],
+  SA: ['roads', 'roadwork'],
+  ACT: ['roads', 'roadwork', 'major_events'],
+};
+
+export function summariseByState(): Record<string, StateStats> {
+  const acc = new Map<string, StateStats>();
+  /** Adds to a state's metric; n = 0 only says a feed covers it. */
+  const add = (state: string, metric: StateMetric, n = 0): void => {
+    let s = acc.get(state);
+    if (!s) acc.set(state, (s = {}));
+    s[metric] = (s[metric] ?? 0) + n;
+  };
+
+  // Fires: open records only (the merged list leaves closed ones out).
+  const fires = mergedFires();
+  for (const s of fires.sources) {
+    if (s.updated_at) add(s.state, s.kind === 'warning' ? 'fire_warnings' : 'fires');
+  }
+  for (const f of fires.features) {
+    const p = f.properties;
+    if (p.kind === 'warning') add(p.state, 'fire_warnings', 1);
+    else if (p.layer === 'fire') add(p.state, 'fires', 1);
+  }
+
+  // Roads: what /api/traffic/{incidents,roadwork,flood,majorevent} list.
+  for (const [state, store] of Object.entries(INTERSTATE_STORES)) {
+    if (!liveStore.get(store)) continue;
+    for (const metric of INTERSTATE_ROAD_METRICS[state as keyof typeof INTERSTATE_STORES]) add(state, metric);
+  }
+  for (const [path, metric] of ROAD_FEEDS) {
+    const feed = roadFeed(path);
+    if (!feed) continue;
+    if (liveStore.get(feed.store)) add('NSW', metric);
+    for (const f of feed.records) add(f.properties.state, metric, 1);
+  }
+
+  // Power: outages off now, each under its own state. A state has the two
+  // metrics once one of its distributors has been read; until then it is
+  // absent, which is not the same as no outages.
+  const power = outagesUnderWay();
+  for (const distributor of power.read) {
+    // Its own state, and any other its network reaches into (Essential, QLD).
+    const info = DISTRIBUTOR_INFO[distributor];
+    for (const state of [info.state, ...(info.also ?? [])]) {
+      add(state, 'outages');
+      add(state, 'customers');
+    }
+  }
+  for (const o of power.outages) {
+    add(o.state, 'outages', 1);
+    add(o.state, 'customers', wholeCustomers(o));
+  }
+
+  const out: Record<string, StateStats> = {};
+  const states = [...STATE_ORDER.filter((s) => acc.has(s)), ...[...acc.keys()].filter((s) => !STATE_ORDER.includes(s)).sort()];
+  for (const state of states) {
+    const s = acc.get(state)!;
+    const row: StateStats = {};
+    for (const m of STATE_METRICS) if (s[m] !== undefined) row[m] = s[m];
+    out[state] = row;
+  }
+  return out;
+}
+
 statsRouter.get('/api/stats/summary', (c) =>
   c.json({
     timestamp: new Date().toISOString().replace(/\.\d+Z$/, 'Z'),
@@ -437,6 +632,7 @@ statsRouter.get('/api/stats/summary', (c) =>
     traffic: summariseTraffic(),
     emergency: summariseEmergency(),
     environment: summariseEnvironment(),
+    by_state: summariseByState(),
   }),
 );
 

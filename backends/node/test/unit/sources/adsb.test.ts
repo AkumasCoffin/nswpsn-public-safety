@@ -4,7 +4,7 @@
  * bbox filter, circle-shard rotation, rotation holdover, and the
  * all-upstreams-down failure path.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const fetchJsonMock = vi.fn();
 const configMock: Record<string, unknown> = {
@@ -151,7 +151,86 @@ describe('adsb.normalizeAircraft', () => {
   });
 });
 
+describe('adsb detail fields', () => {
+  it('keeps what the aircraft reported and leaves out what it did not', async () => {
+    const { normalizeAircraft } = await import('../../../src/sources/adsb.js');
+    const a = normalizeAircraft(raw({
+      baro_rate: -1216, alt_geom: 5375, ias: 250, tas: 262, mach: 0.412,
+      true_heading: 291.4, roll: -0.35, nav_altitude_mcp: 3008, nav_qnh: 1017.6,
+      nav_modes: ['autopilot', 'approach'], wd: 250, ws: 14, oat: -3,
+      type: 'adsb_icao', nic: 8, nac_p: 10, sil: 3, rc: 186, version: 2,
+      rssi: -12.3, messages: 4821.0, emergency: 'none', dbFlags: 9,
+      desc: 'BOEING 737-800', ownOp: 'QANTAS AIRWAYS', year: 2009,
+    }), 'adsb_lol')!;
+    expect(a).toMatchObject({
+      baroRateFpm: -1216, altGeomFt: 5375, iasKt: 250, tasKt: 262, mach: 0.412,
+      trueHeadingDeg: 291.4, rollDeg: -0.35, navAltFt: 3008, navQnhHpa: 1017.6,
+      navModes: ['autopilot', 'approach'], windDirDeg: 250, windKt: 14, oatC: -3,
+      posSource: 'adsb', nic: 8, nacp: 10, sil: 3, rcM: 186, adsbVersion: 2,
+      rssiDb: -12.3, messages: 4821, flags: ['military', 'ladd'],
+      desc: 'BOEING 737-800', operator: 'QANTAS AIRWAYS', year: '2009',
+    });
+    // 'none' is not an emergency, and nothing was said about these.
+    for (const k of ['emergency', 'geomRateFpm', 'magHeadingDeg', 'navHeadingDeg']) {
+      expect(a).not.toHaveProperty(k);
+    }
+  });
+
+  it('drops a value no aircraft could report rather than showing it', async () => {
+    const { normalizeAircraft } = await import('../../../src/sources/adsb.js');
+    const a = normalizeAircraft(raw({
+      baro_rate: 90_000, mach: 12, nav_qnh: 0, rssi: 4, true_heading: 400, oat: 'cold',
+    }), 'adsb_lol')!;
+    for (const k of ['baroRateFpm', 'mach', 'navQnhHpa', 'rssiDb', 'trueHeadingDeg', 'oatC']) {
+      expect(a).not.toHaveProperty(k);
+    }
+  });
+
+  it('names how the position was obtained', async () => {
+    const { posSourceOf } = await import('../../../src/sources/adsb.js');
+    expect(posSourceOf('adsb_icao_nt', 'abc123')).toBe('adsb');
+    expect(posSourceOf('mlat', 'abc123')).toBe('mlat');
+    expect(posSourceOf('tisb_trackfile', '~2a01f0')).toBe('tisb');
+    expect(posSourceOf('adsr_icao', 'abc123')).toBe('adsr');
+    expect(posSourceOf('mode_s', 'abc123')).toBe('modes');
+    expect(posSourceOf(undefined, '~2a01f0')).toBe('tisb');
+    expect(posSourceOf(undefined, 'abc123')).toBeUndefined();
+  });
+
+  it('the plain list keeps three detail fields and drops the rest', async () => {
+    const { normalizeAircraft, withoutFullDetail } = await import('../../../src/sources/adsb.js');
+    const a = normalizeAircraft(raw({
+      baro_rate: 640, type: 'mlat', emergency: 'minfuel', ias: 250, rssi: -9, desc: 'X',
+    }), 'adsb_lol')!;
+    const lean = withoutFullDetail(a);
+    expect(lean).toMatchObject({ baroRateFpm: 640, posSource: 'mlat', emergency: 'minfuel' });
+    for (const k of ['iasKt', 'rssiDb', 'desc']) expect(lean).not.toHaveProperty(k);
+    expect(a.iasKt).toBe(250); // the original is untouched
+  });
+});
+
 describe('adsb.mergeAircraft', () => {
+  it("does not let an MLAT fix a moment newer displace the aircraft's own position", async () => {
+    const { normalizeAircraft, mergeAircraft } = await import('../../../src/sources/adsb.js');
+    const adsb = normalizeAircraft(raw({ lat: -33.0, seen_pos: 3, type: 'adsb_icao' }), 'node:syd');
+    const mlat = normalizeAircraft(raw({ lat: -33.4, seen_pos: 1, type: 'mlat' }), 'adsb_lol');
+    expect(mergeAircraft([adsb!, mlat!])[0]).toMatchObject({ lat: -33.0, posSource: 'adsb' });
+    // Well ahead, it is the better answer.
+    const stale = normalizeAircraft(raw({ lat: -33.0, seen_pos: 20, type: 'adsb_icao' }), 'node:syd');
+    expect(mergeAircraft([stale!, mlat!])[0]).toMatchObject({ lat: -33.4, posSource: 'mlat' });
+  });
+
+  it("fills the airframe's description from the older record, but never its speeds", async () => {
+    const { normalizeAircraft, mergeAircraft } = await import('../../../src/sources/adsb.js');
+    const older = normalizeAircraft(
+      raw({ seen_pos: 20, desc: 'AIRBUS A-320', ownOp: 'JETSTAR', ias: 280, baro_rate: 2000 }), 'adsb_lol');
+    const fresh = normalizeAircraft(raw({ seen_pos: 1 }), 'node:syd');
+    const m = mergeAircraft([older!, fresh!])[0]!;
+    expect(m).toMatchObject({ desc: 'AIRBUS A-320', operator: 'JETSTAR' });
+    expect(m).not.toHaveProperty('iasKt');
+    expect(m).not.toHaveProperty('baroRateFpm');
+  });
+
   it('keeps the freshest position and unions sources', async () => {
     const { normalizeAircraft, mergeAircraft } = await import(
       '../../../src/sources/adsb.js'
@@ -185,6 +264,39 @@ describe('adsb.mergeAircraft', () => {
       type: 'AW139',
       esTag: 'polair',
     });
+  });
+
+  it("takes the freshest record's own squawk, and borrows one only when it has none", async () => {
+    const { normalizeAircraft, mergeAircraft } = await import(
+      '../../../src/sources/adsb.js'
+    );
+    // An older record still on 7700 must not mark an aircraft already back on 1200.
+    const was7700 = normalizeAircraft(raw({ squawk: '7700', seen_pos: 30 }), 'adsb_lol');
+    const now1200 = normalizeAircraft(raw({ squawk: '1200', seen_pos: 1 }), 'adsb_fi');
+    expect(mergeAircraft([was7700!, now1200!])[0]).toMatchObject({
+      squawk: '1200', emergencySquawk: false,
+    });
+    const noSquawk = normalizeAircraft(raw({ squawk: undefined, seen_pos: 1 }), 'adsb_fi');
+    expect(mergeAircraft([was7700!, noSquawk!])[0]).toMatchObject({
+      squawk: '7700', emergencySquawk: true,
+    });
+  });
+
+  it('keeps each receiver its own clock, whatever the receivers are called', async () => {
+    const { normalizeNodeUploadWithTrails, _resetNodeClock } = await import(
+      '../../../src/sources/adsb.js'
+    );
+    _resetNodeClock();
+    const now = 1_800_000_000_000;
+    const upload = (atMs: number) => ({
+      at: new Date(atMs).toISOString(),
+      aircraft: [raw({ seen_pos: 1 })] as never,
+    });
+    // Two receivers both named "home". A's clock runs 30 s fast.
+    normalizeNodeUploadWithTrails(upload(now + 30_000), 'node:home', now, 'id-a');
+    const b = normalizeNodeUploadWithTrails(upload(now), 'node:home', now, 'id-b');
+    // Sharing A's estimate, B's prompt upload looked 30 s late.
+    expect(b.records[0]?.ageSec).toBe(1);
   });
 
   it('keeps distinct hexes separate', async () => {
@@ -302,6 +414,34 @@ describe('adsb.trails', () => {
     expect(trail).toBeDefined();
     expect(trail.length).toBe(2); // stationary tick didn't add a point
     expect(trail[0][0]).toBe(-33.9); // 5dp rounding of -33.9000014
+    vi.useRealTimers();
+  });
+
+  it('never puts an older aggregator fix after newer receiver points', async () => {
+    vi.useFakeTimers();
+    const t0 = 1_800_000_000_000;
+    vi.setSystemTime(t0);
+    const { fetchAdsbAircraft, adsbTrailsSnapshot, ingestNodeTrailPoints } = await import('../../../src/sources/adsb.js');
+    fetchJsonMock.mockResolvedValue({ ac: [raw({ hex: 'ahead1', lat: -33.0, lon: 151.0 })] });
+    let p = fetchAdsbAircraft();
+    await vi.runAllTimersAsync();
+    await p;
+    // A receiver reports the aircraft further south, up to 2 s ago.
+    vi.setSystemTime(t0 + 20_000);
+    ingestNodeTrailPoints('ahead1', [
+      [t0 + 10_000, -33.1, 151.0, 5000],
+      [t0 + 18_000, -33.2, 151.0, 5000],
+    ], t0 + 20_000);
+    // The next poll carries an aggregator fix older than the newest receiver
+    // point (the poll itself moves the fake clock ~7 s, hence 25 s).
+    vi.setSystemTime(t0 + 30_000);
+    fetchJsonMock.mockResolvedValue({ ac: [raw({ hex: 'ahead1', lat: -33.12, lon: 151.0, seen_pos: 25 })] });
+    p = fetchAdsbAircraft();
+    await vi.runAllTimersAsync();
+    await p;
+    const trail = adsbTrailsSnapshot().trails['ahead1']!;
+    // Still heading south at the end: no doubling back to -33.12.
+    expect(trail[trail.length - 1]![0]).toBe(-33.2);
     vi.useRealTimers();
   });
 
@@ -456,15 +596,79 @@ describe('adsb.fetchAdsbAircraft', () => {
     expect(snap.aircraft[0]?.lat).toBe(-34.1);
   });
 
-  it('throws only when every upstream fails', async () => {
+  it('a total outage serves the held aircraft rather than failing the poll', async () => {
+    // Thrown, this put the poller into a five-minute backoff over a blip.
+    vi.setSystemTime(1_800_000_000_000);
     const { fetchAdsbAircraft } = await import('../../../src/sources/adsb.js');
-    fetchJsonMock.mockRejectedValue(new Error('fetch failed: ETIMEDOUT'));
-    const p = fetchAdsbAircraft();
-    // Attach the rejection expectation before advancing timers so the
-    // rejection isn't unhandled.
-    const assertion = expect(p).rejects.toThrow(/all upstreams failed/);
+    fetchJsonMock.mockResolvedValue({ ac: [raw({ hex: 'aaa111' })] });
+    let p = fetchAdsbAircraft();
     await vi.runAllTimersAsync();
-    await assertion;
+    await p;
+    vi.setSystemTime(1_800_000_020_000);
+    fetchJsonMock.mockRejectedValue(new Error('fetch failed: ETIMEDOUT'));
+    p = fetchAdsbAircraft();
+    await vi.runAllTimersAsync();
+    const snap = await p;
+    expect(snap.aircraft.map((a) => a.hex)).toEqual(['aaa111']);
+    expect(snap.upstreams.filter((u) => u.id !== 'nodes').every((u) => !u.ok)).toBe(true);
+  });
+
+  it('ages a feed record by the rest of the sweep before the merge', async () => {
+    // The first circle answers at once; the sweep then staggers on for
+    // seconds. Its 1 s position is older than that by the time it is merged.
+    vi.setSystemTime(1_800_000_000_000);
+    const { fetchAdsbAircraft } = await import('../../../src/sources/adsb.js');
+    let first = true;
+    fetchJsonMock.mockImplementation(() => {
+      const ac = first ? [raw({ hex: 'aaa111', seen_pos: 1 })] : [];
+      first = false;
+      return Promise.resolve({ ac });
+    });
+    const p = fetchAdsbAircraft();
+    await vi.runAllTimersAsync();
+    const snap = await p;
+    const sweepSec = (Date.parse(snap.fetched_at) - 1_800_000_000_000) / 1000;
+    expect(sweepSec).toBeGreaterThan(1);
+    expect(snap.aircraft[0]?.ageSec).toBeCloseTo(1 + sweepSec, 3);
+  });
+
+  it('carries a squawk and its emergency onto a record that arrives without one, briefly', async () => {
+    vi.setSystemTime(1_800_000_000_000);
+    const { fetchAdsbAircraft } = await import('../../../src/sources/adsb.js');
+    const poll = async (over: Record<string, unknown>) => {
+      fetchJsonMock.mockResolvedValue({ ac: [raw({ hex: 'aaa111', ...over })] });
+      const p = fetchAdsbAircraft();
+      await vi.runAllTimersAsync();
+      return (await p).aircraft[0]!;
+    };
+    expect((await poll({ squawk: '7700' })).emergencySquawk).toBe(true);
+    vi.setSystemTime(1_800_000_020_000);
+    const carried = await poll({ squawk: undefined });
+    expect([carried.squawk, carried.emergencySquawk]).toEqual(['7700', true]);
+    vi.setSystemTime(1_800_000_100_000);
+    const lapsed = await poll({ squawk: undefined });
+    expect([lapsed.squawk, lapsed.emergencySquawk]).toEqual([null, false]);
+  });
+
+  it('holds a low aircraft that goes quiet instead of projecting it past the runway', async () => {
+    vi.setSystemTime(1_800_000_000_000);
+    const { fetchAdsbAircraft } = await import('../../../src/sources/adsb.js');
+    fetchJsonMock.mockResolvedValue({
+      ac: [
+        raw({ hex: 'low111', alt_baro: 800, gs: 140, track: 160 }),
+        raw({ hex: 'hi2222', alt_baro: 30000, gs: 450, track: 160 }),
+      ],
+    });
+    let p = fetchAdsbAircraft();
+    await vi.runAllTimersAsync();
+    await p;
+    vi.setSystemTime(1_800_000_070_000);
+    fetchJsonMock.mockResolvedValue({ ac: [] });
+    p = fetchAdsbAircraft();
+    await vi.runAllTimersAsync();
+    const byHex = new Map((await p).aircraft.map((a) => [a.hex, a]));
+    expect(byHex.get('hi2222')?.estimated).toBe(true);
+    expect(byHex.get('low111')?.estimated).toBe(false);
   });
 });
 
@@ -575,12 +779,104 @@ describe('adsb upstream health', () => {
 
   it('with every upstream paused the probes cover the whole map', async () => {
     fetchJsonMock.mockImplementation(() => Promise.reject(status(403)));
-    await expect(poll()).rejects.toThrow(/all upstreams failed/);
+    expect((await poll()).count).toBe(0);
     fetchJsonMock.mockReset();
     fetchJsonMock.mockResolvedValue({ ac: [raw()] });
     vi.setSystemTime(T0 + 61 * 60_000);
     const snap = await poll();
     expect(fetchJsonMock.mock.calls).toHaveLength(28);
     expect(snap.count).toBe(1);
+  });
+});
+
+describe('adsb FlyItalyADSB supplement', () => {
+  beforeEach(async () => {
+    fetchJsonMock.mockReset();
+    vi.useFakeTimers();
+    vi.setSystemTime(1_800_000_000_000);
+    const { _resetAdsbHoldoverForTests, _resetAdsbTrailsForTests } = await import('../../../src/sources/adsb.js');
+    _resetAdsbHoldoverForTests();
+    _resetAdsbTrailsForTests();
+  });
+  afterEach(() => {
+    delete configMock.FLYITALY_ADSB_KEY;
+    vi.useRealTimers();
+  });
+
+  async function poll() {
+    const { fetchAdsbAircraft } = await import('../../../src/sources/adsb.js');
+    const p = fetchAdsbAircraft();
+    await vi.runAllTimersAsync();
+    return p;
+  }
+  const flyCalls = () =>
+    fetchJsonMock.mock.calls.filter(([url]) => String(url).includes('flyitalyadsb.com'));
+
+  it('is not polled or reported without a key', async () => {
+    fetchJsonMock.mockResolvedValue({ ac: [] });
+    const snap = await poll();
+    expect(flyCalls()).toHaveLength(0);
+    expect(snap.upstreams.map((u) => u.id)).not.toContain('flyitaly');
+    // The rotation is untouched: every circle still goes to the four.
+    expect(fetchJsonMock.mock.calls).toHaveLength(28);
+  });
+
+  it('sends one keyed NSW request beside the rotation and merges what it hears', async () => {
+    configMock.FLYITALY_ADSB_KEY = ' fly-key ';
+    fetchJsonMock.mockImplementation((url: string) =>
+      Promise.resolve(url.includes('flyitalyadsb.com')
+        ? { now: 0, count: 1, total: 1, ac: [raw({ hex: 'f1f1f1', flight: 'RSCU201' })] }
+        : { ac: [] }));
+    const snap = await poll();
+    const calls = flyCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]![0]).toBe('https://api.flyitalyadsb.com/v2/lat/-30.4/lon/144.1/dist/463');
+    expect(calls[0]![1]).toMatchObject({ headers: { 'X-Api-Key': 'fly-key' } });
+    // The four still cover every circle themselves.
+    expect(fetchJsonMock.mock.calls).toHaveLength(29);
+    const a = snap.aircraft.find((x) => x.hex === 'f1f1f1');
+    expect(a?.sources).toEqual(['flyitaly']);
+    expect(snap.upstreams.find((u) => u.id === 'flyitaly')).toMatchObject({ ok: true, circles_ok: 1, count: 1 });
+  });
+
+  it('keeps to one request per interval and cycles the NSW quadrants', async () => {
+    configMock.FLYITALY_ADSB_KEY = 'fly-key';
+    fetchJsonMock.mockResolvedValue({ ac: [] });
+    await poll();
+    vi.setSystemTime(1_800_000_005_000); // 5 s later: inside the interval
+    const quiet = await poll();
+    expect(flyCalls()).toHaveLength(1);
+    // Reported with the last request's outcome, not as down.
+    expect(quiet.upstreams.find((u) => u.id === 'flyitaly')).toMatchObject({ ok: true, circles_total: 0 });
+    for (let k = 1; k <= 4; k++) {
+      vi.setSystemTime(1_800_000_000_000 + k * 12_000 + 5_000);
+      await poll();
+    }
+    const urls = flyCalls().map(([u]) => String(u));
+    expect(urls).toHaveLength(5);
+    expect(urls.map((u) => u.split('/v2/')[1])).toEqual([
+      'lat/-30.4/lon/144.1/dist/463',
+      'lat/-30.4/lon/150.5/dist/463',
+      'lat/-35.2/lon/144.1/dist/463',
+      'lat/-35.2/lon/150.5/dist/463',
+      'lat/-30.4/lon/144.1/dist/463',
+    ]);
+  });
+
+  it('pauses on a 429 without touching the rotation', async () => {
+    configMock.FLYITALY_ADSB_KEY = 'fly-key';
+    fetchJsonMock.mockImplementation((url: string) => {
+      if (url.includes('flyitalyadsb.com')) {
+        return Promise.reject(Object.assign(new Error('HTTP 429'), { status: 429, retryAfterMs: 60_000 }));
+      }
+      return Promise.resolve({ ac: [raw({ hex: 'aaa111' })] });
+    });
+    const snap = await poll();
+    expect(snap.count).toBe(1);
+    expect(snap.upstreams.find((u) => u.id === 'flyitaly')).toMatchObject({ ok: false });
+    vi.setSystemTime(1_800_000_030_000); // past the interval, inside Retry-After
+    const paused = await poll();
+    expect(flyCalls()).toHaveLength(1);
+    expect(paused.upstreams.find((u) => u.id === 'flyitaly')?.error).toContain('rate_limited');
   });
 });

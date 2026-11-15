@@ -128,6 +128,11 @@ func FetchManifest(serverURL, token string) (*Manifest, error) {
 	return &m, nil
 }
 
+// maxDownloadBytes bounds an update download. The agent is about 10 MB; this
+// is far above that and far below a disk. Without a bound, a wrong or hostile
+// URL could fill the data partition before the hash was ever compared.
+const maxDownloadBytes = 256 << 20
+
 // downloadVerified streams url to destPath.tmp, computing sha256 as it writes,
 // verifies the digest, and atomically renames into place. An empty/placeholder
 // url or empty sha256 yields ErrNothingToDo (not an error). Not resumable: a
@@ -165,10 +170,17 @@ func downloadVerified(url, sha256hex, destPath string) error {
 	}
 
 	h := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(f, h), resp.Body); err != nil {
+	// One byte past the cap, so "exactly at the cap" and "over it" differ.
+	n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(resp.Body, maxDownloadBytes+1))
+	if err != nil {
 		_ = f.Close()
 		_ = os.Remove(tmp)
 		return fmt.Errorf("download %s: %w", url, err)
+	}
+	if n > maxDownloadBytes {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("download %s: larger than %d MB, refused", url, maxDownloadBytes>>20)
 	}
 	if err := f.Close(); err != nil {
 		_ = os.Remove(tmp)

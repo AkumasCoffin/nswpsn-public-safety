@@ -239,12 +239,58 @@ export function pagerPpmOf(node: NodeRow): number | undefined {
   return typeof p === 'number' && Number.isFinite(p) ? p : undefined;
 }
 
+// Testing mode: staff replace a pager node's state plan with frequencies typed
+// by hand, and its pages stay in the staff drawer (node-ingest never forwards
+// or stores them). The agent range-checks frequencies and sanitises labels on
+// its side too; these bounds are what the staff route accepts.
+export const PAGER_TEST_LABEL_RE = /^[A-Za-z0-9_-]{1,16}$/;
+export const PAGER_TEST_MIN_MHZ = 24;
+export const PAGER_TEST_MAX_MHZ = 1766;
+export const PAGER_TEST_MAX_FREQS = 8;
+
+/** Whether a pager node is in testing mode. */
+export function pagerTestingOf(node: NodeRow | null | undefined): boolean {
+  const co = (node?.config_override ?? {}) as Record<string, unknown>;
+  return co['pagerTesting'] === true;
+}
+
+/** The node's hand-entered test frequencies (kept while testing is off, so
+ *  turning it back on restores them). Stored data is re-checked: a bad entry
+ *  or a repeated label is dropped, and the list is capped. */
+export function pagerTestFrequenciesOf(node: NodeRow): PagerFreq[] {
+  const co = (node.config_override ?? {}) as Record<string, unknown>;
+  const raw = co['pagerTestFrequencies'];
+  if (!Array.isArray(raw)) return [];
+  const out: PagerFreq[] = [];
+  for (const f of raw) {
+    if (!f || typeof f !== 'object') continue;
+    const { label, mhz } = f as Record<string, unknown>;
+    if (typeof label !== 'string' || !PAGER_TEST_LABEL_RE.test(label)) continue;
+    if (typeof mhz !== 'number' || !Number.isFinite(mhz)) continue;
+    if (mhz < PAGER_TEST_MIN_MHZ || mhz > PAGER_TEST_MAX_MHZ) continue;
+    if (out.some((o) => o.label === label)) continue;
+    out.push({ label, mhz });
+    if (out.length >= PAGER_TEST_MAX_FREQS) break;
+  }
+  return out;
+}
+
+/** The frequencies a pager node receives: its test list while testing (and
+ *  the list is not empty), otherwise its state's plan. */
+export function pagerFrequenciesFor(node: NodeRow): PagerFreq[] {
+  if (pagerTestingOf(node)) {
+    const test = pagerTestFrequenciesOf(node);
+    if (test.length > 0) return test;
+  }
+  return pagerPlanFor(node.state);
+}
+
 /** Build the lean config payload a PAGER node receives. No presets/rdio/SDR-Trunk
  *  doc, no Pagermon key — just capture/feed + the frequency plan, all hashed into
  *  configVersion so a toggle re-syncs the node. */
 function buildPagerPayload(node: NodeRow): ConfigPayload {
   const pager: PagerConfig = {
-    frequencies: [...pagerPlanFor(node.state)],
+    frequencies: [...pagerFrequenciesFor(node)],
     protocols: PAGER_PROTOCOLS,
   };
   // Only attach overrides when set, so nodes without them keep their previous

@@ -16,9 +16,19 @@ import { getPool } from '../../db/pool.js';
 import { log } from '../../lib/log.js';
 import { nodeTracesForArchive, type NodeArchivableTrack } from './adsbNodeStore.js';
 
-/** Same cadence as the daily counters and the coverage envelope: all three are
- *  running aggregates that nothing reads between passes. */
-const FLUSH_INTERVAL_MS = 60_000;
+/**
+ * How often new points are appended.
+ *
+ * Each append rewrites the aircraft-hour's whole points value, so the cost is
+ * the row's size times the number of appends: at one a minute an aircraft in
+ * view for an hour had its row rewritten sixty times, about thirty times its
+ * final size in dead rows and WAL. Five minutes is twelve. Not longer: memory
+ * coarsens points older than ten minutes, and an append must go out while its
+ * points are still at full resolution. Nothing reads the table between
+ * passes (the view merges memory on top), and a shutdown writes what is
+ * pending, so the only exposure is a crash losing up to five minutes.
+ */
+const FLUSH_INTERVAL_MS = 5 * 60_000;
 
 /** Aircraft-hours written per statement. */
 const BATCH_SIZE = 200;
@@ -245,6 +255,16 @@ export function maybeFlushNodeTracks(nowMs: number = Date.now()): void {
   void flushNodeTracks(nodeTracesForArchive(), nowMs)
     .catch((err) => log.warn({ err }, 'node track flush threw'))
     .finally(() => { flushing = false; });
+}
+
+/** Shutdown: write what has not been appended yet, so a deploy does not cut
+ *  up to a flush interval out of every receiver's tracks. */
+export async function stopNodeTrackArchive(): Promise<void> {
+  try {
+    await flushNodeTracks(nodeTracesForArchive());
+  } catch (err) {
+    log.warn({ err }, 'node track flush on shutdown failed');
+  }
 }
 
 /** Test seam: the high-water marks outlive a single test otherwise. */

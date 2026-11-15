@@ -121,6 +121,71 @@ function authHeaders(): Record<string, string> {
 const _parkedFeeds = new Map<string, number>(); // path → parked-until ts
 const DEAD_FEED_PARK_MS = 3_600_000;
 const RATE_LIMIT_PARK_MS = 120_000;
+// A feed whose body is not a GTFS-realtime message. Asking again in a minute
+// would get the same body; a quarter of an hour is soon enough to notice a fix.
+const BAD_BODY_PARK_MS = 900_000;
+
+/**
+ * A FeedMessage read one top-level field at a time: the header, then each
+ * entity decoded on its own, so an entity that will not decode is skipped
+ * instead of failing the message. Reading stops at a zero tag (padding or
+ * the start of garbage) or at a field running past the end. Null when there
+ * is no header or not one entity survived — then it is not a feed at all.
+ */
+export function decodeFeedLeniently(
+  buf: Uint8Array,
+): { message: GtfsRealtimeBindings.transit_realtime.FeedMessage; skipped: number } | null {
+  let pos = 0;
+  const varint = (): number | null => {
+    let out = 0;
+    for (let shift = 0; shift < 64; shift += 7) {
+      if (pos >= buf.length) return null;
+      const b = buf[pos++]!;
+      // Multiplication, not a shift: lengths here fit a double, not 32 bits.
+      out += (b & 0x7f) * 2 ** shift;
+      if ((b & 0x80) === 0) return out;
+    }
+    return null;
+  };
+  let header: GtfsRealtimeBindings.transit_realtime.FeedHeader | null = null;
+  const entity: GtfsRealtimeBindings.transit_realtime.FeedEntity[] = [];
+  let skipped = 0;
+  while (pos < buf.length) {
+    const tag = varint();
+    if (tag === null) break;
+    const field = Math.floor(tag / 8);
+    const wire = tag % 8;
+    if (field === 0) break;
+    if (wire === 2) {
+      const len = varint();
+      if (len === null || pos + len > buf.length) break;
+      const part = buf.subarray(pos, pos + len);
+      pos += len;
+      try {
+        if (field === 1) header = rt.FeedHeader.decode(part);
+        else if (field === 2) entity.push(rt.FeedEntity.decode(part));
+      } catch {
+        if (field === 2) skipped += 1;
+      }
+    } else if (wire === 0) {
+      if (varint() === null) break;
+    } else if (wire === 1) pos += 8;
+    else if (wire === 5) pos += 4;
+    else break; // groups and anything unknown: not in this schema
+  }
+  if (!header || entity.length === 0) return null;
+  return { message: rt.FeedMessage.create({ header, entity }), skipped };
+}
+
+/** What a body that would not decode looks like, for the one log line it gets. */
+function describeBody(buf: Uint8Array): string {
+  if (buf.length === 0) return 'empty';
+  const b0 = buf[0];
+  if (b0 === 0x7b || b0 === 0x5b) return 'JSON';
+  if (b0 === 0x3c) return 'HTML or XML';
+  if (b0 === 0x1f && buf[1] === 0x8b) return 'gzip';
+  return `binary, starts ${Buffer.from(buf.subarray(0, 12)).toString('hex')}`;
+}
 
 function feedParked(path: string): boolean {
   const until = _parkedFeeds.get(path);
@@ -148,10 +213,39 @@ async function fetchFeed(path: string): Promise<GtfsRealtimeBindings.transit_rea
       timeoutMs: FEED_TIMEOUT_MS,
       headers: authHeaders(),
     });
-    return rt.FeedMessage.decode(buf);
+    try {
+      return rt.FeedMessage.decode(buf);
+    } catch (decodeErr) {
+      // One bad entity fails the whole strict decode. TfNSW's combined alerts
+      // feed has had one (a 450 KB message with a good header that stops at
+      // "illegal tag: field number 0" part-way through), which hid every
+      // alert in it. Read it entity by entity and keep the ones that decode.
+      const salvaged = decodeFeedLeniently(buf);
+      if (salvaged) {
+        quietWarn(`tfnsw: ${path} decoded leniently`, new Error(`${salvaged.skipped} of ${salvaged.skipped + salvaged.message.entity.length} entities skipped (${(decodeErr as Error).message})`));
+        return salvaged.message;
+      }
+      // A 200 whose body is not the message. Parked, and said once in one
+      // line with what the body was: this used to be retried on every request
+      // and logged with a stack trace each time, which said nothing about why.
+      // Alerts change slowly, so a quarter of an hour; a vehicle feed is only
+      // held back for the two minutes a rate limit is, in case one body was cut short.
+      const alerts = path.includes('/alerts/');
+      _parkedFeeds.set(path, Date.now() + (alerts ? BAD_BODY_PARK_MS : RATE_LIMIT_PARK_MS));
+      log.warn(
+        { path, bytes: buf.length, body: describeBody(buf), reason: (decodeErr as Error).message },
+        `tfnsw: feed answered something that is not GTFS-realtime — parked for ${alerts ? '15min' : '2min'}`,
+      );
+      return null;
+    }
   } catch (err) {
     const status = (err as { status?: number | null }).status;
-    if (status === 404 || status === 410) {
+    if (status === 401 || status === 403) {
+      // The key is not allowed this feed (each TfNSW API product is
+      // subscribed to separately). Nothing changes that between requests.
+      _parkedFeeds.set(path, Date.now() + DEAD_FEED_PARK_MS);
+      log.warn({ path, status }, 'tfnsw: the API key is not allowed this feed — parked for 1h');
+    } else if (status === 404 || status === 410) {
       _parkedFeeds.set(path, Date.now() + DEAD_FEED_PARK_MS);
       log.warn({ path, status }, 'tfnsw: feed unavailable — parked for 1h');
     } else if (status === 429) {
@@ -622,6 +716,16 @@ function decodeAlerts(
 
 const alertsCache = new SwrCache<TfnswAlert[]>(2);
 
+// One line, without a stack, at most once every ten minutes per message.
+const _quietAt = new Map<string, number>();
+const QUIET_MS = 600_000;
+export function quietWarn(msg: string, err: unknown): void {
+  const now = Date.now();
+  if (now - (_quietAt.get(msg) ?? 0) < QUIET_MS) return;
+  _quietAt.set(msg, now);
+  log.warn({ reason: (err as Error)?.message ?? String(err) }, msg);
+}
+
 export async function fetchTfnswAlerts(): Promise<TfnswAlert[]> {
   if (!tfnswConfigured()) return [];
   const { value } = await alertsCache.get(
@@ -652,7 +756,9 @@ export async function fetchTfnswAlerts(): Promise<TfnswAlert[]> {
     {
       fresh: ALERT_FRESH_MS,
       stale: ALERT_STALE_MS,
-      onError: (err) => log.warn({ err }, 'tfnsw: alerts refresh failed'),
+      // The feeds that failed have each said why; this is the summary, and
+      // with every feed parked it would otherwise repeat on every request.
+      onError: (err) => quietWarn('tfnsw: alerts refresh failed', err),
     },
   );
   return value;

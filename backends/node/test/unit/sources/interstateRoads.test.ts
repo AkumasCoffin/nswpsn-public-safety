@@ -426,6 +426,33 @@ describe('vicRecords', () => {
     });
   });
 
+  it('unplanned: one event listed twice under two ids is one record, the earlier listing', () => {
+    const tow = (id: string, created: string, extra: Record<string, unknown> = {}, at = [145.29, -37.89]) => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: at },
+      properties: {
+        id, status: 'Active', eventType: 'Hazard', eventSubType: 'Stationary vehicle', closedRoadName: 'Willow Rd',
+        reference: { startIntersectionLocality: 'Upper Ferntree Gully' },
+        description: 'TowAllocation - Willow Rd - Upper Ferntree Gully - Proceed with Caution', created, ...extra,
+      },
+    });
+    const out = vicRecords(
+      [
+        tow('Tow:B', '2026-11-02T06:37:08Z'),
+        tow('Tow:A', '2026-11-02T06:37:01Z'),
+        // The same words an hour later is another vehicle; so is one elsewhere on the road.
+        tow('Tow:C', '2026-11-02T07:40:00Z'),
+        tow('Tow:D', '2026-11-02T06:37:05Z', {}, [145.35, -37.95]),
+        tow('Tow:E', '2026-11-02T06:37:05Z', { eventSubType: 'Debris' }),
+      ],
+      false,
+      NOW,
+    );
+    expect(out.map((r) => r.properties.id).sort()).toEqual([
+      'vic:unplanned:Tow:A', 'vic:unplanned:Tow:C', 'vic:unplanned:Tow:D', 'vic:unplanned:Tow:E',
+    ]);
+  });
+
   it('planned: a geometry collection; roadworks on the roadwork feed, events on major events; ended ones left out', () => {
     const geometry = { type: 'GeometryCollection', geometries: [{ type: 'Point', coordinates: [144.9, -37.7] }, { type: 'LineString', coordinates: [[144.9, -37.7], [144.91, -37.71]] }] };
     const out = vicRecords(

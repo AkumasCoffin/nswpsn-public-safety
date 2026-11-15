@@ -1360,6 +1360,28 @@
     .adsb-dc-photo { width: 100%; max-height: 120px; object-fit: cover; border-radius: 6px;
       background: rgba(0,0,0,0.3); display: block; }
     .adsb-dc-credit { font-size: 9px; color: #64748b; margin: 3px 0 8px; }
+    /* The usual route, as its own panel: both ends named, and how far along
+       the aircraft is when it sits on that route. */
+    .adsb-dc-route { margin: 0 0 9px; padding: 8px 10px 7px; border-radius: 8px;
+                     background: rgba(148,163,184,0.06); border: 1px solid rgba(148,163,184,0.16); }
+    .adsb-dc-route-k { font-size: 9.5px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.06em;
+                       display: flex; justify-content: space-between; gap: 6px; margin-bottom: 4px; }
+    .adsb-dc-route-k span:last-child { text-transform: none; letter-spacing: 0; color: #cbd5e1; font-weight: 600;
+                                       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .adsb-dc-route-ends { display: grid; grid-template-columns: 1fr auto 1fr; align-items: start; gap: 6px; }
+    .adsb-dc-ap { min-width: 0; }
+    .adsb-dc-ap.to { text-align: right; }
+    .adsb-dc-ap-code { font-size: 19px; font-weight: 700; color: #f1f5f9; letter-spacing: 0.03em; line-height: 1.1; }
+    .adsb-dc-ap-city { font-size: 11px; color: #cbd5e1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .adsb-dc-ap-name { font-size: 9.5px; color: #64748b; line-height: 1.3; overflow: hidden;
+                       display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+    .adsb-dc-route-mid { color: #64748b; font-size: 11px; padding-top: 5px; text-align: center; white-space: nowrap; }
+    .adsb-dc-route-bar { position: relative; height: 4px; border-radius: 2px; background: rgba(148,163,184,0.2); margin: 9px 6px 5px; }
+    .adsb-dc-route-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 2px; background: #38bdf8; }
+    .adsb-dc-route-plane { position: absolute; top: 50%; transform: translate(-50%, -50%) rotate(45deg); font-size: 11px; color: #f1f5f9; }
+    .adsb-dc-route-meta { display: flex; justify-content: space-between; gap: 8px; font-size: 10px; color: #94a3b8;
+                          font-variant-numeric: tabular-nums; }
+    .adsb-dc-route-warn { font-size: 10px; line-height: 1.35; color: #fbbf24; margin-top: 5px; }
     .adsb-dc-rows { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px;
       font-size: 11.5px; line-height: 1.5; }
     .adsb-dc-k { color: #94a3b8; white-space: nowrap; }
@@ -1372,6 +1394,14 @@
     .adsb-dc-est { font-size: 10.5px; line-height: 1.4; color: #fbbf24; margin-bottom: 8px;
       padding: 5px 7px; border-radius: 6px; background: rgba(251, 191, 36, 0.1);
       border: 1px dashed rgba(251, 191, 36, 0.45); }
+    .adsb-dc-more { margin-top: 6px; padding-top: 5px; border-top: 1px solid rgba(148,163,184,0.18); }
+    .adsb-dc-more > summary { cursor: pointer; font-size: 10.5px; color: #94a3b8; list-style: none;
+      user-select: none; padding: 2px 0; }
+    .adsb-dc-more > summary::-webkit-details-marker { display: none; }
+    .adsb-dc-more > summary::before { content: '▸'; display: inline-block; width: 12px; }
+    .adsb-dc-more[open] > summary::before { content: '▾'; }
+    .adsb-dc-more > summary:hover { color: #e2e8f0; }
+    .adsb-dc-more .adsb-dc-rows { margin-top: 4px; }
     .adsb-dc-acts { display: flex; gap: 5px; margin-top: 9px; }
     .adsb-dc-btn { flex: 1; font-size: 10.5px; padding: 5px 4px; border-radius: 6px;
       cursor: pointer; background: rgba(148,163,184,0.12); color: #cbd5e1;
@@ -1453,7 +1483,21 @@
     @media (max-width: 900px) {
       .adsb-history-bar { bottom: 12px; padding: 8px 10px; }
       .adsb-hb-clock { font-size: 13px; }
+      /* The detail card is a bottom sheet here and sat on top of the bar:
+         pinning an aircraft in history hid the scrubber. Lift the bar clear. */
+      body:has(#adsb-detail-card.open) .adsb-history-bar { bottom: calc(45vh + 10px); }
     }
+    /* Shown while the aircraft picture is old because the feed is not
+       answering. Same slot as the history bar, which is never up in live mode. */
+    .adsb-stale-badge {
+      position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
+      z-index: 860; display: none; pointer-events: none;
+      background: rgba(15, 23, 42, 0.95); border: 1px solid rgba(251, 191, 36, 0.5);
+      border-radius: 999px; padding: 5px 12px; font-size: 11.5px; color: #fbbf24;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.45); white-space: nowrap;
+    }
+    .adsb-stale-badge.on { display: block; }
+    .adsb-tbl-row:focus-visible, .adsb-th:focus-visible { outline: 2px solid #c084fc; outline-offset: -2px; }
     @media (max-width: 900px) {
       .floating-filter-sidebar { display: none; }
       .floating-filter-panel { display: none !important; }
@@ -1531,6 +1575,13 @@
       box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
     }
     .floating-filter-panel.open { display: block; }
+    /* The detail card (aircraft, repeaters, aerodromes...) sits top-left and
+       runs down past where this panel opens, so with both open they stacked.
+       Step this panel out beside the card instead. Desktop only: below
+       900px the card is a bottom sheet and this panel is not used. */
+    @media (min-width: 901px) {
+      body:has(#adsb-detail-card.open) .floating-filter-panel { left: 304px; }
+    }
     .floating-filter-panel h4 {
       margin: 0 0 10px 0;
       font-size: 13px;
@@ -2270,7 +2321,7 @@
        rather than by unbinding, the same way the touch rule above works: it
        takes effect the instant the pill flips, with no marker churn through
        _rebuildAdsb's diff. Scoped to .adsb-tooltip so vessels keep theirs. */
-    body.adsb-labels-on .leaflet-tooltip.adsb-tooltip { display: none !important; }
+    body.adsb-labels-on .leaflet-tooltip.adsb-ac-tooltip { display: none !important; }
 
     #mobile-tip-card {
       position: fixed; left: 10px; right: 10px; bottom: 10px; z-index: 1200;
@@ -2858,7 +2909,7 @@
     <div class="sidebar-section-label">Sections</div>
     <nav class="sidebar-nav">
       <a href="/">Home / Overview</a>
-      <a href="live" style="color: #fca5a5;">Live Data / Scanner</a>
+      <a href="live" style="color: #fca5a5;">Live Dashboard</a>
       <a class="active" href="map" style="color: #fca5a5;">Incident Map</a>
       <a href="logs">Incident Logs</a>
       <a href="links">Useful Links</a>
@@ -2911,6 +2962,7 @@
       <!-- Time scrubber for the aircraft layer. Hidden until the History pill
            turns it on. -->
       <div class="adsb-history-bar" id="adsb-history-bar"></div>
+      <div class="adsb-stale-badge" id="adsb-stale-badge" role="status" aria-live="polite"></div>
 
       <!-- Compact icon-over-label toggles: the coloured icon carries the
            layer identity, the small caption keeps it unambiguous. -->
@@ -3058,6 +3110,7 @@
         <label><input type="checkbox" id="chk-outages-unplanned" checked onchange="onOutageFilterChange()"><span class="filter-dot" style="background:#ef4444;"></span> Unplanned Outages</label>
         <label><input type="checkbox" id="chk-outages-maintenance" checked onchange="onOutageFilterChange()"><span class="filter-dot" style="background:#f97316;"></span> Current Maintenance</label>
         <label><input type="checkbox" id="chk-outages-future" checked onchange="onOutageFilterChange()"><span class="filter-dot" style="background:#22c55e;"></span> Future Maintenance</label>
+        <label><input type="checkbox" id="chk-outages-areas" onchange="onOutageFilterChange()"><span class="filter-dot" style="background:transparent;border:1px dashed #94a3b8;"></span> Network areas</label>
       </div>
 
       <!-- Beaches Filter Panel -->
@@ -3439,7 +3492,7 @@
 
     // SUPABASE_URL, SUPABASE_KEY, and sb are provided by auth-common.js
 
-    const darkBase = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png?key=cb1_29rl_1_764d57ded0436220d836abc9', { attribution: '&copy; CartoDB', subdomains: 'abcd', maxZoom: 19 });
+    const darkBase = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png?key=cb1_29rl_1_764d57ded0436220d836abc9', { attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>', subdomains: 'abcd', maxZoom: 19 });
     // Labels only, drawn ABOVE the weather field (pane z 260 vs the field's
     // 250). Added and removed with darkBase so the two halves never separate.
     const darkLabels = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png?key=cb1_29rl_1_764d57ded0436220d836abc9', { pane: 'labelPane', subdomains: 'abcd', maxZoom: 19 });
@@ -3951,11 +4004,8 @@
       dorsal_reports: { data: null, timestamp: 0 },
       // Weather
       weather_current: { data: null, timestamp: 0 },
-      // Power outages (Endeavour + Essential Energy have lat/lon)
-      endeavour_current: { data: null, timestamp: 0 },
-      endeavour_maintenance: { data: null, timestamp: 0 },
-      endeavour_future: { data: null, timestamp: 0 },
-      essential_energy: { data: null, timestamp: 0 },
+      // Power outages: every distributor, from the merged feed
+      outages: { data: null, timestamp: 0 },
       // NASA FIRMS fire-hotspot polygons
       firms_hotspots: { data: null, timestamp: 0 },
       // ACT Ambulance Service responses (ESA feed)
@@ -4173,7 +4223,17 @@
     // ~4 km per 15 s tick, so clustering would rebuild the whole tree
     // every refresh. Markers are diff-updated in place instead (see
     // _rebuildAdsb).
-    const adsbLayer = L.layerGroup();
+    // Every network the aircraft come from is credited where they are shown:
+    // Leaflet puts a layer's attribution in the corner while it is on.
+    // adsb.lol's data is ODbL and FlyItalyADSB's is CC BY-SA 4.0, and both
+    // licences require the credit; the others ask for it.
+    const adsbLayer = L.layerGroup([], {
+      attribution: 'Aircraft: <a href="https://adsb.lol/" target="_blank" rel="noopener">adsb.lol</a> (<a href="https://opendatacommons.org/licenses/odbl/1-0/" target="_blank" rel="noopener">ODbL</a>), '
+        + '<a href="https://adsb.fi/" target="_blank" rel="noopener">adsb.fi</a>, '
+        + '<a href="https://airplanes.live/" target="_blank" rel="noopener">airplanes.live</a>, '
+        + '<a href="https://adsb.one/" target="_blank" rel="noopener">ADSB One</a>, '
+        + '<a href="https://flyitalyadsb.com/" target="_blank" rel="noopener">FlyItalyADSB</a> (flyitalyadsb.com, <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener">CC BY-SA 4.0</a>) and AusAware receivers',
+    });
     // Aircraft position trails: all trails share ONE canvas renderer so
     // hundreds of gradient polylines cost zero DOM nodes. Nested in
     // adsbLayer; canvas vectors land in overlayPane (400), always under
@@ -9016,7 +9076,7 @@ function initPagerHoursFromStorage() {
     
     // Session cleanup handled by backend timeout (pagehide fires on navigation too)
 
-    // Power Outages - Ausgrid + Endeavour Energy
+    // Power outages - every distributor in the merged feed
     // Helper to build detailed tooltip for power outages
     function buildOutageTooltip(outage, provider) {
       const isPlanned = (outage.outageType || '').toLowerCase() === 'planned' || 
@@ -9158,7 +9218,7 @@ function initPagerHoursFromStorage() {
     let outagesUnplannedCluster = null;
     let outagesMaintenanceCluster = null;
     let outagesFutureCluster = null;
-    let outageFilters = { unplanned: true, maintenance: true, future: true };
+    let outageFilters = { unplanned: true, maintenance: true, future: true, areas: false };
     
     function createOutageClusterGroup(type) {
       const colorMap = { unplanned: '#ef4444', maintenance: '#f97316', future: '#22c55e' };
@@ -9217,6 +9277,8 @@ function initPagerHoursFromStorage() {
       outageFilters.unplanned = showUnplanned;
       outageFilters.maintenance = showMaintenance;
       outageFilters.future = showFuture;
+      outageFilters.areas = document.getElementById('chk-outages-areas')?.checked ?? false;
+      showOutageAreas(outageFilters.areas);
       
       if (outagesUnplannedCluster) {
         if (showUnplanned) { outagesLayer.addLayer(outagesUnplannedCluster); }
@@ -9854,7 +9916,7 @@ function initPagerHoursFromStorage() {
       const whenAgo = formatAgo(r.reportedAt);
       const whenAbs = (() => {
         const d = new Date(r.reportedAt);
-        return isNaN(d.getTime()) ? '' : d.toLocaleString('en-AU', { timeZone: 'Australia/Sydney' });
+        return isNaN(d.getTime()) ? '' : d.toLocaleString('en-AU'); // the reader's own time zone
       })();
       const place = [r.location, r.zone, r.state].filter(Boolean).join(' · ');
       let loc = '';
@@ -10144,125 +10206,101 @@ function initPagerHoursFromStorage() {
         }
       }
       
-      // Endeavour Energy - Unplanned, Current Maintenance, Future Maintenance
+      // Every distributor, from the one merged feed. Each record says which
+      // distributor and state it is from, whether it is planned, and whether
+      // it is under way or still to come, so there is one mapping here rather
+      // than one block of code per distributor.
       try {
-        let endeavourCurrentRes, endeavourMaintenanceRes, endeavourFutureRes;
-        const currCached = layerCache.endeavour_current;
-        const maintCached = layerCache.endeavour_maintenance;
-        const futCached = layerCache.endeavour_future;
-        const now = Date.now();
-        
-        const needCurr = !currCached.data || (now - currCached.timestamp) >= LAYER_CACHE_TTL;
-        const needMaint = !maintCached.data || (now - maintCached.timestamp) >= LAYER_CACHE_TTL;
-        const needFut = !futCached.data || (now - futCached.timestamp) >= LAYER_CACHE_TTL;
-        
-        if (needCurr || needMaint || needFut) {
-          const fetches = await Promise.all([
-            needCurr ? apiFetch(`${PROXY_BASE}/api/endeavour/current`).then(r => r.json()).catch(() => []) : Promise.resolve(currCached.data),
-            needMaint ? apiFetch(`${PROXY_BASE}/api/endeavour/maintenance`).then(r => r.json()).catch(() => []) : Promise.resolve(maintCached.data),
-            needFut ? apiFetch(`${PROXY_BASE}/api/endeavour/future`).then(r => r.json()).catch(() => []) : Promise.resolve(futCached.data)
-          ]);
-          endeavourCurrentRes = fetches[0];
-          endeavourMaintenanceRes = fetches[1];
-          endeavourFutureRes = fetches[2];
-          if (needCurr) layerCache.endeavour_current = { data: endeavourCurrentRes, timestamp: now };
-          if (needMaint) layerCache.endeavour_maintenance = { data: endeavourMaintenanceRes, timestamp: now };
-          if (needFut) layerCache.endeavour_future = { data: endeavourFutureRes, timestamp: now };
+        let merged;
+        const cached = layerCache.outages;
+        const nowMs = Date.now();
+        if (!cached.data || (nowMs - cached.timestamp) >= LAYER_CACHE_TTL) {
+          const res = await apiFetch(`${PROXY_BASE}/api/v1/outages`);
+          // A failed read keeps the last answer rather than clearing the pins.
+          merged = res.ok ? await res.json() : (cached.data || { features: [], sources: [] });
+          if (res.ok) layerCache.outages = { data: merged, timestamp: nowMs };
         } else {
-          endeavourCurrentRes = currCached.data;
-          endeavourMaintenanceRes = maintCached.data;
-          endeavourFutureRes = futCached.data;
+          merged = cached.data;
         }
-        
-        // Process unplanned outages (red)
-        const endeavourCurrent = Array.isArray(endeavourCurrentRes) ? endeavourCurrentRes : [];
-        endeavourCurrent.forEach(o => addOutageMarker(o, outagesUnplannedCluster, '#ef4444', 'rgba(239,68,68,0.5)', 'fa-bolt', 'Endeavour Energy (Unplanned)'));
-        
-        // Process current maintenance (orange)
-        const endeavourMaintenance = Array.isArray(endeavourMaintenanceRes) ? endeavourMaintenanceRes : [];
-        endeavourMaintenance.forEach(o => addOutageMarker(o, outagesMaintenanceCluster, '#f97316', 'rgba(249,115,22,0.4)', 'fa-wrench', 'Endeavour Energy (Current Maintenance)'));
-        
-        // Process future maintenance (green)
-        const endeavourFuture = Array.isArray(endeavourFutureRes) ? endeavourFutureRes : [];
-        endeavourFuture.forEach(o => addOutageMarker(o, outagesFutureCluster, '#22c55e', 'rgba(34,197,94,0.4)', 'fa-wrench', 'Endeavour Energy (Future Maintenance)'));
-        
-        console.log(`Loaded ${endeavourCurrent.length} unplanned + ${endeavourMaintenance.length} current maint + ${endeavourFuture.length} future maint Endeavour outages`);
-      } catch (e) {
-        console.error('Endeavour outages error', e);
-      }
-      
-      // Essential Energy - KML outages (current + future feeds)
-      try {
-        let essentialData;
-        const essCached = layerCache.essential_energy;
-        const essNow = Date.now();
-        const needEss = !essCached.data || (essNow - essCached.timestamp) >= LAYER_CACHE_TTL;
-        
-        if (needEss) {
-          essentialData = await apiFetch(`${PROXY_BASE}/api/essential/outages?lite=1`).then(r => r.json()).catch(() => ({ outages: [] }));
-          layerCache.essential_energy = { data: essentialData, timestamp: essNow };
-        } else {
-          essentialData = essCached.data;
-        }
-        
-        const essOutages = essentialData?.outages || (Array.isArray(essentialData) ? essentialData : []);
-        essOutages.forEach(item => {
-          const props = item.properties || item;
-          const lat = parseFloat(props.latitude || props.lat || (item.geometry?.coordinates?.[1]));
-          const lon = parseFloat(props.longitude || props.lon || (item.geometry?.coordinates?.[0]));
-          if (isNaN(lat) || isNaN(lon)) return;
-          
-          const feedType = (props.feedType || 'current').toLowerCase();
-          const outageType = (props.outageType || 'unplanned').toLowerCase();
-          
-          // Determine cluster, color, icon based on feed type
-          let clusterGroup, bgColor, shadowColor, iconClass, label;
-          if (feedType === 'future') {
-            clusterGroup = outagesFutureCluster;
-            bgColor = '#8b5cf6';
-            shadowColor = 'rgba(139,92,246,0.4)';
-            iconClass = 'fa-calendar-alt';
-            label = 'Essential Energy (Future)';
-          } else if (outageType === 'planned') {
-            clusterGroup = outagesFutureCluster;
-            bgColor = '#22c55e';
-            shadowColor = 'rgba(34,197,94,0.4)';
-            iconClass = 'fa-wrench';
-            label = 'Essential Energy (Planned)';
-          } else {
-            clusterGroup = outagesUnplannedCluster;
-            bgColor = '#ef4444';
-            shadowColor = 'rgba(239,68,68,0.5)';
-            iconClass = 'fa-bolt';
-            label = 'Essential Energy (Unplanned)';
-          }
-          
-          // Build a normalized outage object for the tooltip
+        const names = {};
+        (Array.isArray(merged?.sources) ? merged.sources : []).forEach(src => { names[src.distributor] = src.name; });
+        const seen = new Set();
+        let drawn = 0;
+        (Array.isArray(merged?.features) ? merged.features : []).forEach(f => {
+          const p = f.properties || {};
+          const d = p.details || {};
+          const c = f.geometry && f.geometry.type === 'Point' ? f.geometry.coordinates : null;
+          if (!c || !Number.isFinite(c[0]) || !Number.isFinite(c[1])) return;
+          // Endeavour lists some jobs in two of its feeds; one pin each.
+          const key = `${p.distributor}:${p.id}`;
+          if (seen.has(key)) return;
+          seen.add(key);
+          const planned = p.kind === 'planned';
+          const scheduled = p.status === 'scheduled';
+          const cause = p.cause && !/^(none|unknown)$/i.test(String(p.cause).trim()) ? p.cause : '';
           const outage = {
-            suburb: props.title || props.suburb || props.cause || props.reason || 'Unknown',
-            cause: props.cause || props.reason || '',
-            customersAffected: props.customersAffected || 0,
-            startTime: props.timeOff || '',
-            estimatedRestoration: props.estTimeOn || '',
-            lastUpdated: props.lastUpdated || '',
-            outageType: feedType === 'future' ? 'Future' : (outageType === 'planned' ? 'Planned' : 'Unplanned'),
-            latitude: lat,
-            longitude: lon,
-            source: 'essential_energy'
+            suburb: p.area || d.title || 'Area not given',
+            streets: d.streets || '',
+            postcode: d.postcode || '',
+            cause,
+            status: d.status || '',
+            customersAffected: p.customers_affected || 0,
+            startTime: p.start_at || '',
+            estimatedRestoration: p.restore_at || '',
+            lastUpdated: p.updated_at || '',
+            outageType: planned ? 'Planned' : 'Unplanned',
+            latitude: c[1],
+            longitude: c[0],
+            source: p.source || p.distributor
           };
-          
-          addOutageMarker(outage, clusterGroup, bgColor, shadowColor, iconClass, label);
+          const who = (names[p.distributor] || p.distributor || 'Distributor') + (p.state && p.state !== 'NSW' ? `, ${p.state}` : '');
+          if (scheduled) addOutageMarker(outage, outagesFutureCluster, '#22c55e', 'rgba(34,197,94,0.4)', 'fa-wrench', `${who} (Future Maintenance)`);
+          else if (planned) addOutageMarker(outage, outagesMaintenanceCluster, '#f97316', 'rgba(249,115,22,0.4)', 'fa-wrench', `${who} (Current Maintenance)`);
+          else addOutageMarker(outage, outagesUnplannedCluster, '#ef4444', 'rgba(239,68,68,0.5)', 'fa-bolt', `${who} (Unplanned)`);
+          drawn += 1;
         });
-        
-        console.log(`Loaded ${essOutages.length} Essential Energy outages`);
+        console.log(`Loaded ${drawn} power outages`);
       } catch (e) {
-        console.error('Essential Energy outages error', e);
+        console.error('Power outages error', e);
       }
       
       // Add cluster layers to main outages layer based on current filter state
       if (outageFilters.unplanned) outagesLayer.addLayer(outagesUnplannedCluster);
       if (outageFilters.maintenance) outagesLayer.addLayer(outagesMaintenanceCluster);
       if (outageFilters.future) outagesLayer.addLayer(outagesFutureCluster);
+      // clearLayers() above took the network areas off with the pins.
+      if (outageFilters.areas) showOutageAreas(true);
+    }
+
+    // Network areas: each distributor's supply area as an outline, so a gap
+    // in the pins reads as "nothing reported here" or "not this distributor's
+    // patch". Off until asked for; fetched once and kept.
+    let outageAreasLayer = null;
+    let outageAreasLoading = null;
+    async function showOutageAreas(show) {
+      if (!show) { if (outageAreasLayer) outagesLayer.removeLayer(outageAreasLayer); return; }
+      if (!outageAreasLayer) {
+        if (!outageAreasLoading) {
+          outageAreasLoading = apiFetch(`${PROXY_BASE}/api/v1/outages/areas`)
+            .then(r => (r.ok ? r.json() : null))
+            .catch(() => null);
+        }
+        const data = await outageAreasLoading;
+        outageAreasLoading = null;
+        if (!data || !Array.isArray(data.features)) { console.warn('Network areas could not be loaded'); return; }
+        outageAreasLayer = L.geoJSON(data, {
+          style: { color: '#94a3b8', weight: 1.2, opacity: 0.8, dashArray: '5 4', fillColor: '#94a3b8', fillOpacity: 0.04 },
+          onEachFeature: (feature, layer) => {
+            const pr = feature.properties || {};
+            layer.bindTooltip(escapeHtml(`${pr.name || pr.distributor || 'Distributor'}${pr.state ? ', ' + pr.state : ''} network area`), { sticky: true, direction: 'top', opacity: 0.95 });
+          }
+        });
+      }
+      // The box may have been unticked while the areas were loading.
+      if (outageFilters.areas && !outagesLayer.hasLayer(outageAreasLayer)) {
+        outagesLayer.addLayer(outageAreasLayer);
+        if (outageAreasLayer.bringToBack) outageAreasLayer.bringToBack();
+      }
     }
 
     // Traffic Incidents - using combined GeoJSON endpoint
@@ -12093,7 +12131,7 @@ function initPagerHoursFromStorage() {
           const fmt = new Intl.DateTimeFormat('en-AU', {
             day: '2-digit', month: 'short',
             hour: '2-digit', minute: '2-digit', hour12: true,
-            timeZone: 'Australia/Sydney',
+            // The reader's own zone, named so the time cannot be misread.
             timeZoneName: 'short',
           });
           return fmt.format(d);
@@ -12748,7 +12786,7 @@ function initPagerHoursFromStorage() {
     // Outages (Unplanned / Current maintenance / Future maintenance).
     window.toggleOutagePill = function (key) {
       const chkId = `chk-outages-${key}`;
-      const cur = document.getElementById(chkId)?.checked ?? true;
+      const cur = document.getElementById(chkId)?.checked ?? (key !== 'areas');
       _ffSetCheckbox(chkId, !cur);
       onOutageFilterChange();
       refreshActiveFilterPanel();
@@ -12761,6 +12799,7 @@ function initPagerHoursFromStorage() {
         const u = document.getElementById('chk-outages-unplanned')?.checked ?? true;
         const m = document.getElementById('chk-outages-maintenance')?.checked ?? true;
         const f = document.getElementById('chk-outages-future')?.checked ?? true;
+        const a = document.getElementById('chk-outages-areas')?.checked ?? false;
         return `
           <h4><i class="fa-solid fa-bolt" style="color:#f97316;"></i> Outages</h4>
           <div class="ff-section-label">Type</div>
@@ -12768,6 +12807,10 @@ function initPagerHoursFromStorage() {
             ${_ffPill(u, 'Unplanned',          "toggleOutagePill('unplanned')")}
             ${_ffPill(m, 'Current maintenance',"toggleOutagePill('maintenance')")}
             ${_ffPill(f, 'Future maintenance', "toggleOutagePill('future')")}
+          </div>
+          <div class="ff-section-label">Show</div>
+          <div class="floating-filter-pills">
+            ${_ffPill(a, 'Network areas', "toggleOutagePill('areas')")}
           </div>
         `;
       },
@@ -14154,6 +14197,14 @@ function initPagerHoursFromStorage() {
     window.toggleListSection = function (which) {
       const sec = document.getElementById(which + '-list-section');
       if (sec) sec.classList.toggle('collapsed');
+      // The aircraft rows are not built while the section is collapsed.
+      if (which === 'adsb' && sec && !sec.classList.contains('collapsed')) adsbListRender();
+    };
+    /** Enter or Space on a list row or sort header does what a click does. */
+    window.adsbKeyActivate = function (ev) {
+      if (ev.key !== 'Enter' && ev.key !== ' ') return;
+      ev.preventDefault();
+      ev.currentTarget.click();
     };
 
     // Called from the layer toggles: open the panel while either layer
@@ -14490,6 +14541,11 @@ function initPagerHoursFromStorage() {
     let _adsbAircraft = [];
     const _adsbMarkers = new Map(); // hex → { marker, iconKey }
     let adsbRefreshInterval = null;
+    // The fast poll for aircraft our own receivers hear: see adsbFastTick.
+    let adsbFastInterval = null;
+    // Markers gliding to a newer fix: hex → { marker, from, to, t0 }.
+    // Declared up here because _rebuildAdsb reads it.
+    const _adsbGlides = new Map();
     // Search box in the floating Aircraft list panel — filters both the
     // list and the map markers (same behaviour as the AIS search).
     let _adsbListSearch = '';
@@ -14518,6 +14574,8 @@ function initPagerHoursFromStorage() {
       } catch (e) { /* corrupt/blocked storage — start empty */ }
     })();
     let _adsbPhotoSaveTimer = null;
+    /** Hexes whose photo lookup errored (as opposed to answering "none"). */
+    const _adsbPhotoFailed = new Set();
     function saveAdsbPhotoCache() {
       if (_adsbPhotoSaveTimer) return;
       _adsbPhotoSaveTimer = setTimeout(() => {
@@ -14531,7 +14589,9 @@ function initPagerHoursFromStorage() {
           const out = {};
           let n = 0;
           for (const [hex, v] of _adsbPhotoCache) {
-            if (v === '__loading__') continue;
+            // A lookup that FAILED is "none" for this visit only: saved, one
+            // 429 hid that aircraft's photo for a week.
+            if (v === '__loading__' || _adsbPhotoFailed.has(hex)) continue;
             if (n++ >= ADSB_PHOTO_LS_MAX) break;
             out[hex] = { v: v === '__none__' ? null : v, t: prev[hex] ? prev[hex].t : now };
           }
@@ -15175,7 +15235,7 @@ function initPagerHoursFromStorage() {
       // real fix rather than something anyone reported.
       const est = a.estimated
         ? '<div style="color:#fbbf24;font-size:10px;margin-top:3px;">'
-          + 'estimated · no signal ' + Math.round(a.estimatedSec || a.ageSec) + 's</div>'
+          + 'estimated · no signal ' + _adsbHeardAgo(a) + 's</div>'
         : '';
 
       return '<div style="font-family:system-ui,sans-serif;color:#e2e8f0;font-size:11px;'
@@ -15247,19 +15307,52 @@ function initPagerHoursFromStorage() {
       };
     }
 
+    // hex -> record, built on first use after the list changes. Looking an
+    // aircraft up by scanning the list was once per marker per trail redraw:
+    // 800 markers over a 1,500-aircraft list, every few seconds.
+    let _adsbIdx = { arr: null, len: -1, map: new Map() };
+    function _adsbGet(hex) {
+      if (_adsbIdx.arr !== _adsbAircraft || _adsbIdx.len !== _adsbAircraft.length) {
+        _adsbIdx = {
+          arr: _adsbAircraft, len: _adsbAircraft.length,
+          map: new Map(_adsbAircraft.map((x) => [x.hex, x])),
+        };
+      }
+      return _adsbIdx.map.get(hex);
+    }
+
+    /** A marker's tooltip is built when it opens (see _rebuildAdsb); this
+     *  refreshes one that is open right now. */
+    function _adsbTooltipRefresh(marker) {
+      if (!marker.isTooltipOpen || !marker.isTooltipOpen()) return;
+      const t = marker.getTooltip();
+      if (t) t.update();
+    }
+
     function _adsbSearchHay(a) {
       return [a.callsign, a.reg, a.hex, a.type, a.squawk]
         .filter(Boolean).map((s) => String(s).toLowerCase()).join(' ');
     }
 
-    function _rebuildAdsb() {
+    /**
+     * Bring the markers into line with the aircraft list, filters and view.
+     *
+     * `opts.list === false` skips the list (the caller, or the map's own
+     * moveend handler, renders it). `opts.panel === false` skips the filter
+     * panel: it shows counts, and redrawing it on every data tick or pan
+     * closed whatever dropdown the viewer had open.
+     */
+    function _rebuildAdsb(opts) {
+      const o = opts || {};
       const showGround = map.getZoom() >= ADSB_GROUND_MIN_ZOOM;
       const view = map.getBounds().pad(0.2);
       const q = _adsbListSearch;
       const seen = new Set();
       let rendered = 0;
       for (const a of _adsbAircraft) {
-        if (rendered >= ADSB_MAX_RENDER) break;
+        // The pinned aircraft is drawn even past the cap: it is the one the
+        // viewer asked for, and the card would be describing nothing.
+        if (rendered >= ADSB_MAX_RENDER && a.hex !== _adsbPinnedHex) continue;
         if (a.onGround && !showGround) continue;
         if (!isFinite(a.lat) || !isFinite(a.lon)) continue;
         // Australia-wide feed: only render the padded viewport, except
@@ -15276,16 +15369,24 @@ function initPagerHoursFromStorage() {
         const key = _adsbIconKey(a);
         const existing = _adsbMarkers.get(a.hex);
         if (existing) {
-          existing.marker.setLatLng([a.lat, a.lon]);
+          const glide = _adsbGlides.get(a.hex);
+          if (glide) glide.to = [a.lat, a.lon];
+          else existing.marker.setLatLng([a.lat, a.lon]);
           if (existing.iconKey !== key) {
             existing.marker.setIcon(buildAircraftIcon(a));
             existing.iconKey = key;
           }
-          existing.marker.setTooltipContent(buildAdsbTooltipHtml(a));
+          _adsbTooltipRefresh(existing.marker);
         } else {
-          const marker = L.marker([a.lat, a.lon], { icon: buildAircraftIcon(a) })
-            .bindTooltip(buildAdsbTooltipHtml(a), {
-              className: 'ais-tooltip adsb-tooltip', sticky: true, opacity: 0.97, direction: 'top'
+          // keyboard:false — each marker was a tab stop, up to 800 of them
+          // between the page and anything after the map. The list is the
+          // keyboard way in.
+          const hex = a.hex;
+          const marker = L.marker([a.lat, a.lon], { icon: buildAircraftIcon(a), keyboard: false })
+            // Built when it opens, from the record as it is then. Rebuilding
+            // every marker's tooltip HTML on every pass was most of the pass.
+            .bindTooltip(() => buildAdsbTooltipHtml(_adsbGet(hex) || a), {
+              className: 'ais-tooltip adsb-tooltip adsb-ac-tooltip', sticky: true, opacity: 0.97, direction: 'top'
             });
           // Click → pin tooltip + highlight the list row (AIS pattern).
           marker.on('click', (ev) => {
@@ -15302,11 +15403,22 @@ function initPagerHoursFromStorage() {
         if (!seen.has(hex)) {
           adsbLayer.removeLayer(entry.marker);
           _adsbMarkers.delete(hex);
+          _adsbGlides.delete(hex); // or a marker re-made for this hex inherits it
         }
       }
       _rebuildAdsbTrails(); // trails follow the rendered-marker set
-      adsbListRender();
-      if (typeof refreshActiveFilterPanel === 'function') refreshActiveFilterPanel();
+      if (o.list !== false) adsbListRender();
+      if (o.panel !== false) _adsbRefreshFilterPanel();
+    }
+
+    /** Redraw the aircraft filter panel, if it is the one open and the viewer
+     *  is not in the middle of using a control in it. */
+    function _adsbRefreshFilterPanel() {
+      if (typeof refreshActiveFilterPanel !== 'function' || _activeFilterKey !== 'adsb') return;
+      const fp = document.getElementById('floating-filter-panel');
+      const ae = document.activeElement;
+      if (fp && ae && fp.contains(ae) && (ae.tagName === 'SELECT' || ae.tagName === 'INPUT')) return;
+      refreshActiveFilterPanel();
     }
 
     async function loadAdsbData() {
@@ -15314,10 +15426,15 @@ function initPagerHoursFromStorage() {
       // replace the frozen picture with the present without warning.
       if (adsbHistoryMode) return;
       const hadData = _adsbAircraft.length > 0;
+      const gen = _adsbLiveGen;
+      _adsbLastLoadMs = Date.now();
       try {
         const res = await apiFetch(`${PROXY_BASE}/api/v1/adsb/aircraft`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = (await res.json()).data;
+        // History was switched on (or off and on) while this was in flight:
+        // an answer from before must not paint over what is showing now.
+        if (adsbHistoryMode || gen !== _adsbLiveGen) return;
         const aircraft = Array.isArray(data.aircraft) ? data.aircraft : [];
         // Keep stale markers over a blank map on transient upstream
         // failures — same guard as the AIS layer.
@@ -15329,8 +15446,25 @@ function initPagerHoursFromStorage() {
         // map already makes, so the date picker has its bounds before anyone
         // opens it.
         if (data.history) _adsbHistWindow = data.history;
-        _adsbAircraft = aircraft;
+        // The full list is as old as the server's last aggregator sweep; the
+        // fast poll may already hold a newer fix for an aircraft our
+        // receivers hear. Keep whichever is newer, or the marker would jump
+        // back along its track every 15 s.
+        _adsbStampFix(aircraft, data.fetched_at);
+        _adsbLastOkMs = Date.now();
+        const held = new Map(_adsbAircraft.map((x) => [x.hex, x]));
+        _adsbAircraft = aircraft.map((x) => {
+          const h = held.get(x.hex);
+          return (h && h._fixMs > x._fixMs) ? h : x;
+        });
         _rebuildAdsb();
+        // A ?icao= link: pin it now that there is something to pin.
+        if (_adsbPendingPinHex) {
+          const want = _adsbPendingPinHex;
+          _adsbPendingPinHex = null;
+          if (_adsbGet(want)) adsbPinAircraft(want);
+          else showToast(want.toUpperCase() + ' is not being tracked right now', 'info');
+        }
         // Altitude, speed and position age all move on every poll.
         if (_adsbPinnedHex) adsbRenderDetailCard();
         // Follow mode: keep the camera on the pinned aircraft as it
@@ -15370,11 +15504,20 @@ function initPagerHoursFromStorage() {
     async function loadAdsbTrails() {
       if (adsbHistoryMode) return;   // trails come from the history response
       if (!adsbTrailsEnabled && !_adsbPinnedHex) return;
+      const gen = _adsbLiveGen;
       try {
         const res = await apiFetch(`${PROXY_BASE}/api/v1/adsb/trails`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = (await res.json()).data;
+        if (adsbHistoryMode || gen !== _adsbLiveGen) return;
         _adsbTrails = data.trails || {};
+        _adsbTrailTailMs = {};
+        // The fast poll may only add what is newer than this build (with a
+        // little slack for receiver points that arrived just after it): an
+        // older point missing from these trails would land at the end, out
+        // of order, and draw the line back on itself.
+        const builtMs = Date.parse(data.fetched_at);
+        _adsbTrailFloorMs = Number.isFinite(builtMs) ? builtMs - 3000 : 0;
         _rebuildAdsbTrails();
         // The trend arrow and track summary are both derived from the trail,
         // so the card is incomplete until this lands.
@@ -15412,11 +15555,30 @@ function initPagerHoursFromStorage() {
         // Pill off → only the clicked aircraft's trail shows.
         if (!adsbTrailsEnabled && hex !== focusHex) continue;
         const focused = hex === focusHex;
-        const pts = _adsbTrails[hex];
+        let pts = _adsbTrails[hex];
         if (!pts || pts.length < 2) continue;
-        const a = _adsbAircraft.find((x) => x.hex === hex);
+        const a = _adsbGet(hex);
         // Trail points + the marker's live position as the head.
         const m = entry.marker.getLatLng();
+        // Never run past the aircraft. The trails and the aircraft list are
+        // fetched separately, so the trail can hold fixes newer than the one
+        // the marker shows; drawn as-is, the line overshot the aircraft and
+        // doubled back to it. Points at the END lying ahead of the marker
+        // along its track go; an older loop (a holding pattern) stays,
+        // because trimming stops at the first point behind.
+        if (a && Number.isFinite(a.trackDeg)) {
+          const tr = a.trackDeg * Math.PI / 180;
+          const ux = Math.sin(tr), uy = Math.cos(tr);
+          const kx = Math.cos(m.lat * Math.PI / 180);
+          let end = pts.length;
+          while (end > 1) {
+            const p = pts[end - 1];
+            const ahead = ((p[1] - m.lng) * kx * ux + (p[0] - m.lat) * uy) * 111.32; // km
+            if (ahead <= 0.05) break;
+            end -= 1;
+          }
+          if (end < pts.length) pts = pts.slice(0, end);
+        }
         const latlngs = pts.map((p) => [p[0], p[1]]);
         latlngs.push([m.lat, m.lng]);
         const alts = pts.map((p) => p[2]);
@@ -15489,6 +15651,252 @@ function initPagerHoursFromStorage() {
       saveMapPrefs();
     };
 
+    // ---------- Fast updates where our receivers hear an aircraft ----------
+    // The full aircraft list and trails only change when the server finishes
+    // a sweep of the public aggregators (16-23 s), and come here every 15 s
+    // and 30 s. Our own receivers report every couple of seconds, so every
+    // ADSB_FAST_MS this asks for just what changed in the last
+    // ADSB_RECENT_SEC (`?recent=` on the same endpoints): in practice the
+    // aircraft a receiver hears, with their one-second track points. Those
+    // markers glide to each new fix and their trails grow as they fly;
+    // everything else keeps the normal refresh.
+    const ADSB_FAST_MS = 3000;
+    const ADSB_RECENT_SEC = 15;
+    const ADSB_GLIDE_MS = 1000;
+    // A jump this far is a gap in reception, not motion: snap, don't glide.
+    const ADSB_GLIDE_MAX_M = 5000;
+    let _adsbFastBusy = false;
+    // hex → epoch ms of the newest fast-poll trail point already applied.
+    let _adsbTrailTailMs = {};
+    // Nothing older than this is appended: see loadAdsbTrails.
+    let _adsbTrailFloorMs = 0;
+    let _adsbGlideRaf = 0;
+
+    // How far this device's clock runs ahead of the server's, when it is off
+    // by more than two minutes (a wrong PC clock); otherwise 0. Taken off
+    // Date.now() so "seconds ago" isn't wrong by the clock's error.
+    let _adsbClockSkewMs = 0;
+
+    /** When each record's position was heard (the server's seenAt; for an
+     *  estimated one, its last real fix). Compared to keep the newer of two
+     *  copies, and counted from for "seconds ago". */
+    function _adsbStampFix(list, fetchedAt) {
+      const base = Date.parse(fetchedAt);
+      if (Number.isFinite(base)) {
+        const skew = Date.now() - base;
+        _adsbClockSkewMs = Math.abs(skew) >= 120000 ? skew : 0;
+      }
+      const at = Number.isFinite(base) ? base : Date.now() - _adsbClockSkewMs;
+      for (const a of list) {
+        const seen = Date.parse(a.seenAt);
+        a._fixMs = Number.isFinite(seen) ? seen : at - (Number(a.ageSec) || 0) * 1000;
+      }
+    }
+
+    /** Seconds since the position was heard, counting up between updates.
+     *  History replay shows the age as recorded. */
+    function _adsbHeardAgo(a) {
+      if (adsbHistoryMode || !Number.isFinite(a._fixMs)) return Math.round(a.estimatedSec || a.ageSec || 0);
+      return Math.max(0, Math.round((Date.now() - _adsbClockSkewMs - a._fixMs) / 1000));
+    }
+
+    // The detail card's "Position age" and "no signal for" count up every
+    // second; only their text changes, so the card (and its photo) isn't redrawn.
+    setInterval(() => {
+      if (document.hidden || !_adsbPinnedHex) return;
+      const el = document.getElementById('adsb-detail-card');
+      if (!el || !el.classList.contains('open')) return;
+      const a = _adsbGet(_adsbPinnedHex);
+      if (!a) return;
+      const ago = _adsbHeardAgo(a) + 's';
+      for (const n of el.querySelectorAll('[data-adsb-age],[data-adsb-est]')) n.textContent = ago;
+    }, 1000);
+
+    function _adsbGlideTo(hex, marker, lat, lon) {
+      const from = marker.getLatLng();
+      if (document.hidden || map.distance(from, [lat, lon]) > ADSB_GLIDE_MAX_M) {
+        _adsbGlides.delete(hex);
+        marker.setLatLng([lat, lon]);
+        return;
+      }
+      _adsbGlides.set(hex, { marker, from: [from.lat, from.lng], to: [lat, lon], t0: performance.now() });
+      if (!_adsbGlideRaf) _adsbGlideRaf = requestAnimationFrame(_adsbGlideStep);
+    }
+
+    function _adsbGlideStep(now) {
+      let pinnedLanded = false;
+      for (const [hex, g] of _adsbGlides) {
+        const k = Math.min(1, Math.max(0, (now - g.t0) / ADSB_GLIDE_MS));
+        g.marker.setLatLng([
+          g.from[0] + (g.to[0] - g.from[0]) * k,
+          g.from[1] + (g.to[1] - g.from[1]) * k,
+        ]);
+        if (k >= 1) {
+          _adsbGlides.delete(hex);
+          if (hex === _adsbPinnedHex) pinnedLanded = true;
+        }
+      }
+      if (_adsbGlides.size) {
+        _adsbGlideRaf = requestAnimationFrame(_adsbGlideStep);
+        return;
+      }
+      _adsbGlideRaf = 0;
+      // Trails are redrawn once the markers have arrived: each trail ends at
+      // its marker, and is trimmed back to it, so drawing mid-glide would
+      // cut off the points the aircraft is about to reach.
+      _rebuildAdsbTrails();
+      if (pinnedLanded && _adsbFollowActive) {
+        const followed = _adsbMarkers.get(_adsbPinnedHex);
+        if (followed) panToMarkerClearingUi(followed.marker, 0.8);
+      }
+    }
+
+    /** Fold a `recent` aircraft answer into the list and move the markers. */
+    function _adsbApplyRecent(data) {
+      const recs = Array.isArray(data && data.aircraft) ? data.aircraft : [];
+      if (!recs.length) return;
+      _adsbStampFix(recs, data.fetched_at);
+      const index = new Map(_adsbAircraft.map((x, i) => [x.hex, i]));
+      const moved = [];
+      let added = false;
+      for (const r of recs) {
+        const i = index.get(r.hex);
+        if (i === undefined) {
+          _adsbAircraft.push(r);
+          added = true;
+          continue;
+        }
+        if (!(r._fixMs > (_adsbAircraft[i]._fixMs || 0))) continue;
+        _adsbAircraft[i] = r;
+        if (_adsbIdx.arr === _adsbAircraft) _adsbIdx.map.set(r.hex, r);
+        moved.push(r);
+      }
+      for (const a of moved) {
+        const e = _adsbMarkers.get(a.hex);
+        if (!e) continue;
+        const key = _adsbIconKey(a);
+        if (e.iconKey !== key) {
+          e.marker.setIcon(buildAircraftIcon(a));
+          e.iconKey = key;
+        }
+        _adsbTooltipRefresh(e.marker);
+        _adsbGlideTo(a.hex, e.marker, a.lat, a.lon);
+      }
+      // A newly heard aircraft has no marker yet; the rebuild applies every
+      // filter and the render cap. After the glides are set, so it retargets
+      // them rather than snapping the markers.
+      // The filter panel is left alone: one more aircraft is not worth
+      // closing the dropdown someone has open.
+      if (added) _rebuildAdsb({ panel: false });
+      if (_adsbPinnedHex && moved.some((a) => a.hex === _adsbPinnedHex)) adsbRenderDetailCard();
+    }
+
+    /** Extend the held trails with a `recent` trails answer. Points carry
+     *  their time; a point already held (the full trails include the same
+     *  points, rounded the same way) is recognised by position. */
+    function _adsbApplyRecentTrails(trails) {
+      let changed = false;
+      for (const hex of Object.keys(trails || {})) {
+        const add = trails[hex];
+        if (!Array.isArray(add) || !add.length) continue;
+        const pts = _adsbTrails[hex] || (_adsbTrails[hex] = []);
+        const tail = Math.max(_adsbTrailTailMs[hex] || 0, _adsbTrailFloorMs);
+        const held = new Set(pts.slice(-40).map((q) => q[0] + ',' + q[1]));
+        let newest = tail;
+        for (const q of add) {
+          if (!(q[3] > tail)) continue;
+          if (q[3] > newest) newest = q[3];
+          const key = q[0] + ',' + q[1];
+          if (held.has(key)) continue;
+          held.add(key);
+          pts.push([q[0], q[1], q[2]]);
+          changed = true;
+        }
+        _adsbTrailTailMs[hex] = newest;
+      }
+      return changed;
+    }
+
+    // Consecutive fast polls that failed, and when the next one may go. A
+    // feed answering 429 or 5xx was being asked again every 3 s regardless.
+    let _adsbFastFails = 0;
+    let _adsbFastNextMs = 0;
+    /** Epoch ms of the last full aircraft answer that was applied. */
+    let _adsbLastOkMs = 0;
+
+    function _adsbFastOutcome(ok) {
+      if (ok) { _adsbFastFails = 0; _adsbFastNextMs = 0; return; }
+      _adsbFastFails = Math.min(_adsbFastFails + 1, 4);
+      // 6, 12, 24, 48 s.
+      _adsbFastNextMs = Date.now() + ADSB_FAST_MS * Math.pow(2, _adsbFastFails);
+    }
+
+    // Says so when the picture is old. Without it a feed that had stopped
+    // answering looked exactly like a quiet sky: the markers just sat there.
+    setInterval(() => {
+      const el = document.getElementById('adsb-stale-badge');
+      if (!el) return;
+      const live = !adsbHistoryMode && !document.hidden && map.hasLayer(adsbLayer) && adsbRefreshInterval;
+      const ageSec = _adsbLastOkMs ? Math.round((Date.now() - _adsbLastOkMs) / 1000) : 0;
+      const stale = live && ageSec > 45;
+      el.classList.toggle('on', !!stale);
+      if (stale) {
+        el.textContent = 'Aircraft positions are '
+          + (ageSec < 120 ? ageSec + ' s' : Math.round(ageSec / 60) + ' min') + ' old — retrying';
+      }
+    }, 5000);
+
+    async function adsbFastTick() {
+      if (adsbHistoryMode || document.hidden || !map.hasLayer(adsbLayer)) return;
+      if (_adsbFastBusy) return;   // a slow answer is not stacked on
+      if (Date.now() < _adsbFastNextMs) return;
+      _adsbFastBusy = true;
+      const gen = _adsbLiveGen;
+      try {
+        const wantTrails = adsbTrailsEnabled || !!_adsbPinnedHex;
+        const [ra, rt] = await Promise.all([
+          apiFetch(`${PROXY_BASE}/api/v1/adsb/aircraft?recent=${ADSB_RECENT_SEC}`),
+          wantTrails ? apiFetch(`${PROXY_BASE}/api/v1/adsb/trails?recent=${ADSB_RECENT_SEC}`) : null,
+        ]);
+        const trailData = (rt && rt.ok) ? ((await rt.json()).data || {}).trails : null;
+        const acData = (ra && ra.ok) ? (await ra.json()).data : null;
+        _adsbFastOutcome(!!(ra && ra.ok));
+        if (adsbHistoryMode || gen !== _adsbLiveGen) return;
+        let trailsChanged = false;
+        if (trailData) trailsChanged = _adsbApplyRecentTrails(trailData);
+        if (acData) _adsbApplyRecent(acData);
+        // Mid-glide, the glide's end redraws the trails.
+        if (trailsChanged && !_adsbGlides.size) _rebuildAdsbTrails();
+        // The pinned aircraft's own detail, on the same beat.
+        if (_adsbPinnedHex) adsbLoadPinDetail();
+      } catch (e) {
+        // Quiet: the 15 s refresh carries on regardless.
+        _adsbFastOutcome(false);
+      } finally {
+        _adsbFastBusy = false;
+      }
+    }
+
+    /** Epoch ms the last full aircraft fetch was started. */
+    let _adsbLastLoadMs = 0;
+    /** Bumped whenever live and history swap, so an answer requested before
+     *  the swap is dropped when it lands. */
+    let _adsbLiveGen = 0;
+
+    function _adsbLoadIfStale() {
+      if (adsbHistoryMode || document.hidden || !map.hasLayer(adsbLayer)) return;
+      if (Date.now() - _adsbLastLoadMs > 10000) loadAdsbData();
+    }
+    // The interval skips ticks while the tab is hidden; coming back must not
+    // show the old picture for up to 15 s.
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && adsbRefreshInterval) {
+        _adsbLastOkMs = Date.now(); // the badge counts from the return, not from before the tab was left
+        _adsbLoadIfStale();
+        loadAdsbTrails();
+      }
+    });
+
     function startAdsbRefresh() {
       if (adsbRefreshInterval) return;
       adsbRefreshInterval = setInterval(() => {
@@ -15500,10 +15908,20 @@ function initPagerHoursFromStorage() {
         _adsbTrailTickFlip = !_adsbTrailTickFlip;
         if (_adsbTrailTickFlip) loadAdsbTrails();
       }, 15000);
+      if (!adsbFastInterval) adsbFastInterval = setInterval(adsbFastTick, ADSB_FAST_MS);
+      // Starting again after the layer was off, the page idle or the tab
+      // away: what is held can be minutes old, and waiting out the first
+      // interval showed it as live. Fetch now.
+      _adsbLastOkMs = Date.now(); // the clock starts now, not when the layer was last on
+      _adsbLoadIfStale();
       loadAdsbTrails();
-      console.log('✈️ ADS-B refresh started (15s)');
+      console.log('✈️ ADS-B refresh started (15s, receiver-heard aircraft every 3s)');
     }
     function stopAdsbRefresh() {
+      if (adsbFastInterval) {
+        clearInterval(adsbFastInterval);
+        adsbFastInterval = null;
+      }
       if (adsbRefreshInterval) {
         clearInterval(adsbRefreshInterval);
         adsbRefreshInterval = null;
@@ -15732,6 +16150,10 @@ function initPagerHoursFromStorage() {
       _adsbPlaying = true;
       _adsbPlayTimer = setInterval(() => {
         if (!adsbHistoryMode) { adsbHistoryStopPlay(); adsbHistoryBarRender(); return; }
+        // Wait for the minute already asked for. Advancing regardless meant a
+        // minute slower than one tick was always overtaken and thrown away:
+        // the clock ran on while the map never changed.
+        if (_adsbHistLoading || _adsbHistDebounce || document.hidden) return;
         const newest = Date.now() - ADSB_HIST_LAG_MS;
         const next = (_adsbHistAtMs || newest) + _adsbPlaySpeed * 60_000;
         if (next >= newest) {
@@ -15943,6 +16365,14 @@ function initPagerHoursFromStorage() {
     function adsbHistoryStart() {
       adsbHistoryStopPlay();   // a stale timer from a previous visit
       adsbHistoryMode = true;
+      _adsbLiveGen++;          // drop any live answer still in flight
+      _adsbPinDetail = null;   // live detail does not describe the past
+      // Clear the live picture now: if the first history fetch is slow or
+      // fails, live aircraft must not sit under a clock showing the past.
+      _adsbAircraft = [];
+      _adsbTrails = {};
+      _adsbGlides.clear();
+      _rebuildAdsb();
       _adsbHistAtMs = Math.floor((Date.now() - ADSB_HIST_LAG_MS) / 60_000) * 60_000;
       _adsbHistCount = null;
       _adsbHistTruncated = false;
@@ -15959,9 +16389,15 @@ function initPagerHoursFromStorage() {
       adsbHistoryMode = false;
       _adsbHistAtMs = null;
       _adsbHistSeq++;              // abandon anything still in flight
+      _adsbLiveGen++;
       if (_adsbHistDebounce) { clearTimeout(_adsbHistDebounce); _adsbHistDebounce = null; }
       adsbHistoryBarRender();
+      // The past comes down at once. Left up, a failed or empty first live
+      // answer kept it on screen with the history bar already gone.
+      _adsbAircraft = [];
       _adsbTrails = {};
+      _rebuildAdsb();
+      if (_adsbPinnedHex) adsbRenderDetailCard();
       loadAdsbData();
       loadAdsbTrails();
       startAdsbRefresh();
@@ -16092,6 +16528,11 @@ function initPagerHoursFromStorage() {
       // Prefetch photos for what's on screen, so the detail card has one ready
       // before anyone clicks a row.
       if (map.hasLayer(adsbLayer)) adsbQueuePhotoPrefetch(matches.slice(0, 40));
+      // The count above is always current; the rows are only built when they
+      // can be seen. Opening the panel or expanding the section renders them.
+      const panel = document.getElementById('ais-list-panel');
+      const section = document.getElementById('adsb-list-section');
+      if ((panel && !panel.classList.contains('open')) || (section && section.classList.contains('collapsed'))) return;
       if (matches.length === 0) {
         body.innerHTML = '<div class="ais-list-empty">' +
           (q ? 'No matches for &ldquo;' + escapeHtml(q) + '&rdquo;' : 'No aircraft in current view.') +
@@ -16101,6 +16542,7 @@ function initPagerHoursFromStorage() {
 
       const head = '<div class="adsb-tbl-head"><span></span>' + ADSB_COLS.map((c) =>
         '<span class="adsb-th' + (c.num ? ' num' : '') + (key === c.key ? ' sorted' : '') + '"'
+        + ' role="button" tabindex="0" onkeydown="adsbKeyActivate(event)"'
         + ' onclick="adsbSortBy(\'' + c.key + '\')">' + c.label
         + (key === c.key ? (dir === 1 ? ' &#9650;' : ' &#9660;') : '') + '</span>').join('') + '</div>';
 
@@ -16111,6 +16553,7 @@ function initPagerHoursFromStorage() {
         const km = dist.get(a.hex);
         const altTxt = a.onGround ? 'GND' : (a.altFt != null ? a.altFt.toLocaleString() : '—');
         return '<div class="adsb-tbl-row' + (_adsbPinnedHex === a.hex ? ' selected' : '') + '"'
+          + ' role="button" tabindex="0" onkeydown="adsbKeyActivate(event)"'
           + ' onclick="adsbListClickRow(\'' + jsArg(a.hex) + '\', event)">'
           + '<span>' + adsbListGlyph(a) + '</span>'
           + '<span class="adsb-cell-id"><span class="adsb-flight' + (anon ? ' anon' : '') + '">'
@@ -16142,6 +16585,34 @@ function initPagerHoursFromStorage() {
     // card's job now, and having both meant one click opened three surfaces —
     // card, tooltip and row. The row just highlights.
 
+    // The airframe (maker, type, operator) and the callsign's usual route,
+    // from adsbdb via the backend (/api/adsb/info, site-only). Asked for the
+    // pinned aircraft only, once per address and callsign: a callsign change
+    // mid-session is a new flight and gets its own route.
+    const _adsbInfoCache = new Map();
+    function _adsbInfoKey(a) { return a.hex + '|' + (a.callsign || '').trim().toUpperCase(); }
+    async function adsbFetchInfo(a) {
+      const key = _adsbInfoKey(a);
+      if (_adsbInfoCache.has(key)) return;
+      _adsbInfoCache.set(key, '__loading__');
+      if (_adsbInfoCache.size > 300) _adsbInfoCache.delete(_adsbInfoCache.keys().next().value);
+      let info = { aircraft: null, route: null };
+      try {
+        const cs = (a.callsign || '').trim().toUpperCase();
+        const url = `${PROXY_BASE}/api/adsb/info/${encodeURIComponent(a.hex)}`
+          + (/^[A-Z0-9]{2,8}$/.test(cs) ? `?callsign=${encodeURIComponent(cs)}` : '');
+        const res = await apiFetch(url);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        info = { aircraft: data.aircraft || null, route: data.route || null };
+      } catch (e) {
+        // The card just shows what the feed has; not retried this session.
+        console.warn('[adsb] info fetch failed', e);
+      }
+      _adsbInfoCache.set(key, info);
+      if (_adsbPinnedHex === a.hex) adsbRenderDetailCard();
+    }
+
     async function adsbFetchPhoto(a) {
       const existing = _adsbPhotoCache.get(a.hex);
       if (existing !== undefined) return; // cached, loading, or known-none
@@ -16154,16 +16625,18 @@ function initPagerHoursFromStorage() {
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = (await res.json()).data;
         _adsbPhotoCache.set(a.hex, data.photo ? data.photo : '__none__');
+        _adsbPhotoFailed.delete(a.hex);
         saveAdsbPhotoCache();
         // Refresh the marker's tooltip now rather than waiting for the
         // next 15 s rebuild tick.
         const entry = _adsbMarkers.get(a.hex);
-        if (entry) entry.marker.setTooltipContent(buildAdsbTooltipHtml(a));
+        if (entry) _adsbTooltipRefresh(entry.marker);
         if (_adsbPinnedHex === a.hex) adsbRenderDetailCard();
       } catch (e) {
         console.warn('[adsb] photo fetch failed', e);
         // Not persisted — a transient failure shouldn't stick for 7 days.
         _adsbPhotoCache.set(a.hex, '__none__');
+        _adsbPhotoFailed.add(a.hex);
       }
       adsbListRender();
     }
@@ -16440,15 +16913,230 @@ function initPagerHoursFromStorage() {
       if (el) { el.classList.remove('open'); el.innerHTML = ''; }
     }
 
+    /**
+     * The callsign's usual route as a panel: each end's code, city and airport,
+     * then — when the aircraft is plausibly flying it — how far along it is.
+     *
+     * "Usual" is the point: adsbdb knows what the callsign normally flies, not
+     * this flight's plan. So progress is only shown when the aircraft sits near
+     * the line between the two airports; when it clearly doesn't, the panel says
+     * the route may not match rather than drawing a bar that means nothing.
+     */
+    function adsbRoutePanel(a, rt) {
+      const code = (p) => p.iata || p.icao || '?';
+      const city = (p) => p.municipality || p.name || '';
+      const end = (p, cls) => '<div class="adsb-dc-ap ' + cls + '">'
+        + '<div class="adsb-dc-ap-code">' + escapeHtml(code(p)) + '</div>'
+        + '<div class="adsb-dc-ap-city">' + escapeHtml(city(p)) + '</div>'
+        + (p.name && p.name !== city(p)
+          ? '<div class="adsb-dc-ap-name" title="' + escapeHtml(p.name + (p.icao ? ' (' + p.icao + ')' : '')) + '">' + escapeHtml(p.name) + '</div>'
+          : '')
+        + '</div>';
+      const mid = rt.midpoint
+        ? '<div class="adsb-dc-route-mid" title="' + escapeHtml(rt.midpoint.name || '') + '">via ' + escapeHtml(code(rt.midpoint)) + '</div>'
+        : '<div class="adsb-dc-route-mid"><i class="fa-solid fa-plane"></i></div>';
+
+      // Progress along the leg the aircraft is on (with a stop, whichever half
+      // it is nearer to lying on).
+      let progress = '';
+      const has = (p) => p && Number.isFinite(p.lat) && Number.isFinite(p.lon);
+      const legs = rt.midpoint && has(rt.midpoint)
+        ? [[rt.origin, rt.midpoint], [rt.midpoint, rt.destination]]
+        : [[rt.origin, rt.destination]];
+      let best = null;
+      for (const [from, to] of legs) {
+        if (!has(from) || !has(to)) continue;
+        const total = haversineMeters(from.lat, from.lon, to.lat, to.lon);
+        const done = haversineMeters(from.lat, from.lon, a.lat, a.lon);
+        const left = haversineMeters(a.lat, a.lon, to.lat, to.lon);
+        // How far out of the way the aircraft is: 0 on the straight line.
+        const detour = done + left - total;
+        if (!best || detour < best.detour) best = { from, to, total, done, left, detour };
+      }
+      if (best && best.total > 0) {
+        // On the route if the detour is small for the leg's length.
+        const onRoute = best.detour <= Math.max(60_000, best.total * 0.15);
+        if (onRoute && !a.onGround) {
+          const frac = Math.max(0, Math.min(1, best.done / (best.done + best.left)));
+          const km = (m) => Math.round(m / 1000).toLocaleString() + ' km';
+          let eta = '';
+          if (a.gsKt != null && a.gsKt > 60) {
+            const mins = Math.round(best.left / (a.gsKt * 1852) * 60);
+            eta = mins >= 60 ? Math.floor(mins / 60) + ' h ' + (mins % 60) + ' min' : mins + ' min';
+          }
+          progress = '<div class="adsb-dc-route-bar">'
+            + '<div class="adsb-dc-route-fill" style="width:' + (frac * 100).toFixed(1) + '%;"></div>'
+            + '<i class="fa-solid fa-plane adsb-dc-route-plane" style="left:' + (frac * 100).toFixed(1) + '%;"></i>'
+            + '</div>'
+            + '<div class="adsb-dc-route-meta">'
+            + '<span>' + km(best.done) + ' flown</span>'
+            + '<span>' + km(best.left) + ' to ' + escapeHtml(code(best.to)) + (eta ? ' · ~' + eta : '') + '</span>'
+            + '</div>';
+        } else if (!onRoute) {
+          progress = '<div class="adsb-dc-route-warn"><i class="fa-solid fa-triangle-exclamation"></i> '
+            + 'This aircraft is well off that route, so this flight may not be flying it today.</div>';
+        }
+      }
+
+      return '<div class="adsb-dc-route">'
+        + '<div class="adsb-dc-route-k"><span>Usual route</span>'
+        + (rt.airline ? '<span>' + escapeHtml(rt.airline) + '</span>' : '<span></span>') + '</div>'
+        + '<div class="adsb-dc-route-ends">' + end(rt.origin, 'from') + mid + end(rt.destination, 'to') + '</div>'
+        + progress
+        + '</div>';
+    }
+
+    // ---------- Detail: what the aircraft reports beyond its position ----------
+    // The list carries three detail fields; the rest are fetched for the one
+    // aircraft that is pinned (?hex=) and refreshed with the fast poll.
+    let _adsbPinDetail = null;      // { hex, rec } for the pinned aircraft
+    let _adsbPinDetailBusy = false;
+    let _adsbCardMoreOpen = false;  // the card is rebuilt every few seconds
+    let _adsbPendingPinHex = null;  // a ?icao= link waiting for the first load
+
+    async function adsbLoadPinDetail() {
+      const hex = _adsbPinnedHex;
+      if (!hex || adsbHistoryMode || _adsbPinDetailBusy) return;
+      _adsbPinDetailBusy = true;
+      const gen = _adsbLiveGen;
+      try {
+        const res = await apiFetch(`${PROXY_BASE}/api/v1/adsb/aircraft?hex=${encodeURIComponent(hex)}`);
+        if (!res.ok) return;
+        const data = (await res.json()).data;
+        if (adsbHistoryMode || gen !== _adsbLiveGen || _adsbPinnedHex !== hex) return;
+        const rec = Array.isArray(data.aircraft) ? data.aircraft[0] : null;
+        _adsbPinDetail = { hex, rec: rec || null };
+        adsbRenderDetailCard();
+      } catch (e) {
+        // The card keeps what it had.
+      } finally {
+        _adsbPinDetailBusy = false;
+      }
+    }
+
+    const ADSB_SQUAWK_MEANING = {
+      '7500': 'unlawful interference', '7600': 'radio failure', '7700': 'general emergency',
+    };
+    const ADSB_EMERGENCY_TEXT = {
+      general: 'General emergency', lifeguard: 'Medical (lifeguard)', minfuel: 'Minimum fuel',
+      nordo: 'No radio', unlawful: 'Unlawful interference', downed: 'Downed aircraft',
+    };
+    const ADSB_CATEGORY_TEXT = {
+      A1: 'Light (under 7 t)', A2: 'Small (7 to 34 t)', A3: 'Large (34 to 136 t)',
+      A4: 'Large, high vortex', A5: 'Heavy (over 136 t)', A6: 'High performance',
+      A7: 'Rotorcraft', B1: 'Glider', B2: 'Lighter than air', B3: 'Parachutist',
+      B4: 'Ultralight', B6: 'Drone', B7: 'Space vehicle',
+      C1: 'Emergency surface vehicle', C2: 'Service surface vehicle', C3: 'Fixed obstacle',
+    };
+    const ADSB_POS_SOURCE_TEXT = {
+      adsb: 'ADS-B (own GPS)', mlat: 'MLAT · approximate', tisb: 'TIS-B · ground radar',
+      adsr: 'ADS-R · rebroadcast', adsc: 'ADS-C · satellite', modes: 'Mode S', other: 'Other',
+    };
+    // Position accuracy category -> the bound it promises.
+    const ADSB_NACP_TEXT = [null, '18.5 km', '7.4 km', '3.7 km', '1.9 km', '926 m', '556 m',
+      '185 m', '93 m', '30 m', '10 m', '3 m'];
+
+    /** Climbing, descending or level, from the rate the aircraft reports. Null
+     *  when it reports none (then the trail's last two altitudes are used). */
+    function adsbVertRate(d) {
+      const r = Number.isFinite(d.baroRateFpm) ? d.baroRateFpm
+        : (Number.isFinite(d.geomRateFpm) ? d.geomRateFpm : null);
+      if (r === null) return null;
+      if (Math.abs(r) < 100) return { arrow: '→', label: 'level', color: '#94a3b8', text: '' };
+      const text = Math.round(Math.abs(r)).toLocaleString() + ' ft/min';
+      return r > 0
+        ? { arrow: '▲', label: 'climbing', color: '#4ade80', text }
+        : { arrow: '▼', label: 'descending', color: '#fbbf24', text };
+    }
+
+    /** The "More detail" rows: only what this aircraft actually reported. */
+    function adsbMoreRowsHtml(a, d, row) {
+      const n = (v) => Math.round(v).toLocaleString();
+      const deg = (v) => Math.round(v) + '°';
+      const fin = Number.isFinite;
+      let h = '';
+      if (fin(d.altGeomFt)) h += row('GPS altitude', n(d.altGeomFt) + ' ft');
+      const spd = [];
+      if (fin(d.iasKt)) spd.push('IAS ' + n(d.iasKt) + ' kt');
+      if (fin(d.tasKt)) spd.push('TAS ' + n(d.tasKt) + ' kt');
+      if (fin(d.mach)) spd.push('M ' + d.mach.toFixed(2));
+      if (spd.length) h += row('Airspeed', spd.join(' · '));
+      if (fin(d.trueHeadingDeg)) h += row('Heading', deg(d.trueHeadingDeg) + ' true');
+      else if (fin(d.magHeadingDeg)) h += row('Heading', deg(d.magHeadingDeg) + ' magnetic');
+      if (fin(d.rollDeg) && Math.abs(d.rollDeg) >= 1) {
+        h += row('Bank', Math.round(Math.abs(d.rollDeg)) + '° ' + (d.rollDeg < 0 ? 'left' : 'right'));
+      }
+      const sel = [];
+      if (fin(d.navAltFt)) sel.push(n(d.navAltFt) + ' ft');
+      if (fin(d.navHeadingDeg)) sel.push('HDG ' + deg(d.navHeadingDeg));
+      if (fin(d.navQnhHpa)) sel.push('QNH ' + d.navQnhHpa.toFixed(1));
+      if (sel.length) h += row('Selected', sel.join(' · '));
+      if (Array.isArray(d.navModes) && d.navModes.length) {
+        h += row('Autopilot', d.navModes.map((m) => escapeHtml(String(m))).join(', '));
+      }
+      if (fin(d.windDirDeg) && fin(d.windKt)) h += row('Wind', deg(d.windDirDeg) + ' at ' + n(d.windKt) + ' kt');
+      if (fin(d.oatC)) h += row('Outside temp', Math.round(d.oatC) + ' °C');
+      if (d.posSource) h += row('Position from', ADSB_POS_SOURCE_TEXT[d.posSource] || escapeHtml(String(d.posSource)));
+      if (fin(d.nacp) && ADSB_NACP_TEXT[d.nacp]) h += row('Accuracy', 'within ' + ADSB_NACP_TEXT[d.nacp]);
+      else if (fin(d.rcM) && d.rcM > 0) h += row('Accuracy', 'within ' + n(d.rcM) + ' m');
+      const integ = [];
+      if (fin(d.nic)) integ.push('NIC ' + d.nic);
+      if (fin(d.sil)) integ.push('SIL ' + d.sil);
+      if (fin(d.adsbVersion)) integ.push('v' + d.adsbVersion);
+      if (integ.length) h += row('Integrity', integ.join(' · '));
+      if (fin(d.rssiDb)) h += row('Signal', d.rssiDb.toFixed(1) + ' dBFS');
+      if (fin(d.messages)) h += row('Messages', n(d.messages));
+      if (a.category) h += row('Category', ADSB_CATEGORY_TEXT[a.category] || escapeHtml(a.category));
+      if (Array.isArray(d.flags) && d.flags.length) {
+        const names = { military: 'Military', interesting: 'Of interest', pia: 'Privacy address (PIA)', ladd: 'Limited display (LADD)' };
+        h += row('Flags', d.flags.map((f) => names[f] || escapeHtml(String(f))).join(', '));
+      }
+      if (Array.isArray(a.sources) && a.sources.length) {
+        h += row('Heard by', a.sources.map((x) => escapeHtml(String(x))).join(', '));
+      }
+      return h;
+    }
+
+    window.adsbCardMoreToggled = function (open) { _adsbCardMoreOpen = !!open; };
+
+    /** Copy a link that opens the map on this aircraft. */
+    window.adsbCopyPinnedLink = function () {
+      if (!_adsbPinnedHex) return;
+      const url = location.origin + location.pathname + '?icao=' + encodeURIComponent(_adsbPinnedHex);
+      try {
+        navigator.clipboard.writeText(url);
+        showToast('Link copied', 'success');
+      } catch (e) {
+        showToast('Could not copy', 'error');
+      }
+    };
+
     function adsbRenderDetailCard() {
       const el = document.getElementById('adsb-detail-card');
       if (!el) return;
+      // The card is redrawn whole every few seconds. Two things must survive
+      // that: text the viewer is selecting (so the redraw waits), and which
+      // button has the keyboard focus (put back afterwards).
+      const shownHex = el.dataset.hex || '';
+      try {
+        const sel = window.getSelection();
+        if (sel && !sel.isCollapsed && sel.anchorNode && el.contains(sel.anchorNode)
+            && shownHex && shownHex === (_adsbPinnedHex || '')) return;
+      } catch (e) { /* no selection API: just redraw */ }
+      const focused = el.contains(document.activeElement) ? document.activeElement.getAttribute('data-act') : null;
+      if (focused) {
+        setTimeout(() => {
+          const again = el.querySelector('[data-act="' + focused + '"]');
+          if (again && !el.contains(document.activeElement)) again.focus({ preventScroll: true });
+        }, 0);
+      }
+      el.dataset.hex = _adsbPinnedHex || '';
       // An airport or navaid is the other thing this card can be showing.
       // One card, because a chart feature and an aircraft answer the same
       // question — "what is this" — and two cards would stack on one click.
       if (!_adsbPinnedHex && _aeroPinned) { aeroRenderDetailCard(el); return; }
       if (!_adsbPinnedHex) { adsbHideDetailCard(); return; }
-      const a = _adsbAircraft.find((x) => x.hex === _adsbPinnedHex);
+      const a = _adsbGet(_adsbPinnedHex);
       // Pinned but gone from the feed: keep the card up and say so rather than
       // silently vanishing, which reads as a misclick.
       if (!a) {
@@ -16464,6 +17152,12 @@ function initPagerHoursFromStorage() {
       const color = es ? es.color : adsbAltColor(a.altFt);
       const name = a.callsign || a.reg || a.hex.toUpperCase();
       const sqBad = a.squawk && ['7500', '7600', '7700'].indexOf(a.squawk) !== -1;
+      // The detail record for this aircraft, if it has arrived; the list
+      // record otherwise (it has the vertical rate, source and emergency).
+      // An estimated position gets neither: its last rates and settings are
+      // from before it went quiet and would be shown as if current.
+      const pinned = (_adsbPinDetail && _adsbPinDetail.hex === a.hex && _adsbPinDetail.rec) || a;
+      const d = a.estimated ? {} : pinned;
 
       const row = (k, v, cls) => (v == null || v === '' )
         ? ''
@@ -16479,19 +17173,24 @@ function initPagerHoursFromStorage() {
         distTxt = (m >= 10000 ? Math.round(m / 1000) : (m / 1000).toFixed(1)) + ' km';
       } catch (e) { /* a degenerate centre is not worth failing the card for */ }
 
-      const trend = adsbAltTrend(a.hex);
+      // The rate the aircraft itself reports, when it does. Two trail points
+      // are the fallback, and a poor one: a second apart they almost never
+      // differ by enough to register.
+      const trend = adsbVertRate(d) || adsbAltTrend(a.hex);
       const altTxt = a.onGround
         ? 'On ground'
         : (a.altFt != null
           ? a.altFt.toLocaleString() + ' ft'
-            + (trend ? ' <span style="color:' + trend.color + ';" title="' + trend.label + '">' + trend.arrow + '</span>' : '')
+            + (trend ? ' <span style="color:' + trend.color + ';" title="' + trend.label + '">' + trend.arrow
+              + (trend.text ? ' ' + trend.text : '') + '</span>' : '')
           : null);
 
       const cached = _adsbPhotoCache.get(a.hex);
       const photoHtml = (cached && cached !== '__loading__' && cached !== '__none__')
         ? '<img class="adsb-dc-photo" src="' + escapeHtml(cached.src) + '" alt="" referrerpolicy="no-referrer" onerror="this.style.display=\'none\';">'
           + '<div class="adsb-dc-credit">Photo © ' + escapeHtml(cached.photographer || 'unknown')
-          + (cached.link ? ' · <a href="' + escapeHtml(cached.link) + '" target="_blank" rel="noopener" style="color:#7dd3fc;">Planespotters.net</a>' : '')
+          + (cached.link ? ' · <a href="' + escapeHtml(cached.link) + '" target="_blank" rel="noopener" style="color:#7dd3fc;">'
+            + (cached.source === 'airport-data' ? 'airport-data.com' : 'Planespotters.net') + '</a>' : '')
           + '</div>'
         : '';
 
@@ -16500,8 +17199,27 @@ function initPagerHoursFromStorage() {
       // from the last real fix.
       const estHtml = a.estimated
         ? '<div class="adsb-dc-est"><i class="fa-solid fa-triangle-exclamation"></i> '
-          + 'Estimated position — no signal for ' + Math.round(a.estimatedSec || a.ageSec) + 's. '
+          + 'Estimated position — no signal for <span data-adsb-est>'
+          + _adsbHeardAgo(a) + 's</span>. '
           + 'Projected along its last known heading and speed.</div>'
+        : '';
+
+      // Airframe and usual route (adsbdb), fetched once on first render.
+      const infoRaw = _adsbInfoCache.get(_adsbInfoKey(a));
+      if (infoRaw === undefined) adsbFetchInfo(a);
+      const info = (infoRaw && infoRaw !== '__loading__') ? infoRaw : null;
+      const af = info && info.aircraft;
+      const rt = info && info.route;
+      // adsbdb's airframe first; the aggregator's own database as the fallback.
+      const afTxt = (af ? [af.manufacturer, af.type].filter(Boolean).join(' ') : '')
+        || (pinned.desc ? String(pinned.desc) + (pinned.year ? ' (' + pinned.year + ')' : '') : '');
+      const operatorTxt = (af && af.owner) || pinned.operator || '';
+      const emergencyKind = (d.emergency || a.emergency || '');
+      const moreRows = adsbMoreRowsHtml(a, d, row);
+      const routeHtml = rt ? adsbRoutePanel(a, rt) : '';
+      const infoCredit = (afTxt || (af && af.owner) || rt)
+        ? '<div class="adsb-dc-credit">Aircraft &amp; route details: <a href="https://www.adsbdb.com/" target="_blank" rel="noopener" style="color:#7dd3fc;">adsbdb.com</a>'
+          + (rt ? ' · route is the callsign\'s usual one, not a flight plan' : '') + '</div>'
         : '';
 
       const summary = adsbTrackSummary(a.hex);
@@ -16521,25 +17239,41 @@ function initPagerHoursFromStorage() {
         + '</div>'
         + estHtml
         + photoHtml
+        + routeHtml
         + '<div class="adsb-dc-rows">'
         +   row('Registration', a.reg ? escapeHtml(a.reg) : null)
         +   row('Type', a.type ? escapeHtml(a.type) : null)
+        +   row('Aircraft', afTxt ? escapeHtml(afTxt) : null)
+        +   row('Operator', operatorTxt ? escapeHtml(String(operatorTxt)) : null)
         +   row('Altitude', altTxt)
         +   row('Speed', a.gsKt != null ? Math.round(a.gsKt) + ' kt' : null)
         +   row('Track', Number.isFinite(a.trackDeg) ? Math.round(a.trackDeg) + '°' : null)
         +   row('Squawk', a.squawk
-              ? '<span style="color:' + (sqBad ? '#f87171' : '#e2e8f0') + ';">' + escapeHtml(a.squawk) + (sqBad ? ' — EMERGENCY' : '') + '</span>'
+              ? '<span style="color:' + (sqBad ? '#f87171' : '#e2e8f0') + ';">' + escapeHtml(a.squawk)
+                + (sqBad ? ' — ' + ADSB_SQUAWK_MEANING[a.squawk] : '') + '</span>'
               : null)
-        +   row('Distance', distTxt)
-        +   row('Position age', Math.round(a.ageSec) + 's')
+        +   row('Emergency', emergencyKind
+              ? '<span style="color:#f87171;">' + (ADSB_EMERGENCY_TEXT[emergencyKind] || escapeHtml(String(emergencyKind))) + '</span>'
+              : null)
+        // From the middle of the map, which while following IS the aircraft:
+        // "0.0 km" there told nobody anything.
+        +   row('Distance', _adsbFollowActive ? null : distTxt)
+        +   row('Position age', '<span data-adsb-age>' + _adsbHeardAgo(a) + 's</span>')
         +   row('ICAO', escapeHtml(a.hex.toUpperCase()), 'mono')
         + '</div>'
+        + (moreRows
+          ? '<details class="adsb-dc-more"' + (_adsbCardMoreOpen ? ' open' : '')
+            + ' ontoggle="adsbCardMoreToggled(this.open)"><summary>More detail</summary>'
+            + '<div class="adsb-dc-rows">' + moreRows + '</div></details>'
+          : '')
+        + infoCredit
         + noteHtml
         + '<div class="adsb-dc-acts">'
-        +   '<button class="adsb-dc-btn' + (_adsbFollowActive ? ' on' : '') + '" onclick="adsbToggleFollow()">'
+        +   '<button class="adsb-dc-btn' + (_adsbFollowActive ? ' on' : '') + '" data-act="follow" onclick="adsbToggleFollow()">'
         +     '<i class="fa-solid fa-crosshairs"></i> ' + (_adsbFollowActive ? 'Following' : 'Follow') + '</button>'
-        +   '<button class="adsb-dc-btn" onclick="adsbCentreOnPinned()"><i class="fa-solid fa-location-crosshairs"></i> Centre</button>'
-        +   '<button class="adsb-dc-btn" onclick="adsbCopyPinnedHex()"><i class="fa-solid fa-copy"></i> Copy</button>'
+        +   '<button class="adsb-dc-btn" data-act="centre" onclick="adsbCentreOnPinned()"><i class="fa-solid fa-location-crosshairs"></i> Centre</button>'
+        +   '<button class="adsb-dc-btn" data-act="copy" onclick="adsbCopyPinnedHex()"><i class="fa-solid fa-copy"></i> Copy</button>'
+        +   '<button class="adsb-dc-btn" data-act="link" onclick="adsbCopyPinnedLink()" title="Copy a link to this aircraft"><i class="fa-solid fa-link"></i> Link</button>'
         + '</div>';
     }
 
@@ -16558,7 +17292,7 @@ function initPagerHoursFromStorage() {
     };
 
     window.adsbCopyPinnedHex = function () {
-      const a = _adsbAircraft.find((x) => x.hex === _adsbPinnedHex);
+      const a = _adsbGet(_adsbPinnedHex);
       const txt = a ? (a.callsign || a.reg || a.hex).toUpperCase() : (_adsbPinnedHex || '').toUpperCase();
       if (!txt) return;
       try {
@@ -16576,6 +17310,7 @@ function initPagerHoursFromStorage() {
       const entry = _adsbMarkers.get(_adsbPinnedHex);
       if (entry) entry.marker.closeTooltip();
       _adsbPinnedHex = null;
+      _adsbPinDetail = null;
       _adsbFollowActive = false;
       adsbHideDetailCard();
       _rebuildAdsbTrails();
@@ -16609,9 +17344,11 @@ function initPagerHoursFromStorage() {
         const target = row.offsetTop - (body.clientHeight - row.offsetHeight) / 2;
         body.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
       }
+      _adsbPinDetail = null;
       adsbRenderDetailCard();
+      adsbLoadPinDetail();
       // Lazy-load the Planespotters photo for the pinned row.
-      const a = _adsbAircraft.find((x) => x.hex === hex);
+      const a = _adsbGet(hex);
       if (a) adsbFetchPhoto(a);
     }
 
@@ -17149,7 +17886,10 @@ function initPagerHoursFromStorage() {
     async function _aeroBuild(kind, data) {
       const src = kind === 'airspace' ? _aeroAsLines(data) : data;
       const features = src.features || [];
-      const group = L.geoJSON(null, _aeroOptions(kind));
+      // openAIP's data is CC BY-NC 4.0: credited while any of the three is on.
+      const group = L.geoJSON(null, Object.assign({
+        attribution: 'Airspace, airports and navaids: <a href="https://www.openaip.net/" target="_blank" rel="noopener">openAIP</a>, <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a>',
+      }, _aeroOptions(kind)));
       for (let i = 0; i < features.length; i += AERO_CHUNK) {
         group.addData({
           type: 'FeatureCollection',
@@ -17224,17 +17964,14 @@ function initPagerHoursFromStorage() {
 
     // Ground-target visibility depends on zoom; re-diff when the zoom
     // crosses the threshold while the layer is on.
+    // One pass per pan or zoom, markers and trails only. A zoom also ends in
+    // a moveend, so the old separate zoomend rebuild (for the ground-traffic
+    // threshold, which _rebuildAdsb reads fresh anyway) was a second full
+    // pass; the list has its own debounced moveend handler; and the filter
+    // panel does not depend on the view. Follow mode pans every few seconds,
+    // so this is the path that runs most.
     registerViewportCuller(() => {
-      if (map.hasLayer(adsbLayer)) _rebuildAdsb();
-    });
-    let _adsbLastShowGround = null;
-    map.on('zoomend', () => {
-      if (!map.hasLayer(adsbLayer)) return;
-      const showGround = map.getZoom() >= ADSB_GROUND_MIN_ZOOM;
-      if (showGround !== _adsbLastShowGround) {
-        _adsbLastShowGround = showGround;
-        _rebuildAdsb();
-      }
+      if (map.hasLayer(adsbLayer)) _rebuildAdsb({ list: false, panel: false });
     });
 
     // ==================== PUBLIC TRANSPORT LAYER ====================
@@ -21052,14 +21789,12 @@ function initPagerHoursFromStorage() {
           { key: 'beachsafe', url: '/api/v1/beachsafe', unwrap: true },
           { key: 'dorsal_reports', url: '/api/v1/dorsal/reports?hours=168' },
           { key: 'weather_current', url: '/api/v1/weather/current' },
-          { key: 'endeavour_current', url: '/api/endeavour/current' },
-          { key: 'endeavour_maintenance', url: '/api/endeavour/maintenance' },
-          { key: 'endeavour_future', url: '/api/endeavour/future' },
+          { key: 'outages', url: '/api/v1/outages' },
         ];
         totalLoaded += await fetchBatch(stage3, 'Stage 3');
         
         const elapsed = Date.now() - startTime;
-        console.log(`✅ Prefetch complete: ${totalLoaded}/14 layers in ${elapsed}ms`);
+        console.log(`✅ Prefetch complete: ${totalLoaded}/12 layers in ${elapsed}ms`);
       } catch (e) {
         console.log('⚠️ Prefetch partial:', e.message);
       }
@@ -21849,6 +22584,15 @@ function initPagerHoursFromStorage() {
       
       // Handle URL deep-linking after everything is initialized
       handleUrlParams();
+      // ?icao=7c6b2d opens the aircraft layer on that aircraft.
+      try {
+        const icao = (new URLSearchParams(window.location.search).get('icao') || '').trim().toLowerCase();
+        if (/^~?[0-9a-f]{4,8}$/.test(icao)) {
+          _adsbPendingPinHex = icao;
+          if (!map.hasLayer(adsbLayer)) toggleMapLayer('adsb');
+          else loadAdsbData();
+        }
+      } catch (e) { /* a malformed query is not worth failing init for */ }
       
       // Prefetch layer data in background for faster layer toggle
       prefetchLayerData();

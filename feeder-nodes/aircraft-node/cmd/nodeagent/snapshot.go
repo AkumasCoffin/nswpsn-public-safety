@@ -22,12 +22,14 @@ import (
 const (
 	// snapshotInterval is how often the receiver reports.
 	//
-	// Three times fresher than the public aggregators' ~15s effective cadence,
-	// which is much of the point of running our own hardware. Well inside the
-	// queue's 90s age bound, so a network blip of ~18 snapshots still drains
-	// rather than expiring. And 12 uploads/min, comfortably under the server's
-	// 20/min limiter.
-	snapshotInterval = 5 * time.Second
+	// Several times fresher than the public aggregators' ~15-20s effective
+	// cadence, which is much of the point of running our own hardware: the map
+	// polls the aircraft we hear every few seconds and moves them, so this is
+	// what sets how far behind the real aircraft a marker sits. Well inside the
+	// queue's 90s age bound, so a network blip of ~45 snapshots still drains
+	// rather than expiring. And 30 uploads/min, under the server's 45/min
+	// limiter. The same data in total as at 5s, in smaller pieces.
+	snapshotInterval = 2 * time.Second
 
 	// sampleInterval is how often aircraft.json is READ, as against how often a
 	// snapshot is sent.
@@ -45,17 +47,17 @@ const (
 	// older than this, so shipping them would be pure waste.
 	maxPositionAge = 60.0
 
-	// maxTrailPerAircraft bounds the carried positions per upload. Five reads
+	// maxTrailPerAircraft bounds the carried positions per upload. Two reads
 	// fit in an interval; the slack absorbs a slow read without letting a
 	// stalled uploader accumulate without bound.
 	maxTrailPerAircraft = 16
 
 	// maxTrailPointsTotal bounds the carried positions across the WHOLE
-	// snapshot, which is what the server's 256 KB body cap actually sees.
+	// snapshot, which is what the server's body cap (512 KB) actually sees.
 	//
-	// At the 500-aircraft schema limit, six positions each would put the
-	// payload within sight of that cap, and a snapshot refused with 413 is a
-	// snapshot lost. Positions are also worth least exactly when there are most
+	// At the 500-aircraft schema limit the aircraft themselves are about
+	// 275 KB with every detail field present, and a snapshot refused with 413
+	// is a snapshot lost. Positions are also worth least exactly when there are most
 	// of them: a map showing five hundred aircraft is not short of detail. So
 	// the busiest sites shed this first and keep sending every position.
 	maxTrailPointsTotal = 2000
@@ -81,6 +83,32 @@ type snapshotAircraft struct {
 	Emerg    string   `json:"emergency,omitempty"`
 	Category string   `json:"category,omitempty"`
 	SeenPos  float64  `json:"seen_pos"`
+
+	// Detail, from 0.1.17: what the aircraft reports beyond its position.
+	// Omitted when the decoder has no value, which is most of them for most
+	// aircraft. Live only on the backend; none of it is stored.
+	AltGeom     *float64 `json:"alt_geom,omitempty"`
+	BaroRate    *float64 `json:"baro_rate,omitempty"`
+	GeomRate    *float64 `json:"geom_rate,omitempty"`
+	IAS         *float64 `json:"ias,omitempty"`
+	TAS         *float64 `json:"tas,omitempty"`
+	Mach        *float64 `json:"mach,omitempty"`
+	TrueHeading *float64 `json:"true_heading,omitempty"`
+	MagHeading  *float64 `json:"mag_heading,omitempty"`
+	Roll        *float64 `json:"roll,omitempty"`
+	NavAltMCP   *float64 `json:"nav_altitude_mcp,omitempty"`
+	NavAltFMS   *float64 `json:"nav_altitude_fms,omitempty"`
+	NavHeading  *float64 `json:"nav_heading,omitempty"`
+	NavQNH      *float64 `json:"nav_qnh,omitempty"`
+	NavModes    []string `json:"nav_modes,omitempty"`
+	Type        string   `json:"type,omitempty"`
+	NIC         *float64 `json:"nic,omitempty"`
+	NACp        *float64 `json:"nac_p,omitempty"`
+	SIL         *float64 `json:"sil,omitempty"`
+	RC          *float64 `json:"rc,omitempty"`
+	Version     *float64 `json:"version,omitempty"`
+	RSSI        *float64 `json:"rssi,omitempty"`
+	Messages    int      `json:"messages,omitempty"`
 
 	// Positions seen since the last upload, oldest first, as
 	// [secondsBeforeAt, lat, lon, altFt]. Relative to the snapshot's own `at`
@@ -136,8 +164,43 @@ func newPositionTrail() *positionTrail {
 	return &positionTrail{byHex: make(map[string][]trailPoint)}
 }
 
+// decoderNowMs is the instant the decoder wrote this file, in epoch ms.
+//
+// seen_pos counts back from THAT instant, not from whenever the agent got
+// round to reading the file. Counting back from the read put every fix late
+// by however long the file had been sitting (up to a second), and put the
+// same fix at two different times when two reads saw one file, so a parked
+// aircraft grew a trail of duplicates a few hundred milliseconds apart.
+//
+// The decoder shares this host's clock, so the two agree to within the file's
+// age. A `now` that is missing, ahead of us, or far behind is not believed
+// and the read time is used as before.
+func decoderNowMs(air *decoderjson.AircraftFile, readAt time.Time) int64 {
+	readMs := readAt.UnixMilli()
+	if air.Now <= 0 {
+		return readMs
+	}
+	fileMs := int64(air.Now * 1000)
+	if lag := readMs - fileMs; lag < 0 || lag > 15_000 {
+		return readMs
+	}
+	return fileMs
+}
+
+// ageToSnapshot re-bases each seen_pos from the decoder's write to the
+// snapshot's own `at`, which is what the backend measures it against.
+func ageToSnapshot(list []snapshotAircraft, lagMs int64) {
+	if lagMs <= 0 {
+		return
+	}
+	lag := float64(lagMs) / 1000
+	for i := range list {
+		list[i].SeenPos += lag
+	}
+}
+
 func (t *positionTrail) observe(air *decoderjson.AircraftFile, now time.Time) {
-	nowMs := now.UnixMilli()
+	nowMs := decoderNowMs(air, now)
 	for i := range air.Aircraft {
 		a := &air.Aircraft[i]
 		if !a.HasPosition() || a.SeenPos == nil || *a.SeenPos > maxPositionAge {
@@ -171,7 +234,7 @@ func (t *positionTrail) take() map[string][]trailPoint {
 
 // runSnapshotLoop polls the decoder's JSON output until ctx is cancelled.
 func runSnapshotLoop(ctx context.Context, m *aircraftManager, q *queue.Queue) {
-	// Two rates from one ticker: read every second, send every fifth read. The
+	// Two rates from one ticker: read every second, send every second read. The
 	// reads are what give a track its shape; the sends are what cost requests.
 	t := time.NewTicker(sampleInterval)
 	defer t.Stop()
@@ -183,8 +246,8 @@ func runSnapshotLoop(ctx context.Context, m *aircraftManager, q *queue.Queue) {
 	trail := newPositionTrail()
 
 	// warnedNotReady / warnedStale keep the "nothing written yet" and "nothing
-	// written lately" messages to one line per outage instead of one every 5
-	// seconds.
+	// written lately" messages to one line per outage instead of one every
+	// upload.
 	warnedNotReady := false
 	warnedStale := false
 
@@ -256,9 +319,12 @@ func runSnapshotLoop(ctx context.Context, m *aircraftManager, q *queue.Queue) {
 
 		now := time.Now()
 		list := buildAircraft(air)
+		ageToSnapshot(list, now.UnixMilli()-decoderNowMs(air, now))
 		attachTrails(list, trail.take(), now)
 		body := snapshotBody{
-			At:       now.UTC().Format(time.RFC3339),
+			// To the millisecond. Whole seconds put up to a second of noise
+			// into the backend's estimate of how long the upload took.
+			At:       now.UTC().Format("2006-01-02T15:04:05.000Z07:00"),
 			Aircraft: list,
 			Stats:    buildStats(air, stats, len(list)),
 		}
@@ -322,6 +388,26 @@ func attachTrails(list []snapshotAircraft, byHex map[string][]trailPoint, at tim
 	}
 }
 
+// capModes keeps nav_modes inside what the backend's schema accepts (at most
+// eight, each at most twelve characters), so an unexpected value from a
+// decoder costs that one field and not the aircraft.
+func capModes(modes []string) []string {
+	out := make([]string, 0, len(modes))
+	for _, m := range modes {
+		if m == "" || len(m) > 12 {
+			continue
+		}
+		out = append(out, m)
+		if len(out) == 8 {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // buildAircraft filters the decoder's table down to what the backend can use:
 // records with a position fresh enough to still be accepted.
 func buildAircraft(air *decoderjson.AircraftFile) []snapshotAircraft {
@@ -336,12 +422,35 @@ func buildAircraft(air *decoderjson.AircraftFile) []snapshotAircraft {
 			Flight:   trimSpace(a.Flag),
 			Lat:      *a.Lat,
 			Lon:      *a.Lon,
-			GS:       a.GS,
+			GS:       a.GroundSpeed(),
 			Track:    a.Track,
 			Squawk:   a.Squawk,
 			Emerg:    a.Emerg,
 			Category: a.Category,
 			SeenPos:  *a.SeenPos,
+
+			AltGeom:     a.AltGeom,
+			BaroRate:    a.BaroRate,
+			GeomRate:    a.GeomRate,
+			IAS:         a.IAS,
+			TAS:         a.TAS,
+			Mach:        a.Mach,
+			TrueHeading: a.TrueHeading,
+			MagHeading:  a.MagHeading,
+			Roll:        a.Roll,
+			NavAltMCP:   a.NavAltMCP,
+			NavAltFMS:   a.NavAltFMS,
+			NavHeading:  a.NavHeading,
+			NavQNH:      a.NavQNH,
+			NavModes:    capModes(a.NavModes),
+			Type:        a.PositionType(),
+			NIC:         a.NIC,
+			NACp:        a.NACp,
+			SIL:         a.SIL,
+			RC:          a.RC,
+			Version:     a.Version,
+			RSSI:        a.RSSI,
+			Messages:    a.Messages,
 		}
 		if alt, onGround, ok := a.AltBaroValue(); ok {
 			if onGround {

@@ -30,6 +30,7 @@ import {
   createNode,
   rotateNodeToken,
   setPagerTuning,
+  setPagerTesting,
   setAdsbTuning,
   setNodeLocation,
   countNodesForUser,
@@ -56,6 +57,12 @@ import {
   pagerGainOf,
   pagerPpmOf,
   pagerPlanWithServicesFor,
+  pagerTestingOf,
+  pagerTestFrequenciesOf,
+  PAGER_TEST_LABEL_RE,
+  PAGER_TEST_MIN_MHZ,
+  PAGER_TEST_MAX_MHZ,
+  PAGER_TEST_MAX_FREQS,
   adsbGainOf,
   adsbPpmOf,
 } from '../services/nodes/configMerge.js';
@@ -70,6 +77,7 @@ import {
   setAutoUpdate,
 } from '../services/nodes/globalConfig.js';
 import { clearAdsbNodeState } from '../services/nodes/adsbNodeStore.js';
+import { _resetNodeClock } from '../sources/adsb.js';
 import { mintNodeToken, _clearNodeTokenCache } from '../services/auth/nodeToken.js';
 
 export const nodesRouter = new Hono();
@@ -140,6 +148,7 @@ function toApi(node: NodeRow, usernames?: Map<string, string>, surveying?: Map<s
     tokenPrefix: node.token_prefix,
     lat: node.lat,
     lon: node.lon,
+    antennaHeightM: node.antenna_height_m,
     zone: node.zone,
     state: node.state,
     lga: node.lga,
@@ -150,9 +159,18 @@ function toApi(node: NodeRow, usernames?: Map<string, string>, surveying?: Map<s
     // Rolling 10-min relayed count — radio calls forwarded / pager messages
     // forwarded to Pagermon. Used by the staff activity chips.
     messagesLast10m: hub.uploadsInWindow(node.id),
-    // THIS node's state's frequency plan ({label, mhz, service}[]), so the
-    // staff UI lists the frequencies without duplicating the plan table.
-    pagerFrequencies: node.kind === 'pager' ? pagerPlanWithServicesFor(node.state) : null,
+    // The frequencies THIS node receives ({label, mhz, service}[]): its state's
+    // plan, or its hand-entered test list while in testing mode (service null),
+    // so the staff UI lists them without duplicating the plan table.
+    pagerFrequencies: node.kind === 'pager'
+      ? (pagerTestingOf(node) && pagerTestFrequenciesOf(node).length > 0
+        ? pagerTestFrequenciesOf(node).map((f) => ({ ...f, service: null }))
+        : pagerPlanWithServicesFor(node.state))
+      : null,
+    // Testing mode: the state plan replaced by pagerTestFrequencies, pages kept
+    // out of Pagermon. The list is kept while off, for the drawer's editor.
+    pagerTesting: node.kind === 'pager' ? pagerTestingOf(node) : null,
+    pagerTestFrequencies: node.kind === 'pager' ? pagerTestFrequenciesOf(node) : null,
     // Pager tuner overrides (persisted); null when unset (agent uses defaults).
     pagerGain: node.kind === 'pager' ? pagerGainOf(node) ?? null : null,
     pagerPpm: node.kind === 'pager' ? pagerPpmOf(node) ?? null : null,
@@ -456,6 +474,7 @@ const StaffAreaLocationSchema = z.object({
 const StaffAdsbLocationSchema = z.object({
   lat: z.number().min(-90).max(90),
   lon: z.number().min(-180).max(180),
+  antennaHeightM: z.number().min(0).max(500).nullable().optional(),
 });
 nodesRouter.put('/api/nodes/:id/location', requireRole(canManageNodes), async (c) => {
   const id = c.req.param('id');
@@ -614,6 +633,49 @@ nodesRouter.put('/api/nodes/:id/pager-tuning', requireRole(canManageNodes), asyn
   } catch (err) {
     log.error({ err, id }, 'Error setting pager tuning');
     return c.json({ error: 'Failed to set tuner overrides' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// PUT /api/nodes/:id/pager-testing — staff put a pager node into (or out of)
+// testing mode. While testing, the node receives ONLY the frequencies given
+// here instead of its state's plan, and its pages stay in the staff drawer:
+// pager-upload neither forwards them to Pagermon nor stores them. Body:
+// { enabled, frequencies? }; frequencies replace the stored list, which is
+// kept when testing is turned off. Turning it on needs at least one frequency,
+// sent or already stored. Persisted + pushed live.
+// ---------------------------------------------------------------------------
+const PagerTestingSchema = z.object({
+  enabled: z.boolean(),
+  frequencies: z
+    .array(z.object({
+      label: z.string().regex(PAGER_TEST_LABEL_RE),
+      mhz: z.number().min(PAGER_TEST_MIN_MHZ).max(PAGER_TEST_MAX_MHZ),
+    }))
+    .min(1)
+    .max(PAGER_TEST_MAX_FREQS)
+    .refine((fs) => new Set(fs.map((f) => f.label)).size === fs.length, { message: 'labels must be unique' })
+    .optional(),
+});
+nodesRouter.put('/api/nodes/:id/pager-testing', requireRole(canManageNodes), async (c) => {
+  const id = c.req.param('id');
+  try {
+    const node = await getNode(id);
+    if (!node) return c.json({ error: 'node not found' }, 404);
+    if (node.kind !== 'pager') return c.json({ error: 'not a pager node' }, 400);
+    const parsed = PagerTestingSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ error: 'invalid testing settings' }, 400);
+    if (parsed.data.enabled && !parsed.data.frequencies && pagerTestFrequenciesOf(node).length === 0) {
+      return c.json({ error: 'testing needs at least one frequency' }, 400);
+    }
+
+    const updated = await setPagerTesting(id, parsed.data);
+    if (!updated) return c.json({ error: 'update failed' }, 500);
+    await pushConfigToNode(id).catch(() => {}); // apply live if online
+    return c.json(toApi(updated));
+  } catch (err) {
+    log.error({ err, id }, 'Error setting pager testing mode');
+    return c.json({ error: 'Failed to set testing mode' }, 500);
   }
 });
 
@@ -884,6 +946,7 @@ nodesRouter.delete('/api/nodes/:id', requireRole(isOwner), async (c) => {
     // receiver stays on the map for up to two minutes and keeps its coverage
     // picture for the rest of the window.
     clearAdsbNodeState(id);
+    _resetNodeClock(id);
     const ok = await deleteNode(id);
     if (!ok) return c.json({ error: 'node not found' }, 404);
     _clearNodeTokenCache();

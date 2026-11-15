@@ -404,7 +404,11 @@ func (s *sender) send(contentType string, body []byte) queue.SendResult {
 	switch resp.StatusCode {
 	case http.StatusOK:
 		return queue.SendOK
-	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusRequestEntityTooLarge:
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusRequestEntityTooLarge,
+		// The server read the body and refused what was in it. Sending the
+		// same bytes again gets the same answer; retried, it held the queue
+		// for the snapshot's whole 90 s life.
+		http.StatusBadRequest, http.StatusLengthRequired, http.StatusUnprocessableEntity:
 		log.Printf("sender: dropping message (server returned %d — retry is futile)", resp.StatusCode)
 		return queue.SendDrop
 	default:

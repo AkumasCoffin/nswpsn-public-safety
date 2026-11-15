@@ -23,6 +23,7 @@ import { hasRole } from '../services/auth/roles.js';
 import { mintNodeToken, resolveNodeToken, _clearNodeTokenCache } from '../services/auth/nodeToken.js';
 import { issueEnrolCode } from '../services/auth/nodeEnrol.js';
 import { adsbNodeSourceId, clearAdsbNodeState } from '../services/nodes/adsbNodeStore.js';
+import { _resetNodeClock } from '../sources/adsb.js';
 import {
   adsbNodeView,
   adsbNodeTracks,
@@ -45,6 +46,7 @@ import {
 } from '../services/nodes/registry.js';
 import { getUsername } from './users.js';
 import { hub } from '../services/nodes/hub.js';
+import { localListenLinks } from '../services/nodes/localListen.js';
 import { nodeUptime, nodeUptimeMany } from '../services/nodes/nodeUptime.js';
 import { liveCallWindow } from '../services/nodeCallWindow.js';
 import { getZoneGroups, isValidZone } from '../services/nodes/rfsZones.js';
@@ -52,7 +54,7 @@ import { AU_STATES } from '../lib/stateMask.js';
 import { pushConfigToNode } from '../services/nodes/configPush.js';
 import { listSurveys, runningSurveys, SURVEY_PASS_PCT } from '../services/siteSurvey.js';
 import { getPool } from '../db/pool.js';
-import { feederRadioStats, feederPagerOverview, feederPagerMessages, pagerPaging } from './node-data.js';
+import { feederRadioStats, feederPagerOverview, feederPagerMessages, pagerPaging, feederNodeDecode } from './node-data.js';
 
 export const feederRouter = new Hono();
 
@@ -98,6 +100,7 @@ function feederNodeView(n: NodeRow, surveying?: Map<string, number>) {
   const online = hub.isOnline(n.id);
   const live = hub.liveStatus(n.id);
   const st = live.status;
+  const lan = online ? hub.localListenOf(n.id) : null;
   const callsLast10m = hub.uploadsInWindow(n.id);
   const isPager = n.kind === 'pager';
   const isAdsb = n.kind === 'adsb';
@@ -167,6 +170,7 @@ function feederNodeView(n: NodeRow, surveying?: Map<string, number>) {
     tokenPrefix: n.token_prefix,
     lat: n.lat,
     lon: n.lon,
+    antennaHeightM: n.antenna_height_m,
     zone: n.zone,
     state: n.state,
     lga: n.lga,
@@ -183,6 +187,9 @@ function feederNodeView(n: NodeRow, surveying?: Map<string, number>) {
     sdrtrunkVersion: n.sdrtrunk_version,
     rdioVersion: n.rdio_version,
     localIp: n.local_ip,
+    /** This node's own listener page on the owner's network, while it is
+     *  online and serving one. Owner-only: never in the staff views. */
+    localListen: lan ? localListenLinks(lan) : null,
     sdrUp,
     decoding: !!decoding,
     /** Channels automatic management currently holds stopped (incl. mid-probe). */
@@ -957,8 +964,7 @@ feederRouter.post('/api/feeder/nodes/:id/rotate-token', async (c) => {
 
 // ---------------------------------------------------------------------------
 // GET /api/feeder/nodes/:id/stats?window=24h|7d|30d — a LIGHT per-node summary
-// (calls / receptions + top talkgroup / unit / site + a short recent-activity
-// feed) so a contributor can see what their OWN radio node is hearing, without
+// (calls / receptions + top talkgroup / unit / site) so a contributor can see what their OWN radio node is hearing, without
 // the staff Data page's full drill-downs. Owner-scoped (radio_contributor), NOT
 // gated on any staff/team role.
 // ---------------------------------------------------------------------------
@@ -1125,6 +1131,9 @@ const PagerLocationSchema = z.object({
 const AdsbLocationSchema = z.object({
   lat: z.number().min(-90).max(90),
   lon: z.number().min(-180).max(180),
+  // Antenna height above the ground, metres. Optional: absent leaves it as it
+  // was, null clears it back to the assumed default.
+  antennaHeightM: z.number().min(0).max(500).nullable().optional(),
 });
 feederRouter.put('/api/feeder/nodes/:id/location', async (c) => {
   const node = await ownedNode(c);
@@ -1162,6 +1171,27 @@ feederRouter.put('/api/feeder/nodes/:id/location', async (c) => {
   } catch (err) {
     log.error({ err, id: node.id }, 'Error setting node location');
     return c.json({ error: 'Failed to set location' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/feeder/nodes/:id/decode?range=24h|7d — the owner's decode-health
+// chart: one series per site the node decodes, so they can see their node is
+// healthy (and which site is not). Radio only; samples are kept 7 days.
+// ---------------------------------------------------------------------------
+feederRouter.get('/api/feeder/nodes/:id/decode', async (c) => {
+  const node = await ownedNode(c);
+  if (!node) return c.json({ error: 'not your node' }, 404);
+  if (node.kind !== 'radio') return c.json({ error: 'decode history is radio-only' }, 400);
+  try {
+    const pool = await getPool();
+    if (!pool) return c.json({ error: 'database unavailable' }, 503);
+    const range = (new URL(c.req.url).searchParams.get('range') ?? '24h').toLowerCase();
+    c.header('Cache-Control', 'no-store');
+    return c.json(await feederNodeDecode(pool, node.id, range));
+  } catch (err) {
+    log.error({ err, id: node.id }, 'Error building feeder decode history');
+    return c.json({ error: 'Failed to load decode history' }, 500);
   }
 });
 
@@ -1243,6 +1273,7 @@ feederRouter.delete('/api/feeder/nodes/:id', async (c) => {
     // receiver stays on the map for up to two minutes and keeps its coverage
     // picture for the rest of the window.
     clearAdsbNodeState(node.id);
+    _resetNodeClock(node.id);
     await deleteNode(node.id);
     _clearNodeTokenCache();
     return c.json({ ok: true });

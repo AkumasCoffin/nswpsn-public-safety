@@ -147,10 +147,10 @@ Discord bot consumes continuously whether or not anyone has the site open.
 Failures increment a counter, get backoff (`src/sources/shared/backoff.ts`), and
 feed `src/services/sourceHealth.ts`.
 
-### The 37 registered sources
+### The 39 registered sources
 
-39 sources are declared; two of them do not register by default, so a running
-backend holds **37**.
+39 sources are declared and all register by default, so a running backend
+holds **39**.
 
 | Source | Family | Interval |
 |---|---|---|
@@ -164,7 +164,7 @@ backend holds **37**.
 | `traffic_cameras` | traffic | 60s |
 | `traffic_incidents` | traffic | 60s |
 | `user_incidents` | misc | 60s |
-| `ausgrid`, `ausgrid_stats` | power | — **not registered** |
+| `ausgrid`, `ausgrid_stats` | power | 2m |
 | `qld_fire`, `qld_warning` | rfs | 2m |
 | `sa_cfs`, `sa_mfs` | rfs | 2m |
 | `vic_emergency` | rfs | 2m |
@@ -182,15 +182,36 @@ backend holds **37**.
 | `firms_hotspots` | misc | 15m |
 | `weather_current` | misc | 30m |
 
-**Ausgrid is off.** `register()` in `src/sources/ausgrid.ts:262` returns
-immediately unless `AUSGRID_DISABLED` is explicitly set to `false`, and the
-default is `'true'` — the upstream `webapi/*` endpoints have returned 404 for
-months, and the default keeps the dead poll from firing even on a fresh deploy.
-So `ausgrid` and `ausgrid_stats` are the two declared-but-unregistered sources,
-and there is no `ausgrid` key in `/api/status`. With polling off, `register()`
-also drops the two snapshots LiveStore loaded from disk at startup, so the
-routes answer empty rather than with whatever was fetched before polling
-stopped. Setting `AUSGRID_DISABLED=false` brings them back at 2m each.
+**Ausgrid can be switched off.** It polls by default, from Ausgrid's
+`/api/outages-map/outages/` endpoints: today's list every poll, and the
+30-day list of planned work at most every half hour, kept in memory between
+reads. `register()` in `src/sources/ausgrid.ts:355` returns immediately when
+`AUSGRID_DISABLED` is set to `true`; then `ausgrid` and `ausgrid_stats` do not
+register, there is no `ausgrid` key in `/api/status`, and `register()` also
+drops the two snapshots LiveStore loaded from disk at startup, so the routes
+answer empty rather than with whatever was fetched before polling stopped.
+
+**The other states' distributors** are not in the table above: each joins the
+registry when its source file is added under `src/sources/outages/`. Their
+names are `ausnet`, `citipower`, `powercor`, `jemena` (VIC), `sapn` (SA),
+`westernpower` and `horizon` (WA); the name is the LiveStore key, the `source` its history is archived under in `archive_power`,
+and the `distributor` in `/api/v1/outages`. Unlike the three NSW sources, which
+store each distributor's own records and are mapped by `api/outages.ts`, these
+store the merged feed's record (`Outage[]`) and are read as they are.
+`src/sources/outages/common.ts` is what they are written against:
+
+- `zonedUtc` reads a distributor's local time, in any of the forms they write
+  one, as ISO 8601 UTC in that state's zone;
+- `outageOf` makes one record, and `withStatus` decides `active` or
+  `scheduled` from the start time when the feed is read, never stored;
+- `outageArchiveItems` makes one archive row per outage whose `data` changes
+  only when the outage does (no status, no poll time, no outline), so the
+  archive writer's hash check skips an unchanged outage;
+- `registerOutages` registers the source (family `power`) and gives it a
+  `<NAME>_DISABLED=true` switch that also deletes its saved snapshot, as
+  `AUSGRID_DISABLED` does;
+- `keepParts` is for a distributor that publishes several files: a file that
+  fails is answered from its last good read for up to 30 minutes.
 
 The seven LiveTraffic hazard kinds come from one table in
 `src/sources/traffic.ts:428`. `traffic_lga` is council-submitted local-road
@@ -487,9 +508,10 @@ shows now, polled and cached; `history` — stored records over time). A feed
 groups the sources a person would ask for together: Fires is every fire service
 and the QFD and DFES public warnings (read merged at `/api/v1/fires`,
 `api/fires.ts`, each record's `kind` saying which), satellite hotspots and fire
-danger ratings; Power outages is all three distributors (read merged at
-`/api/v1/outages`, `api/outages.ts`, each record's `kind` and `status` saying
-whether it is unplanned or planned and whether the power is off now).
+danger ratings; Power outages is every distributor read, in NSW, VIC, SA and
+WA (read merged at `/api/v1/outages`, `api/outages.ts`, each record saying
+its distributor and state, and its `kind` and `status` saying whether it is
+unplanned or planned and whether the power is off now).
 
 Each route a key may reach **declares** the one cell it serves with
 `scoped({ feed, window })` as its first middleware; a key passes when it holds

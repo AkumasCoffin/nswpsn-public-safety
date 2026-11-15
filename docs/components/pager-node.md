@@ -157,6 +157,27 @@ more dongles are in use (see below). A dongle that later picks up a reader
 without having been measured runs at `ppm=0`, and the agent says so, until the
 next "Recheck SDRs".
 
+### Testing mode
+
+Staff can put a pager node into **testing mode** from the drawer's Frequencies
+panel, to receive frequencies typed in by hand (a label and MHz each, at most
+eight, 24–1766 MHz) instead of its state's plan. Turning it off returns the node
+to the plan. The list is kept, so turning testing back on restores it.
+
+It is held in two `config_override` keys, `pagerTesting` and
+`pagerTestFrequencies`, and set with `PUT /api/nodes/:id/pager-testing`. While
+testing is on, `buildPagerPayload` sends the test list as the node's
+frequencies (`pagerFrequenciesFor`). The agent needs no change, because a test
+list is an ordinary pushed plan: it is range-checked, its labels sanitised, and
+`channelize.Assign` places it on the dongles as usual.
+
+**A testing node's pages stay in the staff drawer.** The relay shows them in the
+drawer's message list with a "testing" badge, then acks them without forwarding
+them to Pagermon or storing them in `node_pager_events`. So nothing heard on a
+test frequency reaches the map, `/logs`, the Data tab or the owner's overview,
+whatever the node's Feed toggle says. The node card's feed chip reads
+**Testing** for as long as it lasts.
+
 ### Several frequencies on one dongle
 
 `rtl_fm` demodulates one frequency. Given several `-f` flags it becomes a
@@ -315,6 +336,9 @@ in this order (`backends/node/src/services/pagerFilter.ts`):
 A filtered page is still acked, so the node deletes it from its queue, still
 stored in `node_pager_events`, and still shown in the staff drawer's message
 list, dimmed and labelled.
+
+A node in [testing mode](#testing-mode) is checked before any of these: its
+pages are acked and shown in the drawer only, and neither forwarded nor stored.
 
 They are most of the traffic: on the NSW networks about nine stored pages in
 ten are filtered, almost all of them `521839`. So the staff Data tab's pager

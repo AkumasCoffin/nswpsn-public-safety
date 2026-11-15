@@ -98,6 +98,7 @@ import {
   stopAdsbDailyFlush,
 } from './services/nodes/adsbNodeStore.js';
 import { stopAdsbTrackArchive } from './services/adsbTrackArchive.js';
+import { stopNodeTrackArchive } from './services/nodes/nodeTrackArchive.js';
 import { startAdsbGlobeHistory, stopAdsbGlobeHistory } from './services/adsbGlobeHistory.js';
 import {
   startNodeUptimeFlush,
@@ -130,7 +131,7 @@ async function preflight(): Promise<void> {
   // Register every source with the source registry. The poller walks
   // the registry; nothing happens until startPolling() fires.
   registerAllSources(); // rfs, bom, traffic, beach, weather, pager
-  registerAllPowerSources(); // endeavour, ausgrid, essential
+  registerAllPowerSources(); // NSW's three distributors and the other states' nine
 
   liveStore.startPersistLoop();
   // Ensure this month's (and next month's) archive partitions exist
@@ -310,6 +311,7 @@ async function shutdown(signal: string) {
     // Awaited: writes out the partial minute of ADS-B counters rather than
     // discarding it on every restart.
     await stopAdsbDailyFlush();
+    await stopNodeTrackArchive();
     // And the minute of aircraft positions in progress, so a deploy does not
     // leave a hole in the history map.
     await stopAdsbGlobeHistory();

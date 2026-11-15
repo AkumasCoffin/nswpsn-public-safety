@@ -42,6 +42,15 @@ export const DAY_MS = 24 * HOUR_MS;
 /** The seq globe-history rows are written under. */
 export const GLOBE_HISTORY_SEQ = -2;
 
+/**
+ * The seq of the "this day is fully imported" marker, an empty row at the
+ * day's first minute. Its own seq because the marker used to be a seq -2 row
+ * at that minute, and the first hour's data writes exactly that row: a run
+ * cut short after hour one looked complete and the other 23 hours were never
+ * filled.
+ */
+export const GLOBE_HISTORY_DONE_SEQ = -3;
+
 /** A history point this close to a stored one adds nothing but jitter. */
 export const NEAR_LIVE_MS = 10_000;
 
@@ -271,8 +280,8 @@ export async function importGlobeHistoryDay(
   for (let h = dayStartMs; h < dayStartMs + DAY_MS; h += HOUR_MS) {
     const stored = await pool.query<{ minute: Date; aircraft: unknown }>(
       `SELECT minute, aircraft FROM adsb_track_chunks
-        WHERE minute >= $1::timestamptz AND minute < $2::timestamptz AND seq <> $3`,
-      [new Date(h).toISOString(), new Date(h + HOUR_MS).toISOString(), GLOBE_HISTORY_SEQ],
+        WHERE minute >= $1::timestamptz AND minute < $2::timestamptz AND seq >= -1`,
+      [new Date(h).toISOString(), new Date(h + HOUR_MS).toISOString()],
     );
     const rows = buildHourRows(day, h, stored.rows);
     for (let m = h; m < h + HOUR_MS; m += MINUTE_MS) day.delete(m);
@@ -298,7 +307,7 @@ export async function importGlobeHistoryDay(
     `INSERT INTO adsb_track_chunks (minute, seq, aircraft)
      VALUES ($1::timestamptz, $2, '{}'::json)
      ON CONFLICT (minute, seq) DO NOTHING`,
-    [new Date(dayStartMs).toISOString(), GLOBE_HISTORY_SEQ],
+    [new Date(dayStartMs).toISOString(), GLOBE_HISTORY_DONE_SEQ],
   );
 
   return {

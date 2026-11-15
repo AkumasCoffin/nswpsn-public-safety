@@ -231,6 +231,20 @@ func (m *aircraftManager) StopDecoder() {
 	time.Sleep(decoderSwapSettle)
 }
 
+// ResumeDecoder starts the decoder again after StopDecoder, for a self-update
+// that failed after stopping it. A no-op when it is already running or nothing
+// has been applied yet; launchLocked honours a config with capture switched
+// off, so this cannot start a decoder that was meant to be stopped.
+func (m *aircraftManager) ResumeDecoder() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.hasConfig || m.sup != nil {
+		return nil
+	}
+	log.Printf("decoder: restarting after a self-update that did not complete")
+	return m.launchLocked()
+}
+
 // Restart restarts the decoder component (staff "Restart" button).
 func (m *aircraftManager) Restart(component string) error {
 	m.mu.Lock()

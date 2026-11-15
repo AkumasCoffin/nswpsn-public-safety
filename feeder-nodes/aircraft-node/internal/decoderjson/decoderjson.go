@@ -44,7 +44,13 @@ type Aircraft struct {
 	Lon  *float64 `json:"lon"`
 	// AltBaro is a number OR the string "ground" for a surface position, so it
 	// has to be decoded as a raw message and interpreted (see AltBaroValue).
-	AltBaro  json.RawMessage `json:"alt_baro"`
+	AltBaro json.RawMessage `json:"alt_baro"`
+	// Altitude and Speed are the same two values under the names older
+	// decoders write: dump1090-mutability and dump1090-fa before 3.7 never
+	// emit alt_baro or gs. Read only when the newer field is absent — a
+	// receiver on one of those reported no altitude at all.
+	Altitude json.RawMessage `json:"altitude"`
+	Speed    *float64        `json:"speed"`
 	GS       *float64        `json:"gs"`
 	Track    *float64        `json:"track"`
 	Squawk   string          `json:"squawk"`
@@ -57,6 +63,62 @@ type Aircraft struct {
 	SeenPos  *float64 `json:"seen_pos"`
 	RSSI     *float64 `json:"rssi"`
 	Messages int      `json:"messages"`
+
+	// What the aircraft says about itself beyond its position. All optional:
+	// each rides in its own message type, and many transponders never send
+	// some of them. Passed through to the backend untouched, which range-
+	// checks them (detailOf in sources/adsb.ts).
+	AltGeom     *float64 `json:"alt_geom"`
+	BaroRate    *float64 `json:"baro_rate"`
+	GeomRate    *float64 `json:"geom_rate"`
+	IAS         *float64 `json:"ias"`
+	TAS         *float64 `json:"tas"`
+	Mach        *float64 `json:"mach"`
+	TrueHeading *float64 `json:"true_heading"`
+	MagHeading  *float64 `json:"mag_heading"`
+	Roll        *float64 `json:"roll"`
+	NavAltMCP   *float64 `json:"nav_altitude_mcp"`
+	NavAltFMS   *float64 `json:"nav_altitude_fms"`
+	NavHeading  *float64 `json:"nav_heading"`
+	NavQNH      *float64 `json:"nav_qnh"`
+	NavModes    []string `json:"nav_modes"`
+	NIC         *float64 `json:"nic"`
+	NACp        *float64 `json:"nac_p"`
+	SIL         *float64 `json:"sil"`
+	RC          *float64 `json:"rc"`
+	Version     *float64 `json:"version"`
+	// The fields that came from MLAT or TIS-B rather than the aircraft's own
+	// ADS-B. dump1090-fa has no single "type" as readsb does; a position is
+	// MLAT when "lat" is listed in MLAT, and so on (see PositionType).
+	MLAT []string `json:"mlat"`
+	TISB []string `json:"tisb"`
+}
+
+// PositionType says how this aircraft's position was obtained, in the words
+// readsb uses for its `type` field, so the backend reads one vocabulary from
+// receivers and aggregators alike.
+func (a *Aircraft) PositionType() string {
+	has := func(list []string) bool {
+		for _, f := range list {
+			if f == "lat" || f == "lon" {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has(a.MLAT):
+		return "mlat"
+	case has(a.TISB):
+		if len(a.Hex) > 0 && a.Hex[0] == '~' {
+			return "tisb_other"
+		}
+		return "tisb_icao"
+	case len(a.Hex) > 0 && a.Hex[0] == '~':
+		return "tisb_other"
+	default:
+		return "adsb_icao"
+	}
 }
 
 // AircraftFile is the top level of aircraft.json.
@@ -74,18 +136,31 @@ func (a *Aircraft) HasPosition() bool {
 // AltBaroValue interprets the number-or-"ground" altitude field. Returns the
 // altitude in feet, or onGround=true for a surface position.
 func (a *Aircraft) AltBaroValue() (alt float64, onGround bool, ok bool) {
-	if len(a.AltBaro) == 0 {
+	raw := a.AltBaro
+	if len(raw) == 0 || string(raw) == "null" {
+		// Older decoders: the same number-or-"ground" under "altitude".
+		raw = a.Altitude
+	}
+	if len(raw) == 0 {
 		return 0, false, false
 	}
 	var s string
-	if err := json.Unmarshal(a.AltBaro, &s); err == nil {
+	if err := json.Unmarshal(raw, &s); err == nil {
 		return 0, s == "ground", s == "ground"
 	}
 	var f float64
-	if err := json.Unmarshal(a.AltBaro, &f); err == nil {
+	if err := json.Unmarshal(raw, &f); err == nil {
 		return f, false, true
 	}
 	return 0, false, false
+}
+
+// GroundSpeed is gs, or the older decoders' "speed" when gs is absent.
+func (a *Aircraft) GroundSpeed() *float64 {
+	if a.GS != nil {
+		return a.GS
+	}
+	return a.Speed
 }
 
 // StatsWindow is one time window's counters inside stats.json.
@@ -196,12 +271,21 @@ var ErrStale = fmt.Errorf("decoder json is stale: %w", ErrNotReady)
 
 // MaxStaleness is how long since the decoder last rewrote a file before it
 // counts as a leftover. The agent launches dump1090 with --write-json-every 1,
-// so ten seconds is two whole upload intervals of slack: long enough to ride
+// so ten seconds is ten missed rewrites (five upload intervals): long enough to ride
 // out a slow filesystem or a scheduler hiccup, short enough that a stopped
 // decoder stops producing map pins almost immediately.
 const MaxStaleness = 10 * time.Second
 
-func (r *Reader) read(name string, into any) error {
+// StatsMaxStaleness is the same bound for stats.json, which dump1090 rewrites
+// only when its one-minute statistics period rolls over, not with every
+// aircraft.json. Held to the aircraft bound it read as stale for fifty
+// seconds of every minute, so most heartbeats carried no message rate and the
+// node page showed a dash while the decoder was running normally. Three
+// periods of slack still catches a stopped decoder within a few minutes; the
+// aircraft bound above is what keeps a dead receiver off the map.
+const StatsMaxStaleness = 3 * time.Minute
+
+func (r *Reader) read(name string, maxAge time.Duration, into any) error {
 	path := filepath.Join(r.dir, name)
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -219,7 +303,7 @@ func (r *Reader) read(name string, into any) error {
 	// file rather than read out of it because it holds for both supported
 	// decoders and for whatever a future one chooses to put in its JSON.
 	if fi, serr := os.Stat(path); serr == nil {
-		if age := time.Since(fi.ModTime()); age > MaxStaleness {
+		if age := time.Since(fi.ModTime()); age > maxAge {
 			return fmt.Errorf("%s last written %s ago: %w", name, age.Round(time.Second), ErrStale)
 		}
 	}
@@ -229,7 +313,7 @@ func (r *Reader) read(name string, into any) error {
 // Aircraft reads and parses aircraft.json.
 func (r *Reader) Aircraft() (*AircraftFile, error) {
 	var f AircraftFile
-	if err := r.read("aircraft.json", &f); err != nil {
+	if err := r.read("aircraft.json", MaxStaleness, &f); err != nil {
 		return nil, err
 	}
 	return &f, nil
@@ -238,7 +322,7 @@ func (r *Reader) Aircraft() (*AircraftFile, error) {
 // Stats reads and parses stats.json.
 func (r *Reader) Stats() (*StatsFile, error) {
 	var f StatsFile
-	if err := r.read("stats.json", &f); err != nil {
+	if err := r.read("stats.json", StatsMaxStaleness, &f); err != nil {
 		return nil, err
 	}
 	return &f, nil

@@ -201,6 +201,17 @@ describe('folding an upload', () => {
     expect(inserts).toHaveLength(1);
   });
 
+  it('does not restate an envelope that has not grown', async () => {
+    foldCoverage(NODE, SITE.lat, SITE.lon, [at(0, 100), at(0, 100)], T);
+    expect(await flushAdsbCoverage()).toBe(1);
+    // The same reach again: nothing to write.
+    foldCoverage(NODE, SITE.lat, SITE.lon, [at(0, 90), at(0, 90)], T);
+    expect(await flushAdsbCoverage()).toBe(0);
+    // Further out, twice: written.
+    foldCoverage(NODE, SITE.lat, SITE.lon, [at(0, 150), at(0, 150)], T);
+    expect(await flushAdsbCoverage()).toBe(1);
+  });
+
   it('keeps separate rows for separate nodes', async () => {
     foldCoverage(NODE, SITE.lat, SITE.lon, [at(0, 100), at(0, 100)], T);
     foldCoverage('other-node', SITE.lat, SITE.lon, [at(0, 100), at(0, 100)], T);

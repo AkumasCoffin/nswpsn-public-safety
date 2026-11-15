@@ -987,10 +987,44 @@ function vicRecord(
   });
 }
 
-/** Transport Victoria's unplanned disruptions, or its planned ones taken
- *  record by record (vicPlannedRecords is what the layer serves). */
+/** How far apart, in place and in time, two unplanned records that say the
+ *  same thing may be and still be one event listed twice. */
+const VIC_TWICE_KM = 0.5;
+const VIC_TWICE_MS = 30 * 60_000;
+
+/** What two listings of one unplanned event have in common. */
+const vicEventKey = (p: Obj): string => {
+  const ref = obj(p['reference']);
+  return [
+    str(p['eventType']),
+    str(p['eventSubType']) || str(p['eventSubtype']),
+    (str(p['closedRoadName']) || str(ref['localRoadName'])).trim().toLowerCase(),
+    (str(p['startIntersectionLocality']) || str(ref['startIntersectionLocality'])).trim().toLowerCase(),
+    htmlToProse(p['description']),
+  ].join('|');
+};
+
+/**
+ * Transport Victoria's unplanned disruptions, or its planned ones taken
+ * record by record (vicPlannedRecords is what the layer serves).
+ *
+ * The unplanned feed lists some events twice under two ids, seconds apart
+ * (two tow allocations for one stopped vehicle), and each one became its own
+ * record and its own alert. A record that says the same thing as an earlier
+ * one, at the same place and within half an hour of it, is left out; the
+ * earliest listing is the one kept, so its id does not change while it lasts.
+ */
 export function vicRecords(features: readonly unknown[], planned: boolean, now = Date.now()): TrafficFeature[] {
   const out: TrafficFeature[] = [];
+  const kept = new Map<string, Array<{ pin: [number, number]; at: number }>>();
+  if (!planned) {
+    const when = (f: unknown): number => {
+      const p = obj(obj(f)['properties']);
+      return Date.parse(isoTime(p['created']) || isoTime(obj(p['duration'])['start'])) || 0;
+    };
+    const idOf = (f: unknown): string => { const p = obj(obj(f)['properties']); return str(p['id']) || str(p['eventId']); };
+    features = [...features].sort((x, y) => when(x) - when(y) || idOf(x).localeCompare(idOf(y)));
+  }
   for (const f of features) {
     const p = obj(obj(f)['properties']);
     const id = str(p['id']) || str(p['eventId']);
@@ -1002,6 +1036,14 @@ export function vicRecords(features: readonly unknown[], planned: boolean, now =
     const parts = geoParts(obj(f)['geometry']);
     const pin = pinOf(parts);
     if (!pin) continue;
+    if (!planned) {
+      const key = vicEventKey(p);
+      const at = Date.parse(isoTime(p['created']) || isoTime(duration['start'])) || 0;
+      const same = kept.get(key) ?? [];
+      if (same.some((k) => kmBetween(k.pin, pin) <= VIC_TWICE_KM && Math.abs(at - k.at) <= VIC_TWICE_MS)) continue;
+      same.push({ pin, at });
+      kept.set(key, same);
+    }
     out.push(vicRecord(p, parts, pin, planned, `vic:${planned ? 'planned' : 'unplanned'}:${id}`));
   }
   return out;

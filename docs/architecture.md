@@ -147,9 +147,14 @@ Take NSW RFS incidents.
 
 ### Registry contents
 
-39 entries on a default boot — 41 are declared, and the two Ausgrid sources do
-not register unless `AUSGRID_DISABLED` is set to `false`
-(`backends/node/src/sources/ausgrid.ts:262`), which it is not by default.
+41 entries on a default boot. The two Ausgrid sources do not register when
+`AUSGRID_DISABLED` is set to `true`
+(`backends/node/src/sources/ausgrid.ts:353`), which leaves 39.
+The other states' electricity distributors (`ausnet`, `citipower`, `powercor`,
+`jemena`, `sapn`, `westernpower`, `horizon`) add one entry
+each, family `power`, as their source files under
+`backends/node/src/sources/outages/` are added; each has its own
+`<NAME>_DISABLED` switch.
 Cadences range from 8s (`adsb_aircraft`) to 30m (`weather_current`). The full
 list with each cadence is in the
 [backend component doc](components/backend.md#the-source-registry).
@@ -533,7 +538,10 @@ to be mid-transmission at the instant of a poll.
 ## Path 4 — ADS-B, which is two different things
 
 1. **Public aggregators.** `src/sources/adsb.ts` fans out across adsb.lol,
-   adsb.fi and airplanes.live every 8s — the fastest source in the registry.
+   adsb.fi, airplanes.live and adsb.one every 8s — the fastest source in the
+   registry. With `FLYITALY_ADSB_KEY` set, FlyItalyADSB is polled beside them
+   over NSW only, one request every 12 s at most (free plan budget; its data
+   is CC BY-SA 4.0 and credited on data-sources.html and the map).
    Serves `/api/adsb/aircraft` and prebuilt `/api/adsb/trails`. Kill switch:
    `ADSB_DISABLED`.
 2. **AusAware's own aircraft nodes.** The aircraft agent supervises

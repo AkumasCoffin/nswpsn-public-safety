@@ -153,6 +153,9 @@ type Client struct {
 	surveySnap    func() any
 	surveyRunner  surveyRunner
 
+	// localListen is the LAN listener page (internal/localweb), if running.
+	localListen localListener
+
 	writeMu sync.Mutex // serializes all conn writes (gorilla forbids concurrent writers)
 	conn    *websocket.Conn
 }
@@ -214,6 +217,47 @@ func (c *Client) SetSurveyRunner(r surveyRunner) { c.surveyRunner = r }
 
 // SetSurveySnapshot supplies the site survey's status-frame snapshot.
 func (c *Client) SetSurveySnapshot(fn func() any) { c.surveySnap = fn }
+
+// localListener is the slice of internal/localweb the status frame reads.
+type localListener interface {
+	Port() int
+	Host() string
+}
+
+// SetLocalListener supplies the LAN listener page for the status frame.
+func (c *Client) SetLocalListener(l localListener) { c.localListen = l }
+
+// localListenReport says where the owner can open the listener page, or nil
+// while it is not bound. A page bound to every interface is reported on the
+// machine's outbound LAN address; one bound to a loopback address is not
+// reachable from the network and is not reported at all.
+func (c *Client) localListenReport() *protocol.LocalListen {
+	if c.localListen == nil {
+		return nil
+	}
+	port := c.localListen.Port()
+	if port == 0 {
+		return nil
+	}
+	bound := c.localListen.Host()
+	if bound == "localhost" {
+		return nil
+	}
+	ip := localIP()
+	if parsed := net.ParseIP(bound); parsed != nil {
+		if parsed.IsLoopback() {
+			return nil
+		}
+		if !parsed.IsUnspecified() {
+			ip = bound // bound to one specific interface: that is the address
+		}
+	}
+	if ip == "" {
+		return nil
+	}
+	host, _ := os.Hostname()
+	return &protocol.LocalListen{Port: port, IP: ip, Host: host}
+}
 
 // SurveyRunning reports whether a site survey currently owns the node's
 // channel set. The channel manager uses it as its pause signal.
@@ -693,6 +737,7 @@ func (c *Client) sendStatus(conn *websocket.Conn) error {
 	if c.surveySnap != nil {
 		st.SiteSurvey = c.surveySnap()
 	}
+	st.LocalListen = c.localListenReport()
 	return c.writeType(conn, protocol.TypeStatus, st, "")
 }
 

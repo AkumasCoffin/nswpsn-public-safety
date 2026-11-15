@@ -33,6 +33,17 @@
  * only one aggregator can see would otherwise blink during rotation,
  * so a short holdover keeps an aircraft's last position for up to 90 s
  * — see applyHoldover.
+ *
+ * FlyItalyADSB is a fifth upstream, used only when FLYITALY_ADSB_KEY is set.
+ * It is NOT dealt circles from the rotation: its free plan allows 300,000
+ * requests a month (~7 a minute), a fraction of what the shared rotation
+ * would ask of it. So it sits beside the rotation as a supplement — one
+ * request at most every FLYITALY_MIN_INTERVAL_MS, cycling over the four NSW
+ * quadrants only. The other four still cover the whole country; FlyItaly adds
+ * whatever its own receivers hear over NSW, with each quadrant revisited
+ * about once a minute, inside the 90 s holdover, so an aircraft only it sees
+ * stays on the map. Its data is CC BY-SA 4.0 and is credited on
+ * data-sources.html and on the map's aircraft layer.
  */
 import { simplifyTrail } from '../lib/simplifyTrail.js';
 import { fetchJson } from './shared/http.js';
@@ -41,6 +52,7 @@ import { liveStore } from '../store/live.js';
 import { config } from '../config.js';
 import { log } from '../lib/log.js';
 import { nodeAdsbRecords, nodeAdsbFeedCount } from '../services/nodes/adsbNodeStore.js';
+import { noteNetworkAircraft } from '../services/nodes/adsbLightcone.js';
 // One-way, like the node store above: this module hands the archive the
 // positions it observed, the archive never reaches back for them.
 import {
@@ -103,6 +115,8 @@ export const CIRCLES: readonly Circle[] = [
 interface Upstream {
   id: string;
   url: (c: Circle) => string;
+  /** Extra request headers (an API key). */
+  headers?: () => Record<string, string>;
 }
 const UPSTREAMS: readonly Upstream[] = [
   {
@@ -128,6 +142,29 @@ const UPSTREAMS: readonly Upstream[] = [
   },
 ] as const;
 
+// --- FlyItalyADSB (supplementary, key-gated) ------------------------------
+// The same 250 nm circles, asked for in kilometres (the free plan caps a
+// radius at 500 km).
+const FLYITALY_RADIUS_KM = Math.round(RADIUS_NM * 1.852);
+const FLYITALY: Upstream = {
+  id: 'flyitaly',
+  url: (c) =>
+    `https://api.flyitalyadsb.com/v2/lat/${c.lat}/lon/${c.lon}/dist/${FLYITALY_RADIUS_KM}`,
+  headers: () => ({ 'X-Api-Key': (config.FLYITALY_ADSB_KEY ?? '').trim() }),
+};
+/**
+ * At most one request this often. The free plan is 300,000 requests a month
+ * and 30 a minute per key; one every 12 s is 5 a minute, ~216,000 a month,
+ * which leaves room for restarts and the odd probe after a pause.
+ */
+const FLYITALY_MIN_INTERVAL_MS = 12_000;
+/** The circles it cycles over: the four NSW quadrants, which also cover the
+ *  ACT. Four keeps each one revisited inside the holdover. */
+const FLYITALY_FOCUS: readonly Circle[] = CIRCLES.filter((c) => c.id.startsWith('nsw_'));
+let _flyLastAt = -Infinity;
+let _flyNext = 0;
+let _flyLastOk = false;
+
 // Drop positions older than this — point queries can include aircraft
 // whose last known position is minutes stale.
 const MAX_SEEN_POS_SECS = 60;
@@ -150,6 +187,37 @@ export interface RawAircraft {
   emergency?: string | null;
   seen_pos?: number | null;
   dbFlags?: number | null;
+  // Everything below feeds AdsbDetail. None of it is needed to place an
+  // aircraft; all of it is what a tracker shows once you select one.
+  alt_geom?: number | null;
+  baro_rate?: number | null;
+  geom_rate?: number | null;
+  ias?: number | null;
+  tas?: number | null;
+  mach?: number | null;
+  true_heading?: number | null;
+  mag_heading?: number | null;
+  roll?: number | null;
+  nav_altitude_mcp?: number | null;
+  nav_altitude_fms?: number | null;
+  nav_heading?: number | null;
+  nav_qnh?: number | null;
+  nav_modes?: string[] | null;
+  wd?: number | null;
+  ws?: number | null;
+  oat?: number | null;
+  /** How the position was obtained: adsb_icao, mlat, tisb_icao, adsr_icao… */
+  type?: string | null;
+  nic?: number | null;
+  nac_p?: number | null;
+  sil?: number | null;
+  rc?: number | null;
+  version?: number | null;
+  rssi?: number | null;
+  messages?: number | null;
+  desc?: string | null;
+  ownOp?: string | null;
+  year?: string | number | null;
 }
 interface ReadsbPointResponse {
   ac?: RawAircraft[];
@@ -159,7 +227,176 @@ interface ReadsbPointResponse {
 
 export type EsTag = 'polair' | 'rescue' | 'firebomber' | 'ambulance' | 'military';
 
-export interface AdsbAircraft {
+export type AdsbPosSource = 'adsb' | 'mlat' | 'tisb' | 'adsr' | 'adsc' | 'modes' | 'other';
+export type AdsbFlag = 'military' | 'interesting' | 'pia' | 'ladd';
+
+/**
+ * What an aircraft says about itself beyond where it is. Every field is
+ * absent when the source did not send it (or sent nonsense), never null or
+ * zero: most aircraft send only some of these, and a receiver's decoder a
+ * different set from an aggregator's.
+ *
+ * Live only. None of this is written to the history archive, which stays
+ * [time, lat, lon, altitude] per point.
+ */
+export interface AdsbDetail {
+  /** Vertical rate from pressure altitude, feet per minute; negative descending. */
+  baroRateFpm?: number;
+  /** Vertical rate from GPS altitude, feet per minute. */
+  geomRateFpm?: number;
+  /** GPS (geometric) altitude, feet above the WGS84 ellipsoid. */
+  altGeomFt?: number;
+  iasKt?: number;
+  tasKt?: number;
+  mach?: number;
+  /** Where the nose points, degrees true. Differs from trackDeg by the wind. */
+  trueHeadingDeg?: number;
+  magHeadingDeg?: number;
+  /** Bank angle, degrees; negative is left. */
+  rollDeg?: number;
+  /** Altitude selected on the autopilot (MCP/FCU, else the FMS), feet. */
+  navAltFt?: number;
+  navHeadingDeg?: number;
+  /** Altimeter setting, hPa. */
+  navQnhHpa?: number;
+  /** Engaged modes: autopilot, vnav, althold, approach, lnav, tcas. */
+  navModes?: string[];
+  /** Wind and outside air temperature the aggregator derived from the aircraft's own data. */
+  windDirDeg?: number;
+  windKt?: number;
+  oatC?: number;
+  /** How the position was obtained. MLAT and TIS-B are less exact than ADS-B. */
+  posSource?: AdsbPosSource;
+  /** Navigation integrity (0-11) and position accuracy (0-11) categories, source integrity level (0-3). */
+  nic?: number;
+  nacp?: number;
+  sil?: number;
+  /** Radius of containment, metres: the position is within this of the truth. */
+  rcM?: number;
+  /** ADS-B version the transponder speaks (0-2). */
+  adsbVersion?: number;
+  /** Signal strength at the receiver that heard it, dBFS. */
+  rssiDb?: number;
+  /** Messages received from this aircraft by that receiver. */
+  messages?: number;
+  /** The declared emergency, when there is one: general, lifeguard, minfuel, nordo, unlawful, downed. */
+  emergency?: string;
+  /** Database flags the aggregator holds for the airframe. */
+  flags?: AdsbFlag[];
+  /** Airframe description, operator and year of manufacture from the aggregator's database. */
+  desc?: string;
+  operator?: string;
+  year?: string;
+}
+
+/** Every AdsbDetail key, for code that strips or copies the block. */
+export const ADSB_DETAIL_KEYS = [
+  'baroRateFpm', 'geomRateFpm', 'altGeomFt', 'iasKt', 'tasKt', 'mach',
+  'trueHeadingDeg', 'magHeadingDeg', 'rollDeg', 'navAltFt', 'navHeadingDeg',
+  'navQnhHpa', 'navModes', 'windDirDeg', 'windKt', 'oatC', 'posSource', 'nic',
+  'nacp', 'sil', 'rcM', 'adsbVersion', 'rssiDb', 'messages', 'emergency',
+  'flags', 'desc', 'operator', 'year',
+] as const satisfies ReadonlyArray<keyof AdsbDetail>;
+
+/**
+ * The detail kept on the plain aircraft list: the three a map needs for every
+ * aircraft (a climb arrow, an "approximate position" mark, the kind of
+ * emergency). The rest is a few hundred bytes per aircraft that only matters
+ * for the one selected, and is served on request (`detail`, `hex`).
+ */
+export const ADSB_LIST_DETAIL_KEYS: ReadonlyArray<keyof AdsbDetail> = [
+  'baroRateFpm', 'posSource', 'emergency',
+];
+
+/** Detail that describes the airframe, not the moment: safe to fill from an
+ *  older record or carry between polls. */
+const ADSB_IDENTITY_DETAIL_KEYS = ['flags', 'desc', 'operator', 'year'] as const;
+
+function num(v: unknown, min: number, max: number): number | undefined {
+  return typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max ? v : undefined;
+}
+function text(v: unknown, maxLen: number): string | undefined {
+  if (typeof v !== 'string' && typeof v !== 'number') return undefined;
+  const t = String(v).trim();
+  return t && t.length <= maxLen ? t : undefined;
+}
+
+/** readsb's position `type` in our seven words. */
+export function posSourceOf(type: unknown, hex: string): AdsbPosSource | undefined {
+  const t = typeof type === 'string' ? type.trim().toLowerCase() : '';
+  if (!t) return hex.startsWith('~') ? 'tisb' : undefined;
+  if (t.startsWith('adsb')) return 'adsb';
+  if (t.startsWith('adsr')) return 'adsr';
+  if (t.startsWith('tisb')) return 'tisb';
+  if (t === 'adsc') return 'adsc';
+  if (t === 'mlat') return 'mlat';
+  if (t === 'mode_s') return 'modes';
+  return 'other';
+}
+
+const DB_FLAGS: ReadonlyArray<[number, AdsbFlag]> = [
+  [1, 'military'], [2, 'interesting'], [4, 'pia'], [8, 'ladd'],
+];
+
+/** The detail one raw record carries. Out-of-range values are dropped, not
+ *  clamped: a wrong number shown as fact is worse than a missing row. */
+export function detailOf(raw: RawAircraft, hex: string): AdsbDetail {
+  const d: AdsbDetail = {};
+  const set = <K extends keyof AdsbDetail>(k: K, v: AdsbDetail[K] | undefined): void => {
+    if (v !== undefined) d[k] = v;
+  };
+  set('baroRateFpm', num(raw.baro_rate, -30_000, 30_000));
+  set('geomRateFpm', num(raw.geom_rate, -30_000, 30_000));
+  set('altGeomFt', num(raw.alt_geom, -2_000, 100_000));
+  set('iasKt', num(raw.ias, 0, 1_500));
+  set('tasKt', num(raw.tas, 0, 1_500));
+  set('mach', num(raw.mach, 0, 5));
+  set('trueHeadingDeg', num(raw.true_heading, 0, 360));
+  set('magHeadingDeg', num(raw.mag_heading, 0, 360));
+  set('rollDeg', num(raw.roll, -180, 180));
+  set('navAltFt', num(raw.nav_altitude_mcp, 0, 100_000) ?? num(raw.nav_altitude_fms, 0, 100_000));
+  set('navHeadingDeg', num(raw.nav_heading, 0, 360));
+  set('navQnhHpa', num(raw.nav_qnh, 800, 1_100));
+  if (Array.isArray(raw.nav_modes)) {
+    const modes = raw.nav_modes
+      .filter((m): m is string => typeof m === 'string' && m.length > 0 && m.length <= 12)
+      .slice(0, 8);
+    if (modes.length > 0) d.navModes = modes;
+  }
+  set('windDirDeg', num(raw.wd, 0, 360));
+  set('windKt', num(raw.ws, 0, 500));
+  set('oatC', num(raw.oat, -100, 60));
+  set('posSource', posSourceOf(raw.type, hex));
+  set('nic', num(raw.nic, 0, 11));
+  set('nacp', num(raw.nac_p, 0, 11));
+  set('sil', num(raw.sil, 0, 3));
+  set('rcM', num(raw.rc, 0, 500_000));
+  set('adsbVersion', num(raw.version, 0, 3));
+  set('rssiDb', num(raw.rssi, -60, 0));
+  const messages = num(raw.messages, 0, 1e12);
+  if (messages !== undefined) d.messages = Math.round(messages);
+  const emergency = text(raw.emergency, 16)?.toLowerCase();
+  if (emergency && emergency !== 'none') d.emergency = emergency;
+  if (typeof raw.dbFlags === 'number' && Number.isFinite(raw.dbFlags)) {
+    const flags = DB_FLAGS.filter(([bit]) => ((raw.dbFlags as number) & bit) !== 0).map(([, f]) => f);
+    if (flags.length > 0) d.flags = flags;
+  }
+  set('desc', text(raw.desc, 80));
+  set('operator', text(raw.ownOp, 80));
+  set('year', text(raw.year, 4));
+  return d;
+}
+
+/** A record without the detail the plain list leaves out. */
+export function withoutFullDetail<T extends AdsbAircraft>(a: T): T {
+  const out = { ...a };
+  for (const k of ADSB_DETAIL_KEYS) {
+    if (!ADSB_LIST_DETAIL_KEYS.includes(k)) delete out[k];
+  }
+  return out;
+}
+
+export interface AdsbAircraft extends AdsbDetail {
   /** Lowercase ICAO id; readsb prefixes non-ICAO TIS-B ids with '~'. */
   hex: string;
   callsign: string | null;
@@ -289,7 +526,22 @@ export function normalizeAircraft(
     // ever sets these.
     estimated: false,
     estimatedSec: null,
+    ...detailOf(raw, hex),
   };
+}
+
+/** ADS-B is the aircraft's own GPS; these are worked out by someone else. */
+function isDerivedPosition(a: AdsbAircraft): boolean {
+  return a.posSource === 'mlat' || a.posSource === 'tisb';
+}
+
+/** A derived position must be fresher by more than this to beat a real one. */
+const DERIVED_POSITION_HANDICAP_SEC = 3;
+
+/** True when `a`'s position should be preferred to `b`'s. */
+function fresher(a: AdsbAircraft, b: AdsbAircraft): boolean {
+  const handicap = (x: AdsbAircraft): number => (isDerivedPosition(x) ? DERIVED_POSITION_HANDICAP_SEC : 0);
+  return a.ageSec + handicap(a) < b.ageSec + handicap(b);
 }
 
 /**
@@ -306,14 +558,26 @@ export function mergeAircraft(records: AdsbAircraft[]): AdsbAircraft[] {
       byHex.set(rec.hex, { ...rec, sources: [...rec.sources] });
       continue;
     }
-    const winner = rec.ageSec < prev.ageSec ? { ...rec } : prev;
+    // Freshest wins, except that an MLAT or TIS-B fix only a moment newer
+    // does not displace the aircraft's own ADS-B position.
+    const winner = fresher(rec, prev) ? { ...rec } : prev;
     const loser = winner === prev ? rec : prev;
+    for (const k of ADSB_IDENTITY_DETAIL_KEYS) {
+      if (winner[k] === undefined && loser[k] !== undefined) (winner as AdsbDetail)[k] = loser[k] as never;
+    }
     winner.callsign = winner.callsign ?? loser.callsign;
     winner.reg = winner.reg ?? loser.reg;
     winner.type = winner.type ?? loser.type;
     winner.category = winner.category ?? loser.category;
     winner.esTag = winner.esTag ?? loser.esTag;
-    winner.emergencySquawk = winner.emergencySquawk || loser.emergencySquawk;
+    // A squawk is one fact with its emergency meaning attached. The winner's
+    // own stands; only a winner with no squawk at all borrows the other's.
+    // OR-ing the flag alone let an older record's 7700 mark an aircraft the
+    // fresher record already showed back on 1200.
+    if (winner.squawk === null && loser.squawk !== null) {
+      winner.squawk = loser.squawk;
+      winner.emergencySquawk = winner.emergencySquawk || loser.emergencySquawk;
+    }
     winner.sources = Array.from(new Set([...prev.sources, ...rec.sources]));
     winner.sourceCount = winner.sources.length;
     byHex.set(rec.hex, winner);
@@ -363,12 +627,12 @@ const NODE_CLOCK_SAMPLES = 32;
  * is for — and it works whichever way the clock is wrong, where the old
  * `sentMs <= nowMs` guard only caught clocks running fast.
  */
-export function nodeTransitSec(sourceId: string, sentMs: number, nowMs: number): number {
+export function nodeTransitSec(clockKey: string, sentMs: number, nowMs: number): number {
   const delta = nowMs - sentMs;
-  let ring = _nodeClockDeltas.get(sourceId);
+  let ring = _nodeClockDeltas.get(clockKey);
   if (!ring) {
     ring = [];
-    _nodeClockDeltas.set(sourceId, ring);
+    _nodeClockDeltas.set(clockKey, ring);
   }
   ring.push(delta);
   if (ring.length > NODE_CLOCK_SAMPLES) ring.shift();
@@ -380,9 +644,9 @@ export function nodeTransitSec(sourceId: string, sentMs: number, nowMs: number):
   return Math.max(0, (delta - floor) / 1000);
 }
 
-/** Test seam, and for forgetting a node that has gone. */
-export function _resetNodeClock(sourceId?: string): void {
-  if (sourceId) _nodeClockDeltas.delete(sourceId);
+/** Forget one node's clock estimate (it was deleted), or all of them (tests). */
+export function _resetNodeClock(clockKey?: string): void {
+  if (clockKey) _nodeClockDeltas.delete(clockKey);
   else _nodeClockDeltas.clear();
 }
 
@@ -407,10 +671,17 @@ export function normalizeNodeUploadWithTrails(
   upload: { at: string; aircraft: RawAircraft[] },
   sourceId: string,
   nowMs: number = Date.now(),
+  /**
+   * Whose clock this is: the node's id. Not the source id, which is built
+   * from the node's NAME and names are not unique: two receivers called
+   * "home" shared one clock estimate, so one with a clock 30 s fast made
+   * every upload from the other look 30 s late.
+   */
+  clockKey: string = sourceId,
 ): { records: AdsbAircraft[]; trails: Map<string, TrailPoint[]> } {
   const sentMs = Date.parse(upload.at);
   const transitSec = Number.isFinite(sentMs)
-    ? nodeTransitSec(sourceId, sentMs, nowMs)
+    ? nodeTransitSec(clockKey, sentMs, nowMs)
     : 0;
   // `at` on the node's clock is not a usable instant, but `at` corrected by the
   // transit we just derived is: it is the moment the snapshot describes, in our
@@ -728,9 +999,57 @@ interface LastSeen {
   gsKt: number | null;
   trackDeg: number | null;
   velAtMs: number;
+  /** The last squawk actually received, its emergency meaning, and when. */
+  squawk: string | null;
+  emergencySquawk: boolean;
+  squawkAtMs: number;
 }
 
 const _lastSeen = new Map<string, LastSeen>();
+
+/**
+ * How long a squawk is carried onto records that arrive without one.
+ *
+ * A squawk rides in its own message, so a record often lacks it, and with it
+ * the emergency flag: an aircraft on 7700 dropped off the emergency list
+ * every poll whose freshest record happened to have no squawk. Short, because
+ * a code can be changed at any moment and an emergency that has ended must
+ * not linger.
+ */
+const SQUAWK_CARRY_SEC = 60;
+
+/**
+ * Below this pressure altitude an unheard aircraft is held, not projected.
+ *
+ * Losing an aircraft low down usually means it is landing: projecting a
+ * final-approach heading and speed for three minutes flew the icon miles past
+ * the runway, and a helicopter past its hospital pad.
+ */
+const ESTIMATE_MIN_ALT_FT = 2500;
+
+/** A heading and speed older than this when last heard are not projected. */
+const ESTIMATE_MAX_VEL_AGE_SEC = 60;
+
+/**
+ * hex -> age in seconds of an altitude this poll CARRIED onto a record that
+ * arrived without one. For the map a two-minute-old altitude beats none; the
+ * history archive is a record of what was heard, so it takes only a recent
+ * one (see ARCHIVE_CARRIED_ALT_MAX_SEC). Rebuilt by every applyHoldover.
+ */
+const _carriedAltAgeSec = new Map<string, number>();
+
+/** The archive keeps a carried altitude only this fresh: 30 s is at most
+ *  about 1,000 ft out in a hard climb, against 4,000 ft at the full carry. */
+const ARCHIVE_CARRIED_ALT_MAX_SEC = 30;
+
+/** Records as the archive should store them: an altitude that was carried
+ *  from too long ago is left out rather than written down as heard. */
+export function withoutStaleCarriedAlt(records: readonly AdsbAircraft[]): AdsbAircraft[] {
+  return records.map((a) => {
+    const age = _carriedAltAgeSec.get(a.hex);
+    return age !== undefined && age > ARCHIVE_CARRIED_ALT_MAX_SEC ? { ...a, altFt: null } : a;
+  });
+}
 
 /**
  * How long a carried-over altitude or velocity stays usable.
@@ -759,11 +1078,21 @@ function backfillFromState(a: AdsbAircraft, prev: LastSeen, nowMs: number): Adsb
   out.type = out.type ?? prev.rec.type;
   out.category = out.category ?? prev.rec.category;
   out.esTag = out.esTag ?? prev.rec.esTag;
+  for (const k of ADSB_IDENTITY_DETAIL_KEYS) {
+    if (out[k] === undefined && prev.rec[k] !== undefined) (out as AdsbDetail)[k] = prev.rec[k] as never;
+  }
+
+  if (out.squawk === null && prev.squawk !== null
+      && (nowMs - prev.squawkAtMs) / 1000 <= SQUAWK_CARRY_SEC) {
+    out.squawk = prev.squawk;
+    out.emergencySquawk = out.emergencySquawk || prev.emergencySquawk;
+  }
 
   if (!out.onGround && !prev.rec.onGround) {
     if (out.altFt === null && prev.altFt !== null
         && (nowMs - prev.altAtMs) / 1000 <= CARRY_MAX_SEC) {
       out.altFt = prev.altFt;
+      _carriedAltAgeSec.set(out.hex, (nowMs - prev.altAtMs) / 1000);
     }
     const velFresh = (nowMs - prev.velAtMs) / 1000 <= CARRY_MAX_SEC;
     if (out.gsKt === null && prev.gsKt !== null && velFresh) out.gsKt = prev.gsKt;
@@ -798,6 +1127,7 @@ function deadReckon(
 
 export function applyHoldover(fresh: AdsbAircraft[], nowMs: number): AdsbAircraft[] {
   const out = new Map<string, AdsbAircraft>();
+  _carriedAltAgeSec.clear();
   for (const raw of fresh) {
     const prev = _lastSeen.get(raw.hex);
     const a = prev ? backfillFromState(raw, prev, nowMs) : raw;
@@ -813,6 +1143,9 @@ export function applyHoldover(fresh: AdsbAircraft[], nowMs: number): AdsbAircraf
       gsKt: raw.gsKt !== null ? raw.gsKt : (prev?.gsKt ?? null),
       trackDeg: raw.trackDeg !== null ? raw.trackDeg : (prev?.trackDeg ?? null),
       velAtMs: (raw.gsKt !== null || raw.trackDeg !== null) ? nowMs : (prev?.velAtMs ?? 0),
+      squawk: raw.squawk !== null ? raw.squawk : (prev?.squawk ?? null),
+      emergencySquawk: raw.squawk !== null ? raw.emergencySquawk : (prev?.emergencySquawk ?? false),
+      squawkAtMs: raw.squawk !== null ? nowMs : (prev?.squawkAtMs ?? 0),
     });
   }
   for (const [hex, h] of _lastSeen) {
@@ -837,7 +1170,12 @@ export function applyHoldover(fresh: AdsbAircraft[], nowMs: number): AdsbAircraf
     const projectable =
       !rec.onGround &&
       Number.isFinite(rec.trackDeg) &&
-      (rec.gsKt ?? 0) > ESTIMATE_MIN_GS_KT;
+      (rec.gsKt ?? 0) > ESTIMATE_MIN_GS_KT &&
+      // Low down it is probably landing; an unknown altitude is not evidence.
+      (rec.altFt === null || rec.altFt >= ESTIMATE_MIN_ALT_FT) &&
+      // The heading and speed must themselves have been heard recently: a
+      // carried pair can be two minutes old, and the aircraft has turned.
+      (h.atMs - h.velAtMs) / 1000 <= ESTIMATE_MAX_VEL_AGE_SEC;
 
     // The expiry window keys off `projectable`, NOT off whether it is being
     // projected right now: an aircraft still inside the grace period must not
@@ -880,9 +1218,14 @@ export function applyHoldover(fresh: AdsbAircraft[], nowMs: number): AdsbAircraf
 /** TEST-ONLY: reset holdover, rotation and upstream health between unit tests. */
 export function _resetAdsbHoldoverForTests(): void {
   _lastSeen.clear();
+  _carriedAltAgeSec.clear();
+  _allDownLogged = false;
   _pollTick = 0;
   _health.clear();
   _circleDealtTick.length = 0;
+  _flyLastAt = -Infinity;
+  _flyNext = 0;
+  _flyLastOk = false;
 }
 
 /**
@@ -893,6 +1236,32 @@ export function _resetAdsbHoldoverForTests(): void {
  * rest of the sweep: the host has told us to go away or slow down, and
  * the remaining circles would only repeat the answer.
  */
+/**
+ * When each feed record's answer arrived. A record's ageSec is true at that
+ * moment only: the sweep staggers its requests and waits for the slowest, so
+ * by the merge a record can be many seconds older than it says, while a
+ * receiver's record is aged right up to the merge. Left uncorrected, a feed
+ * position really ten seconds old claimed one and beat the receiver's true
+ * three, and its track point was stamped that much too late.
+ */
+const _arrivedMs = new WeakMap<AdsbAircraft, number>();
+
+/** Feed records aged to `nowMs`; any past the age limit by then are dropped. */
+export function ageToNow(records: readonly AdsbAircraft[], nowMs: number): AdsbAircraft[] {
+  const out: AdsbAircraft[] = [];
+  for (const r of records) {
+    const at = _arrivedMs.get(r);
+    if (at === undefined) {
+      out.push(r);
+      continue;
+    }
+    const ageSec = r.ageSec + Math.max(0, nowMs - at) / 1000;
+    if (ageSec > MAX_SEEN_POS_SECS) continue;
+    out.push({ ...r, ageSec });
+  }
+  return out;
+}
+
 async function fetchUpstream(up: Upstream, circles: readonly Circle[]): Promise<UpstreamResult> {
   let halted: { refused: boolean; retryAfterMs: number | null } | null = null;
   const results = await Promise.all(
@@ -902,16 +1271,20 @@ async function fetchUpstream(up: Upstream, circles: readonly Circle[]): Promise<
       try {
         const body = await fetchJson<ReadsbPointResponse>(up.url(c), {
           timeoutMs: 8_000,
+          ...(up.headers ? { headers: up.headers() } : {}),
         });
         const ac = Array.isArray(body.ac)
           ? body.ac
           : Array.isArray(body.aircraft)
             ? body.aircraft
             : [];
+        const arrivedMs = Date.now();
         const records: AdsbAircraft[] = [];
         for (const raw of ac) {
           const norm = normalizeAircraft(raw, up.id);
-          if (norm) records.push(norm);
+          if (!norm) continue;
+          _arrivedMs.set(norm, arrivedMs);
+          records.push(norm);
         }
         return { ok: true as const, records };
       } catch (err) {
@@ -1072,6 +1445,7 @@ export function ingestNodeTrailPoints(
     buf.push(...merged);
   }
   trimTrail(buf, nowMs);
+  _trailsDirty = true;
 }
 
 function updateTrails(aircraft: AdsbAircraft[], nowMs: number): void {
@@ -1086,7 +1460,15 @@ function updateTrails(aircraft: AdsbAircraft[], nowMs: number): void {
     const last = buf[buf.length - 1];
     // Parked/stationary aircraft don't accumulate duplicate points.
     if (last && last[1] === a.lat && last[2] === a.lon) continue;
-    buf.push([nowMs, a.lat, a.lon, a.altFt]);
+    // Stamped with when the fix was MADE, not when the poll saw it. A
+    // receiver's own uploads land here between polls with their real times,
+    // so an aggregator fix a few seconds old stamped "now" went on the end
+    // of a trail that already ran past it: the line overshot the aircraft
+    // and doubled back to it. A fix no newer than what the trail already
+    // holds adds nothing.
+    const fixMs = nowMs - Math.max(0, Number.isFinite(a.ageSec) ? a.ageSec : 0) * 1000;
+    if (last && fixMs <= last[0] + TRAIL_SAME_FIX_MS) continue;
+    buf.push([fixMs, a.lat, a.lon, a.altFt]);
     trimTrail(buf, nowMs);
   }
   // Landed / out-of-coverage: absent hexes keep their trail for a
@@ -1106,17 +1488,117 @@ function updateTrails(aircraft: AdsbAircraft[], nowMs: number): void {
     }
   }
   // Prebuild the served snapshot once per poll — requests do zero work.
+  rebuildTrailsSnapshot(nowMs);
+}
+
+const r5 = (v: number): number => Math.round(v * 1e5) / 1e5;
+
+/** Rebuild the served trails from `_trails`. Reads nothing else and changes
+ *  nothing else, so it is safe to run between polls. */
+function rebuildTrailsSnapshot(nowMs: number): void {
   const out: AdsbTrailsSnapshot['trails'] = {};
-  const r5 = (v: number): number => Math.round(v * 1e5) / 1e5;
   for (const [hex, buf] of _trails) {
     if (buf.length < 2) continue;
     out[hex] = buf.map((p) => [r5(p[1]), r5(p[2]), p[3]]);
   }
   _trailsSnapshot = { trails: out, fetched_at: new Date(nowMs).toISOString() };
+  _trailsDirty = false;
+  _trailsBuiltMs = nowMs;
 }
 
-export function adsbTrailsSnapshot(): AdsbTrailsSnapshot {
+/**
+ * Receiver uploads add points between polls. Without this the served trails
+ * only caught up when the next poll finished — every 16-23 s — so a receiver's
+ * one-second points reached the map as coarsely as an aggregator's. Rebuilt on
+ * read, at most every TRAIL_REBUILD_MIN_MS, so many readers cost one build.
+ */
+const TRAIL_REBUILD_MIN_MS = 2_000;
+let _trailsDirty = false;
+let _trailsBuiltMs = 0;
+
+export function adsbTrailsSnapshot(nowMs: number = Date.now()): AdsbTrailsSnapshot {
+  if (_trailsDirty && nowMs - _trailsBuiltMs >= TRAIL_REBUILD_MIN_MS) rebuildTrailsSnapshot(nowMs);
   return _trailsSnapshot;
+}
+
+// ---------------------------------------------------------------------
+// "Recent" reads: what changed in the last few seconds.
+//
+// The full snapshot is rebuilt when the aggregator sweep finishes, every
+// 16-23 s, and that is as fast as aggregator positions change anyway. Our own
+// receivers upload every couple of seconds, so for the aircraft they hear there
+// is fresher data sitting in the node store and the trail buffer. These reads
+// hand out only that fresh part, so a client can poll it often and cheaply.
+//
+// Pure reads. They deliberately do NOT go through fetchAdsbAircraft: its side
+// effects (missed-aircraft counts, the history archive, the holdover clock)
+// are per poll and would be skewed by running more often.
+
+/** Upper bound for `recent`, seconds. Past a minute it is the full snapshot. */
+export const ADSB_RECENT_MAX_SEC = 60;
+
+export interface AdsbRecentTrails {
+  /** hex → [[lat, lon, altFt|null, epochMs], ...] oldest→newest. */
+  trails: Record<string, Array<[number, number, number | null, number]>>;
+  fetched_at: string;
+}
+
+const _recentAircraftMemo = new Map<string, AdsbSnapshot>();
+const _recentTrailsMemo = new Map<string, AdsbRecentTrails>();
+
+/** Memoised per second: any number of readers cost one build a second. */
+function memo<T>(cache: Map<string, T>, key: string, build: () => T): T {
+  const hit = cache.get(key);
+  if (hit) return hit;
+  if (cache.size > 16) cache.clear();
+  const v = build();
+  cache.set(key, v);
+  return v;
+}
+
+/**
+ * Aircraft whose position is no older than `recentSec`, in the snapshot shape.
+ *
+ * The snapshot's records are aged by how long the snapshot has been held, then
+ * every receiver record is merged over them (freshest position wins, metadata
+ * fills in from the other), exactly as the poll merges them.
+ */
+export function adsbRecentAircraft(recentSec: number, nowMs: number = Date.now()): AdsbSnapshot {
+  const sec = Math.max(1, Math.min(ADSB_RECENT_MAX_SEC, Math.round(recentSec)));
+  return memo(_recentAircraftMemo, `${sec}|${Math.floor(nowMs / 1000)}`, () => {
+    const snap = adsbSnapshot();
+    const fetchedMs = Date.parse(snap.fetched_at);
+    const held = Number.isFinite(fetchedMs) ? Math.max(0, (nowMs - fetchedMs) / 1000) : 0;
+    const aged = snap.aircraft
+      .filter((a) => !a.estimated)
+      .map((a) => ({ ...a, ageSec: a.ageSec + held }));
+    const merged = mergeAircraft([...aged, ...nodeAdsbRecords(nowMs)])
+      .filter((a) => a.ageSec <= sec && !a.estimated && inAuBbox(a.lat, a.lon));
+    return {
+      ...snap,
+      aircraft: merged,
+      count: merged.length,
+      emergency_count: merged.filter((a) => a.esTag !== null).length,
+      fetched_at: new Date(nowMs).toISOString(),
+    };
+  });
+}
+
+/** Trail points from the last `recentSec`, each with the time of its fix. */
+export function adsbRecentTrails(recentSec: number, nowMs: number = Date.now()): AdsbRecentTrails {
+  const sec = Math.max(1, Math.min(ADSB_RECENT_MAX_SEC, Math.round(recentSec)));
+  return memo(_recentTrailsMemo, `${sec}|${Math.floor(nowMs / 1000)}`, () => {
+    const cutoff = nowMs - sec * 1000;
+    const out: AdsbRecentTrails['trails'] = {};
+    for (const [hex, buf] of _trails) {
+      // Newest last, so walk back only as far as the window reaches.
+      let i = buf.length;
+      while (i > 0 && buf[i - 1]![0] >= cutoff) i -= 1;
+      if (i === buf.length) continue;
+      out[hex] = buf.slice(i).map((p) => [r5(p[1]), r5(p[2]), p[3], Math.round(p[0])]);
+    }
+    return { trails: out, fetched_at: new Date(nowMs).toISOString() };
+  });
 }
 
 /** One aircraft's raw, timestamped trail. */
@@ -1146,7 +1628,41 @@ export function adsbTrailsForArchive(): ArchivableTrack[] {
 export function _resetAdsbTrailsForTests(): void {
   _trails.clear();
   _trailsSnapshot = { trails: {}, fetched_at: new Date(0).toISOString() };
+  _trailsDirty = false;
+  _trailsBuiltMs = 0;
+  _recentAircraftMemo.clear();
+  _recentTrailsMemo.clear();
 }
+
+/**
+ * This poll's FlyItalyADSB request, if it has one. Null when no key is set,
+ * so the source leaves no trace in the snapshot.
+ *
+ * A poll inside the request interval sends nothing and reports the last
+ * request's outcome, so the status page does not flicker between polls.
+ */
+async function pollFlyItaly(nowMs: number): Promise<UpstreamResult | null> {
+  if (!(config.FLYITALY_ADSB_KEY ?? '').trim()) return null;
+  const h = healthOf(FLYITALY.id);
+  const idle = (ok: boolean, error?: string): UpstreamResult => {
+    const r: UpstreamResult = { id: FLYITALY.id, ok, circlesOk: 0, circlesTotal: 0, records: [] };
+    if (error !== undefined) r.error = error;
+    return r;
+  };
+  if (h.pausedUntil > nowMs) {
+    return idle(false, `paused (${h.reason ?? 'unknown'}) until ${new Date(h.pausedUntil).toISOString()}: ${h.error ?? ''}`.trim());
+  }
+  if (nowMs - _flyLastAt < FLYITALY_MIN_INTERVAL_MS) return idle(_flyLastOk);
+  _flyLastAt = nowMs;
+  const circle = FLYITALY_FOCUS[_flyNext++ % FLYITALY_FOCUS.length]!;
+  const r = await fetchUpstream(FLYITALY, [circle]);
+  recordUpstreamHealth(FLYITALY, r, Date.now());
+  _flyLastOk = r.ok;
+  return r;
+}
+
+/** True while a total outage is in progress, so it is logged once. */
+let _allDownLogged = false;
 
 export async function fetchAdsbAircraft(): Promise<AdsbSnapshot> {
   // Upstreams in parallel — different hosts, no shared rate limit.
@@ -1157,9 +1673,9 @@ export async function fetchAdsbAircraft(): Promise<AdsbSnapshot> {
   const tick = _pollTick++;
   const planNow = Date.now();
   const shards = planShards(tick, planNow);
-  const results = config.ADSB_DISABLED
-    ? []
-    : await Promise.all(
+  const [rotation, fly] = config.ADSB_DISABLED
+    ? [[] as UpstreamResult[], null]
+    : await Promise.all([Promise.all(
         UPSTREAMS.map(async (u, i): Promise<UpstreamResult> => {
           const circles = shards[i] ?? [];
           if (circles.length > 0) return fetchUpstream(u, circles);
@@ -1173,20 +1689,26 @@ export async function fetchAdsbAircraft(): Promise<AdsbSnapshot> {
             error: `paused (${h.reason ?? 'no circles'}) until ${new Date(h.pausedUntil).toISOString()}: ${h.error ?? ''}`.trim(),
           };
         }),
-      );
+      ), pollFlyItaly(planNow)]);
   const doneNow = Date.now();
-  results.forEach((r, i) => recordUpstreamHealth(UPSTREAMS[i]!, r, doneNow));
+  rotation.forEach((r, i) => recordUpstreamHealth(UPSTREAMS[i]!, r, doneNow));
+  // FlyItaly records its own health (pollFlyItaly); from here on it is just
+  // another upstream.
+  const results = fly ? [...rotation, fly] : rotation;
 
   // Our own ADS-B feeder nodes are just another source: a ~5s cadence against
   // the aggregators' ~15s, covering whatever the circle rotation misses.
   // mergeAircraft resolves any overlap — freshest position wins, metadata
   // backfills from the other record, sources union — so nothing here needs to
   // know which kind of source a record came from.
-  const nodeRecords = nodeAdsbRecords(Date.now());
+  // One instant for everything below: every source's age is measured to it,
+  // so "freshest wins" compares like with like.
+  const mergeNow = Date.now();
+  const nodeRecords = nodeAdsbRecords(mergeNow);
   const nodeFeeds = nodeAdsbFeedCount();
 
   const fresh = mergeAircraft([
-    ...results.flatMap((r) => r.records),
+    ...ageToNow(results.flatMap((r) => r.records), mergeNow),
     ...nodeRecords,
   ]).filter((a) => inAuBbox(a.lat, a.lon));
   // Only a genuine upstream outage is a failure. With ADSB_DISABLED there are
@@ -1194,28 +1716,41 @@ export async function fetchAdsbAircraft(): Promise<AdsbSnapshot> {
   // outage means the source is working — neither should trip the backoff.
   const allDown = results.length > 0 && results.every((r) => !r.ok);
   if (allDown && fresh.length === 0) {
-    // Real outage — throw so the poller's failure counter and backoff
-    // engage. Partial failures never reach here.
-    throw new Error(
-      `adsb: all upstreams failed: ${results
-        .map((r) => `${r.id}: ${r.error ?? 'unknown'}`)
-        .join('; ')}`,
-    );
+    // A total outage is NOT thrown. The poller's backoff starts at five
+    // minutes and climbs, so a twenty-second network blip stopped aircraft
+    // for five minutes while the last snapshot sat frozen and looked live.
+    // Each feed already rests itself when it fails (recordUpstreamHealth), so
+    // carrying on costs nothing: the held aircraft age, are estimated and
+    // drop out on their own clocks, and the next poll that gets an answer is
+    // the recovery. Logged once per outage, not once per poll.
+    if (!_allDownLogged) {
+      _allDownLogged = true;
+      log.warn(
+        { upstreams: results.map((r) => `${r.id}: ${r.error ?? 'unknown'}`) },
+        'adsb: no source answered; serving held aircraft until one does',
+      );
+    }
+  } else if (_allDownLogged) {
+    _allDownLogged = false;
+    log.info('adsb: a source is answering again');
   }
 
-  const merged = applyHoldover(fresh, Date.now());
+  const merged = applyHoldover(fresh, mergeNow);
   // Trails (and, through them, the persisted history) record only OBSERVED
   // positions. A frozen holdover record was harmless here because
   // updateTrails already skips a point identical to the last one, but an
   // estimated record MOVES — without this filter every trail would accumulate
   // fabricated positions indistinguishable from real ones.
   const observed = merged.filter((a) => !a.estimated);
-  updateTrails(observed, Date.now());
+  updateTrails(observed, mergeNow);
+  // What each of our receivers should have heard and did not: the coverage
+  // view's dark dots. Observed positions only — a dead-reckoned one is a guess.
+  noteNetworkAircraft(observed, mergeNow);
   // Persist for the historical view: the observed positions go into the
   // archive's current minute, and any minute that has closed is written.
   // Driven from here rather than its own timer so a write can only ever
   // follow a finished poll.
-  noteAdsbPositions(observed, Date.now());
+  noteAdsbPositions(withoutStaleCarriedAlt(observed), mergeNow);
   maybeFlushAdsbTracks(Date.now());
 
   // Stable ordering: emergency services first, then lowest altitude —
@@ -1256,7 +1791,8 @@ export async function fetchAdsbAircraft(): Promise<AdsbSnapshot> {
       },
     ],
     bbox: AU_BBOX,
-    fetched_at: new Date().toISOString(),
+    // The instant every ageSec above is measured to.
+    fetched_at: new Date(mergeNow).toISOString(),
   };
 }
 

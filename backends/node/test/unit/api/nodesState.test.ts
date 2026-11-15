@@ -49,6 +49,7 @@ vi.mock('../../../src/services/nodes/registry.js', async (orig) => {
     setNodeLocation: vi.fn(async () => nodeRow()),
     createNode: vi.fn(async () => nodeRow()),
     countNodesForUser: vi.fn(async () => 0),
+    setPagerTesting: vi.fn(async () => nodeRow()),
   };
 });
 
@@ -121,6 +122,7 @@ beforeEach(() => {
   vi.mocked(registry.setNodeLocation).mockClear();
   vi.mocked(registry.createNode).mockClear();
   vi.mocked(configPush.pushConfigToNode).mockClear();
+  vi.mocked(registry.setPagerTesting).mockClear().mockResolvedValue(nodeRow());
 });
 
 describe('GET /api/nodes/:id (pager)', () => {
@@ -265,5 +267,55 @@ describe('PATCH /api/nodes/:id config_override concurrency', () => {
     expect(
       vi.mocked(log.warn).mock.calls.some((call) => String(call[1]).includes('drops stored channels')),
     ).toBe(false);
+  });
+});
+
+describe('PUT /api/nodes/:id/pager-testing', () => {
+  const bench = [{ label: 'BENCH', mhz: 153.35 }];
+
+  it('turns testing on with frequencies, pushes, and lists them as the active plan', async () => {
+    vi.mocked(registry.setPagerTesting).mockResolvedValue(
+      nodeRow({ config_override: { pagerTesting: true, pagerTestFrequencies: bench } }),
+    );
+    const res = await put('/api/nodes/node-1/pager-testing', { enabled: true, frequencies: bench });
+    expect(res.status).toBe(200);
+    expect(registry.setPagerTesting).toHaveBeenCalledWith('node-1', { enabled: true, frequencies: bench });
+    expect(configPush.pushConfigToNode).toHaveBeenCalledWith('node-1');
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body['pagerTesting']).toBe(true);
+    expect(body['pagerFrequencies']).toEqual([{ label: 'BENCH', mhz: 153.35, service: null }]);
+  });
+
+  it('turning on needs a frequency, sent or stored', async () => {
+    const res = await put('/api/nodes/node-1/pager-testing', { enabled: true });
+    expect(res.status).toBe(400);
+    expect(registry.setPagerTesting).not.toHaveBeenCalled();
+
+    vi.mocked(registry.getNode).mockResolvedValue(nodeRow({ config_override: { pagerTestFrequencies: bench } }));
+    const again = await put('/api/nodes/node-1/pager-testing', { enabled: true });
+    expect(again.status).toBe(200);
+  });
+
+  it('turns testing off without touching the stored list', async () => {
+    const res = await put('/api/nodes/node-1/pager-testing', { enabled: false });
+    expect(res.status).toBe(200);
+    expect(registry.setPagerTesting).toHaveBeenCalledWith('node-1', { enabled: false });
+  });
+
+  it('rejects bad labels, out-of-range frequencies, repeats and non-pager nodes', async () => {
+    for (const frequencies of [
+      [{ label: 'has space', mhz: 153 }],
+      [{ label: 'LOW', mhz: 10 }],
+      [{ label: 'HIGH', mhz: 2000 }],
+      [{ label: 'A', mhz: 150 }, { label: 'A', mhz: 151 }],
+      Array.from({ length: 9 }, (_, i) => ({ label: `F${i}`, mhz: 150 + i })),
+    ]) {
+      const res = await put('/api/nodes/node-1/pager-testing', { enabled: true, frequencies });
+      expect(res.status).toBe(400);
+    }
+    vi.mocked(registry.getNode).mockResolvedValue(nodeRow({ kind: 'radio' }));
+    const radio = await put('/api/nodes/node-1/pager-testing', { enabled: true, frequencies: bench });
+    expect(radio.status).toBe(400);
+    expect(registry.setPagerTesting).not.toHaveBeenCalled();
   });
 });

@@ -76,6 +76,10 @@ type ConfigApplier interface {
 	// the image but keeps the PID, so children are NOT torn down and an
 	// orphaned dump1090 would still hold the dongle when the new image starts.
 	StopDecoder()
+	// ResumeDecoder starts the decoder again after StopDecoder, when the
+	// self-update that stopped it did not go through. Does nothing if it is
+	// already running or the node has no config.
+	ResumeDecoder() error
 }
 
 // StatusProvider returns the current component states (name -> status) for
@@ -618,6 +622,12 @@ func (c *Client) runUpdateCheck(reason string) (string, bool) {
 				if swerr := update.SwapAndRestart(pending); swerr != nil {
 					log.Printf("wsclient: update: swap + restart failed: %v", swerr)
 					c.swapScheduled.Store(false) // allow a retry if the swap didn't take
+					// The decoder was stopped for a swap that did not happen, and
+					// this process is carrying on. Left stopped, the receiver was
+					// deaf until something else happened to push a config.
+					if rerr := c.applier.ResumeDecoder(); rerr != nil {
+						log.Printf("wsclient: update: could not restart the decoder: %v", rerr)
+					}
 				}
 			}()
 		} else {

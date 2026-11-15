@@ -16,6 +16,7 @@ import {
   type ArchiveQueryRow,
   type DataHistoryParams,
 } from '../../../src/services/dataHistoryQuery.js';
+import { OUTAGE_SOURCES } from '../../../src/sources/outages/common.js';
 
 function defaultParams(overrides: Partial<DataHistoryParams> = {}): DataHistoryParams {
   return {
@@ -67,6 +68,13 @@ describe('sourceFamilies', () => {
 
   it('routes power sources to archive_power', () => {
     expect(sourceFamilies(['endeavour_current', 'ausgrid'])).toEqual(['archive_power']);
+  });
+
+  it("routes every distributor's archived source to archive_power, not the misc fallback", () => {
+    // An unlisted source falls through to archive_misc, where a distributor
+    // asked for on its own would find nothing.
+    for (const s of OUTAGE_SOURCES) expect(sourceFamilies([s]), s).toEqual(['archive_power']);
+    expect(sourceFamilies(['ausnet', 'westernpower', 'ausgrid'])).toEqual(['archive_power']);
   });
 
   it('routes every fire agency to archive_rfs, not just NSW', () => {
