@@ -493,6 +493,10 @@
     .provider-header.single { cursor: default; }
     .provider-header.single:hover { background: rgba(15,23,42,0.4); }
     .provider-header.single .pv-toggle { margin-left: auto; }
+    @media (max-width: 540px) {
+      /* The wizard's rows are narrower than the editor's: the name alone fits. */
+      .wizard .provider-header .pv-sub { display: none; }
+    }
     .provider-header .pv-sub {
       color: var(--text-soft); font-size: var(--fs-1);
       min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -986,6 +990,8 @@
       .hamburger { display: inline-flex; }
       /* One-row top bar: where there is a drawer, the server picker lives in it. */
       body:has(.sidebar) .topbar-center { display: none; }
+      /* Admin has no drawer to hold them, and "Back" returns to the server. */
+      body.no-sidebar .topbar-center { display: none; }
       .sb-guild { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
       .sb-guild .guild-dd { min-width: 0; flex: 1 1 auto; }
       .sb-guild .guild-dd-trigger { max-width: 100%; width: 100%; }
@@ -1162,6 +1168,11 @@
       color: var(--text-muted); cursor: pointer; white-space: nowrap;
       padding: 0.6rem 0.9rem; font: inherit; font-size: var(--fs-2); font-weight: 600;
     }
+    @media (max-width: 700px) {
+      /* Wrap instead of scrolling: a tab off the edge looks like no tab. */
+      .tabs { flex-wrap: wrap; overflow: visible; }
+      .tab { padding: 0.5rem 0.7rem; }
+    }
     .tab:hover { color: var(--text-main); }
     .tab.on { color: var(--text-main); border-bottom-color: var(--accent); }
     .tab:focus-visible { outline-offset: -2px; }
@@ -1172,7 +1183,7 @@
     /* Admin: subscriptions, one block per provider */
     /* Columns, not a grid: blocks of different heights pack under each other
        instead of leaving a hole beside the tallest one in each row. */
-    .type-groups { columns: 230px; column-gap: 0.6rem; margin-bottom: 1.25rem; }
+    .type-groups { columns: 250px; column-gap: 0.6rem; margin-bottom: 1.25rem; }
     .type-group {
       break-inside: avoid; margin: 0 0 0.6rem;
       background: var(--bg-elevated);
@@ -1326,7 +1337,8 @@
       vertical-align: middle;
       color: var(--text-main);
     }
-    .admin-table td:has(> .g-name) { min-width: 190px; }
+    .admin-table td:has(> .g-name), .admin-table td.cell-name { min-width: 190px; }
+    .admin-table td.cell-name { white-space: nowrap; }
     .admin-table th {
       white-space: nowrap;
       background: var(--bg-elevated-soft);
@@ -5227,7 +5239,7 @@ function renderAdmin() {
     for (const u of allUsers) {
       const isActive = u.is_active !== false;
       sbody.appendChild(el('tr', {}, [
-        el('td', {}, [
+        el('td', { class: 'cell-name' }, [
           u.avatar_url ? el('img', { class: 'g-icon', src: u.avatar_url, alt: '' }) : null,
           el('span', {}, '@' + (u.username || '?')),
           u.is_admin ? el('span', { class: 'admin-pill' }, 'admin') : null,
