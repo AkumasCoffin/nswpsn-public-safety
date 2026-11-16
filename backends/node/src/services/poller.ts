@@ -66,15 +66,22 @@ const SKIP_ARCHIVE = new Set<string>([
   'firms_hotspots',
 ]);
 
+/** How many polls per source the health counts look back over. */
+export const RECENT_POLLS = 200;
+
+function recordPoll(state: SourceState, ok: boolean): void {
+  state.recent.push(ok);
+  if (state.recent.length > RECENT_POLLS) state.recent.splice(0, state.recent.length - RECENT_POLLS);
+}
+
 interface SourceState {
   timer: NodeJS.Timeout | null;
   failureCount: number;
-  /** Cumulative successful fetches since last reset / process start.
-   *  Surfaced in /api/dashboard/admin/sources as `total_success`. */
-  totalSuccess: number;
-  /** Cumulative failed fetches since last reset / process start.
-   *  Surfaced as `total_fail`. */
-  totalFail: number;
+  /** How the most recent polls went, oldest first, true = success. At most
+   *  RECENT_POLLS long. The admin panel's success / failure counts are over
+   *  this window, so an old run of failures ages out by itself and nothing
+   *  has to be reset by hand. */
+  recent: boolean[];
   /** Wall-clock of last successful fetch (epoch seconds). */
   lastSuccessTs: number | null;
   /** Wall-clock of last attempt (success or failure). */
@@ -105,8 +112,7 @@ function ensureState(name: string): SourceState {
     s = {
       timer: null,
       failureCount: 0,
-      totalSuccess: 0,
-      totalFail: 0,
+      recent: [],
       lastSuccessTs: null,
       lastAttemptTs: null,
       lastError: null,
@@ -185,7 +191,7 @@ async function runOnceInner(src: SourceDefinition): Promise<void> {
 
     const wasFailing = state.failureCount > 0;
     state.failureCount = 0;
-    state.totalSuccess += 1;
+    recordPoll(state, true);
     state.lastSuccessTs = fetchedAt;
     state.lastError = null;
     const ms = Date.now() - startedAt;
@@ -201,7 +207,7 @@ async function runOnceInner(src: SourceDefinition): Promise<void> {
     }
   } catch (err) {
     state.failureCount += 1;
-    state.totalFail += 1;
+    recordPoll(state, false);
     const newErr = (err as Error).message;
     const errChanged = newErr !== state.lastError;
     state.lastError = newErr;
@@ -405,10 +411,12 @@ export interface SourceMetricSnapshot {
   /** Last error message, if any (cleared on next success). */
   last_error: string | null;
   consec_fails: number;
-  /** Cumulative successful fetches since last reset. */
+  /** Successes among the last `window` polls. */
   total_success: number;
-  /** Cumulative failed fetches since last reset. */
+  /** Failures among the last `window` polls. */
   total_fail: number;
+  /** How many polls the two counts cover: up to RECENT_POLLS. */
+  window: number;
 }
 
 /** Returns one entry per registered source. Sources that have never been
@@ -427,33 +435,12 @@ export function getSourceMetrics(): SourceMetricSnapshot[] {
       last_error_at: s?.lastError ? (s.lastAttemptTs ?? null) : null,
       last_error: s?.lastError ?? null,
       consec_fails: s?.failureCount ?? 0,
-      total_success: s?.totalSuccess ?? 0,
-      total_fail: s?.totalFail ?? 0,
+      total_success: (s?.recent ?? []).filter(Boolean).length,
+      total_fail: (s?.recent ?? []).filter((ok) => !ok).length,
+      window: s?.recent.length ?? 0,
     });
   }
   return out;
-}
-
-/** Reset every (or just one) source's failure/error counters. Used by the
- *  admin "Clear stats" button. Last-success timestamps are preserved so
- *  recently-OK sources don't suddenly appear "unknown". */
-export function resetSourceMetrics(name?: string): void {
-  if (name) {
-    const s = _state.get(name);
-    if (s) {
-      s.failureCount = 0;
-      s.totalSuccess = 0;
-      s.totalFail = 0;
-      s.lastError = null;
-    }
-    return;
-  }
-  for (const s of _state.values()) {
-    s.failureCount = 0;
-    s.totalSuccess = 0;
-    s.totalFail = 0;
-    s.lastError = null;
-  }
 }
 
 /** TEST-ONLY: seed one source's state directly so source-health tests can
@@ -464,6 +451,11 @@ export function _seedSourceStateForTests(
 ): void {
   const s = ensureState(name);
   Object.assign(s, patch);
+}
+
+/** TEST-ONLY: record one poll outcome the way a real poll does. */
+export function _recordPollForTests(name: string, ok: boolean): void {
+  recordPoll(ensureState(name), ok);
 }
 
 /** TEST-ONLY: reset the in-memory map. */

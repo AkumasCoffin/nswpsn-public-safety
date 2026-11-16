@@ -81,7 +81,6 @@ import {
   catalogForClient,
 } from '../services/alertCatalog.js';
 import {
-  clearSourceErrors,
   getSourceHealthSnapshot,
 } from '../services/sourceHealth.js';
 import { SwrCache } from '../services/swrCache.js';
@@ -2584,18 +2583,11 @@ dashboardRouter.get('/api/dashboard/admin/sources', async (c) => {
     consec_fails: r.consec_fails,
     total_success: r.total_success,
     total_fail: r.total_fail,
+    window: r.window,
     age_seconds: r.age_seconds,
     state: r.state,
   }));
   return c.json({ sources, server_time: now });
-});
-
-dashboardRouter.delete('/api/dashboard/admin/sources', async (c) => {
-  const session = await requireAdmin(c);
-  if (session instanceof Response) return session;
-  clearSourceErrors();
-  log.info('source_health: cleared by admin');
-  return c.json({ ok: true });
 });
 
 // ---------------------------------------------------------------------------

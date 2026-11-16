@@ -5481,23 +5481,6 @@ function stopAdminSourcesAutoRefresh() {
   }
 }
 
-async function clearAdminSources() {
-  const ok = await confirmDialog(
-    'Reset source counters?',
-    'This wipes the success/failure totals and last-error messages for every source. Counters resume from zero.',
-    'Reset', /*okDanger=*/false);
-  if (!ok) return;
-  try {
-    await api('/api/dashboard/admin/sources', { method: 'DELETE' });
-    await loadAdminSources();
-    const host = document.getElementById('admin-sources-host');
-    if (host) { host.innerHTML = ''; host.appendChild(renderAdminSources()); }
-    toast('Source counters cleared.', 'ok');
-  } catch (e) {
-    handleApiError(e, 'Clear failed.');
-  }
-}
-
 function renderAdminSources() {
   const wrap = el('div', { class: 'admin-sources' });
   startAdminSourcesAutoRefresh();
@@ -5511,10 +5494,6 @@ function renderAdminSources() {
         if (host) { host.innerHTML = ''; host.appendChild(renderAdminSources()); }
       },
     }, [el('i', { class: 'fa-solid fa-rotate' }), ' Refresh']),
-    el('button', {
-      class: 'btn btn-ghost btn-xs',
-      onclick: () => clearAdminSources(),
-    }, [el('i', { class: 'fa-solid fa-eraser' }), ' Clear stats']),
   ]));
 
   const sa = state.adminSources || {};
@@ -5576,18 +5555,23 @@ function renderAdminSources() {
     }
     card.appendChild(lastLine);
 
+    // Counts are over the source's most recent polls (up to 200), so an old
+    // run of failures ages out and nothing needs resetting.
     const totSuccess = src.total_success || 0;
     const totFail = src.total_fail || 0;
-    card.appendChild(el('div', { class: 'src-totals' }, [
-      el('span', { class: 'src-tot-ok', title: 'Successful fetches since last reset' }, [
+    const polls = src.window != null ? src.window : totSuccess + totFail;
+    const over = `of the last ${polls} poll${polls === 1 ? '' : 's'}`;
+    card.appendChild(el('div', { class: 'src-totals', title: `${totSuccess} successful and ${totFail} failed, ${over}` }, [
+      el('span', { class: 'src-tot-ok' }, [
         el('i', { class: 'fa-solid fa-check' }),
-        ` ${totSuccess} successful`,
+        ` ${totSuccess} ok`,
       ]),
       el('span', { class: 'src-tot-sep' }, '·'),
-      el('span', { class: 'src-tot-fail' + (totFail > 0 ? ' has-fail' : ''), title: 'Failed fetches since last reset' }, [
+      el('span', { class: 'src-tot-fail' + (totFail > 0 ? ' has-fail' : '') }, [
         el('i', { class: 'fa-solid fa-xmark' }),
         ` ${totFail} failed`,
       ]),
+      el('span', { class: 'src-tot-sep' }, over),
     ]));
 
     if (src.last_error_msg) {
@@ -5611,10 +5595,10 @@ function renderAdminSources() {
       const age = src.last_success ? formatAge(Math.max(0, serverNow - Number(src.last_success))) + ' ago' : '—';
       return el('div', {
         class: 'src-row',
-        title: `${src.total_success || 0} successful, ${fails} failed since the last reset`,
+        title: `${src.total_success || 0} successful, ${fails} failed, of the last ${src.window != null ? src.window : (src.total_success || 0) + fails} polls`,
       }, [
         el('span', { class: 'src-row-name' }, src.label || src.name),
-        fails > 0 ? el('span', { class: 'src-row-fail' }, [el('i', { class: 'fa-solid fa-xmark' }), ` ${fails} failed`]) : null,
+        fails > 0 ? el('span', { class: 'src-row-fail' }, [el('i', { class: 'fa-solid fa-xmark' }), ` ${fails} of ${src.window != null ? src.window : (src.total_success || 0) + fails}`]) : null,
         el('span', { class: 'src-row-age' }, age),
       ]);
     })));

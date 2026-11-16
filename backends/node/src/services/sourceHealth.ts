@@ -1,8 +1,9 @@
 /**
  * Admin source-health module.
  *
- * Exposes a runtime view over the poller's per-source metrics, plus a
- * clear operation backing the admin "Clear stats" button. Mirrors the
+ * Exposes a runtime view over the poller's per-source metrics. The success
+ * and failure counts cover each source's last RECENT_POLLS polls, so there is
+ * nothing to clear: an old run of failures ages out. Mirrors the
  * payload shape from python's `dashboard_admin_sources` (external_api_proxy.py
  * lines 18981-19038) without persisting anything to Postgres — the python
  * version flushed counters to a `source_health` table via a 60s flusher
@@ -27,7 +28,6 @@
  */
 import {
   getSourceMetrics,
-  resetSourceMetrics,
   type SourceMetricSnapshot,
 } from './poller.js';
 
@@ -138,8 +138,10 @@ export interface SourceHealthRow {
   last_error_at: number | null;
   last_error: string | null;
   consec_fails: number;
+  /** Successes and failures among the last `window` polls. */
   total_success: number;
   total_fail: number;
+  window: number;
   /** Seconds since last success, or null if never successful. */
   age_seconds: number | null;
   state: SourceState;
@@ -204,14 +206,10 @@ export function getSourceHealthSnapshot(): SourceHealthRow[] {
       consec_fails: m.consec_fails,
       total_success: m.total_success,
       total_fail: m.total_fail,
+      window: m.window,
       age_seconds: age,
       state: deriveState(m, age, cfg),
     });
   }
   return out;
-}
-
-/** Wipe failure/error counters. Backs the admin "Clear stats" button. */
-export function clearSourceErrors(name?: string): void {
-  resetSourceMetrics(name);
 }

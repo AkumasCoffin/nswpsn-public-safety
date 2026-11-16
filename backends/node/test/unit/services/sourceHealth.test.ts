@@ -6,13 +6,12 @@
  * No timers, no DB — pure functions.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import {
-  getSourceHealthSnapshot,
-  clearSourceErrors,
-} from '../../../src/services/sourceHealth.js';
+import { getSourceHealthSnapshot } from '../../../src/services/sourceHealth.js';
 import {
   _seedSourceStateForTests,
   _resetPollerStateForTests,
+  _recordPollForTests,
+  RECENT_POLLS,
 } from '../../../src/services/poller.js';
 import { registerSource } from '../../../src/services/sourceRegistry.js';
 
@@ -150,59 +149,37 @@ describe('getSourceHealthSnapshot', () => {
   });
 });
 
-describe('clearSourceErrors', () => {
-  it('resets every source when called with no arg', () => {
-    const now = Math.floor(Date.now() / 1000);
-    _seedSourceStateForTests('rfs', {
-      lastSuccessTs: now - 60,
-      lastError: 'broken',
-      failureCount: 3,
-    });
-    _seedSourceStateForTests('pager', {
-      lastSuccessTs: now - 60,
-      lastError: 'broken',
-      failureCount: 2,
-    });
-    clearSourceErrors();
-    const rows = getSourceHealthSnapshot();
-    for (const r of rows) {
-      expect(r.consec_fails).toBe(0);
-      expect(r.last_error).toBeNull();
-    }
+describe('counts over the most recent polls', () => {
+  const row = () => getSourceHealthSnapshot().find((r) => r.name === 'rfs')!;
+
+  it('counts successes and failures in the window, and says how many polls it covers', () => {
+    _seedSourceStateForTests('rfs', { recent: [true, true, false, true] });
+    expect(row().total_success).toBe(3);
+    expect(row().total_fail).toBe(1);
+    expect(row().window).toBe(4);
   });
 
-  it('resets a single source when name supplied', () => {
-    const now = Math.floor(Date.now() / 1000);
-    _seedSourceStateForTests('rfs', {
-      lastSuccessTs: now - 60,
-      lastError: 'broken',
-      failureCount: 3,
-    });
-    _seedSourceStateForTests('pager', {
-      lastSuccessTs: now - 60,
-      lastError: 'still broken',
-      failureCount: 2,
-    });
-    clearSourceErrors('rfs');
-    const rfs = getSourceHealthSnapshot().find((r) => r.name === 'rfs');
-    const pager = getSourceHealthSnapshot().find((r) => r.name === 'pager');
-    expect(rfs?.consec_fails).toBe(0);
-    expect(rfs?.last_error).toBeNull();
-    // Pager untouched.
-    expect(pager?.consec_fails).toBe(2);
-    expect(pager?.last_error).toBe('still broken');
+  it('is empty for a source that has not been polled', () => {
+    expect(row().total_success).toBe(0);
+    expect(row().total_fail).toBe(0);
+    expect(row().window).toBe(0);
   });
 
-  it('preserves last_ok_at on clear (only resets failure state)', () => {
-    const now = Math.floor(Date.now() / 1000);
-    _seedSourceStateForTests('rfs', {
-      lastSuccessTs: now - 60,
-      lastError: 'broken',
-      failureCount: 3,
-    });
-    clearSourceErrors();
-    const rfs = getSourceHealthSnapshot().find((r) => r.name === 'rfs');
-    expect(rfs?.last_ok_at).not.toBeNull();
+  it('looks back over 200 polls', () => {
+    expect(RECENT_POLLS).toBe(200);
+  });
+
+  it('lets old failures age out instead of needing a reset', () => {
+    // Ten failures, then a long healthy run: once 200 successes have been
+    // recorded since, the failures are no longer counted.
+    for (let i = 0; i < 10; i += 1) _recordPollForTests('rfs', false);
+    for (let i = 0; i < 150; i += 1) _recordPollForTests('rfs', true);
+    expect(row().total_fail).toBe(10);
+    expect(row().window).toBe(160);
+    for (let i = 0; i < 50; i += 1) _recordPollForTests('rfs', true);
+    expect(row().total_fail).toBe(0);
+    expect(row().total_success).toBe(200);
+    expect(row().window).toBe(200);
   });
 });
 
