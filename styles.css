@@ -560,6 +560,11 @@ a:hover { text-decoration: underline; }
 }
 
 .agency-search-group {
+  /* The results box is a scrolling flex column. A group clips its own
+     overflow, so without this it is squeezed below its content once the
+     list is taller than the box, and its rows are cut off instead of the
+     list scrolling. */
+  flex-shrink: 0;
   border: 1px solid rgba(148, 163, 184, 0.12);
   border-radius: 8px;
   overflow: hidden;
