@@ -28,6 +28,8 @@ vi.mock('../../../src/config.js', () => ({
     PAGERMON_INGEST_API_KEY: 'nsw-env-key',
     PAGERMON_INGEST_URL_QLD: 'https://qld.example',
     PAGERMON_INGEST_API_KEY_QLD: 'qld-key',
+    PAGERMON_INGEST_URL_TAS: 'https://tas.example',
+    PAGERMON_INGEST_API_KEY_TAS: 'tas-key',
     NODE_PRESET_DIR: '.',
   },
 }));
@@ -56,6 +58,12 @@ describe('getPagerIngest (per-state routing)', () => {
     expect(await getPagerIngest(null)).toEqual({ url: 'https://nsw-env.example', apiKey: 'nsw-env-key' });
     expect(await getPagerIngest('')).toEqual({ url: 'https://nsw-env.example', apiKey: 'nsw-env-key' });
     expect(await getPagerIngest(undefined)).toEqual({ url: 'https://nsw-env.example', apiKey: 'nsw-env-key' });
+  });
+
+  it('TAS: its own env pair, never the Queensland pair or the NSW row', async () => {
+    nextRows = [{ pagermon_ingest_url: 'https://nsw-db.example', pagermon_ingest_api_key: 'nsw-db-key' }];
+    expect(await getPagerIngest('TAS')).toEqual({ url: 'https://tas.example', apiKey: 'tas-key' });
+    expect(await getPagerIngest('tas')).toEqual({ url: 'https://tas.example', apiKey: 'tas-key' });
   });
 
   it('QLD: env pair only — the NSW DB row is never consulted', async () => {

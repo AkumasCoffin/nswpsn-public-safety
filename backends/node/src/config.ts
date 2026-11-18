@@ -227,6 +227,8 @@ const Schema = z.object({
   // and in .env, done.
   PAGERMON_INGEST_URL_QLD: z.string().optional(),
   PAGERMON_INGEST_API_KEY_QLD: z.string().optional(),
+  PAGERMON_INGEST_URL_TAS: z.string().optional(),
+  PAGERMON_INGEST_API_KEY_TAS: z.string().optional(),
 
   // Pager capcodes to DROP from the relay (comma-separated) — non-message
   // transmitters that clutter the feed with encoded/binary data frames rather

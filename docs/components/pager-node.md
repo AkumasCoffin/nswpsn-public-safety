@@ -314,7 +314,8 @@ Never write code or documentation that implies otherwise.
 Routing is **per state**. A node's messages go to the Pagermon for `nodes.state`:
 the unsuffixed `PAGERMON_INGEST_URL` / `PAGERMON_INGEST_API_KEY` pair is NSW (the
 legacy default, overridable from the staff-set `feeder_global_config` row), and
-every other state is env-only — `PAGERMON_INGEST_URL_QLD` and so on. Bringing a
+every other state is env-only — `PAGERMON_INGEST_URL_QLD`, `PAGERMON_INGEST_URL_TAS`
+(each with its `PAGERMON_INGEST_API_KEY_<STATE>`). Bringing a
 new state online is: stand up its Pagermon, add its pair, done. When neither a
 DB value nor an env pair is set, `pager-upload` returns 503.
 

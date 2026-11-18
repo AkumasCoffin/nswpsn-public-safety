@@ -870,6 +870,7 @@ export interface PagerIngest {
 // another state's server.
 const STATE_INGEST_ENV: Record<string, { url: string | undefined; apiKey: string | undefined }> = {
   QLD: { url: config.PAGERMON_INGEST_URL_QLD, apiKey: config.PAGERMON_INGEST_API_KEY_QLD },
+  TAS: { url: config.PAGERMON_INGEST_URL_TAS, apiKey: config.PAGERMON_INGEST_API_KEY_TAS },
 };
 
 /** Read the Pagermon ingest URL + key for a node's state. NSW (or null/unknown

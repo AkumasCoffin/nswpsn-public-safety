@@ -44,6 +44,14 @@ describe('buildConfigPayload (pager)', () => {
     expect(p.configVersion).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it('TAS node gets the main frequency first, then the alternate', async () => {
+    const tas = await buildConfigPayload(pagerNode({ state: 'TAS' }));
+    expect(tas.pager!.frequencies).toEqual([
+      { label: 'TASMAIN', mhz: 148.713 },
+      { label: 'TASALT', mhz: 145.175 },
+    ]);
+  });
+
   it('QLD node gets the single QFES frequency', async () => {
     const qld = await buildConfigPayload(pagerNode({ state: 'QLD' }));
     expect(qld.pager!.frequencies).toEqual([{ label: 'QFES', mhz: 148.6375 }]);
