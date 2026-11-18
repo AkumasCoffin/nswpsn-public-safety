@@ -262,7 +262,9 @@ describe('pagerPlanLabelFor', () => {
     expect(pagerPlanLabelFor('NSW', 148.5875)).toBe('NSWRFS');
     expect(pagerPlanLabelFor('NSW', 148.96250000001)).toBe('FRNSW');
     expect(pagerPlanLabelFor('NSW', 148.6375)).toBeNull();
-    expect(pagerPlanLabelFor('QLD', 148.6375)).toBe('QFES');
+    expect(pagerPlanLabelFor('QLD', 148.6375)).toBeNull();
+    expect(pagerPlanLabelFor('TAS', 148.7125)).toBe('TASMAIN');
+    // A page stored while the plan said 148.713 still gets its label.
     expect(pagerPlanLabelFor('TAS', 148.713)).toBe('TASMAIN');
     expect(pagerPlanLabelFor('TAS', 145.175)).toBe('TASALT');
     expect(pagerPlanLabelFor(null, 148.5875)).toBe('NSWRFS');

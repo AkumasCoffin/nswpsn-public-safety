@@ -180,14 +180,17 @@ const PAGER_PLANS: Record<string, PagerFreq[]> = {
     { label: 'NSWRFS', mhz: 148.5875 },
     { label: 'FRNSW', mhz: 148.9625 },
   ],
-  QLD: [{ label: 'QFES', mhz: 148.6375 }],
+  // Queensland had a plan (QFES, 148.6375 MHz) until it was found to carry
+  // no pages; it was removed. A state with no plan here gets the NSW one.
   // One paging system on two frequencies, carrying both Tasmania Fire Service
   // and Ambulance Tasmania. Usually only one of the two is on air in an area,
   // and which one is "main" differs by area. They are 3.5 MHz apart, wider
   // than one SDR spans, so a node with one SDR receives the first only and a
   // node with two receives both.
   TAS: [
-    { label: 'TASMAIN', mhz: 148.713 },
+    // ACMA lists this as 148.713, which is 148.7125 (the 12.5 kHz channel)
+    // rounded to three places.
+    { label: 'TASMAIN', mhz: 148.7125 },
     { label: 'TASALT', mhz: 145.175 },
   ],
 };
@@ -199,9 +202,6 @@ const PAGER_PROTOCOLS = ['POCSAG512', 'POCSAG1200', 'POCSAG2400'];
 const PAGER_SERVICES: Record<string, string> = {
   NSWRFS: 'NSW Rural Fire Service',
   FRNSW: 'Fire & Rescue NSW',
-  // The label predates the 2024 split of QFES; its fire services are now the
-  // Queensland Fire Department.
-  QFES: 'Queensland Fire Department',
   TASMAIN: 'Tasmania Fire Service & Ambulance Tasmania (main)',
   TASALT: 'Tasmania Fire Service & Ambulance Tasmania (alternate)',
 };
@@ -221,7 +221,7 @@ export function pagerPlanWithServicesFor(
 }
 
 /**
- * The plan label (NSWRFS / FRNSW / QFES / TASMAIN / TASALT) for a stored page's frequency, or
+ * The plan label (NSWRFS / FRNSW / TASMAIN / TASALT) for a stored page's frequency, or
  * null when it is not on the state's plan. The stored row has only freq_mhz;
  * this is what the live buffer's `source` field says for the same page.
  * Display only. The tolerance absorbs float storage, not tuning error: plan

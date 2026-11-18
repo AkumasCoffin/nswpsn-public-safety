@@ -47,14 +47,14 @@ describe('buildConfigPayload (pager)', () => {
   it('TAS node gets the main frequency first, then the alternate', async () => {
     const tas = await buildConfigPayload(pagerNode({ state: 'TAS' }));
     expect(tas.pager!.frequencies).toEqual([
-      { label: 'TASMAIN', mhz: 148.713 },
+      { label: 'TASMAIN', mhz: 148.7125 },
       { label: 'TASALT', mhz: 145.175 },
     ]);
   });
 
-  it('QLD node gets the single QFES frequency', async () => {
+  it('QLD has no plan of its own any more: it gets the NSW one', async () => {
     const qld = await buildConfigPayload(pagerNode({ state: 'QLD' }));
-    expect(qld.pager!.frequencies).toEqual([{ label: 'QFES', mhz: 148.6375 }]);
+    expect(qld.pager!.frequencies.map((f) => f.label)).toEqual(['NSWRFS', 'FRNSW']);
   });
 
   it('ignores a pagerPrimary left by the old staff picker', async () => {
@@ -66,8 +66,8 @@ describe('buildConfigPayload (pager)', () => {
       expect(stale.pager!.frequencies.map((f) => f.label)).toEqual(['NSWRFS', 'FRNSW']);
       expect(stale.configVersion).toEqual(plain.configVersion);
     }
-    const qld = await buildConfigPayload(pagerNode({ state: 'QLD', config_override: { pagerPrimary: 'FRNSW' } }));
-    expect(qld.pager!.frequencies).toEqual([{ label: 'QFES', mhz: 148.6375 }]);
+    const tas = await buildConfigPayload(pagerNode({ state: 'TAS', config_override: { pagerPrimary: 'FRNSW' } }));
+    expect(tas.pager!.frequencies.map((f) => f.label)).toEqual(['TASMAIN', 'TASALT']);
   });
 
   it('null/unknown state falls back to the NSW plan (pre-097 rows keep working)', async () => {
@@ -82,8 +82,8 @@ describe('buildConfigPayload (pager)', () => {
 
   it('changing state changes the configVersion (so the node re-syncs live)', async () => {
     const nsw = await buildConfigPayload(pagerNode({ state: 'NSW' }));
-    const qld = await buildConfigPayload(pagerNode({ state: 'QLD' }));
-    expect(nsw.configVersion).not.toEqual(qld.configVersion);
+    const tas = await buildConfigPayload(pagerNode({ state: 'TAS' }));
+    expect(nsw.configVersion).not.toEqual(tas.configVersion);
   });
 
   it('capture/feed reflect the node flags and change the config version', async () => {

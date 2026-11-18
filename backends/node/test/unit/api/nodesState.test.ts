@@ -127,11 +127,12 @@ beforeEach(() => {
 
 describe('GET /api/nodes/:id (pager)', () => {
   it("hands the staff drawer the node's state plan", async () => {
-    vi.mocked(registry.getNode).mockResolvedValue(nodeRow({ state: 'QLD' }));
+    vi.mocked(registry.getNode).mockResolvedValue(nodeRow({ state: 'TAS' }));
     const res = await makeApp().request('/api/nodes/node-1');
     const body = (await res.json()) as Record<string, unknown>;
     expect(body['pagerFrequencies']).toEqual([
-      { label: 'QFES', mhz: 148.6375, service: 'Queensland Fire Department' },
+      { label: 'TASMAIN', mhz: 148.7125, service: 'Tasmania Fire Service & Ambulance Tasmania (main)' },
+      { label: 'TASALT', mhz: 145.175, service: 'Tasmania Fire Service & Ambulance Tasmania (alternate)' },
     ]);
     expect(body).not.toHaveProperty('pagerPrimary');
   });
