@@ -832,6 +832,7 @@
        up in a split that reflows to a single column on narrow screens. */
     .nd-panels { display: flex; flex-direction: column; gap: 0.85rem; }
     .nd-span-all { width: 100%; }
+    html.nd-drawer-open { overflow: hidden; }
     .nd-panels-split {
       display: grid; gap: 1.1rem;
       grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
@@ -4828,6 +4829,34 @@
             </div>
           </div>
 
+          <!-- Raw message capture + decoded radio positions (radio only) -->
+          <div class="nd-panel nd-span-all nd-radio-only">
+            <div class="nd-panel-h">
+              <i class="fas fa-file-waveform"></i> Raw message capture
+              <span class="nd-h-spacer"></span>
+              <span class="nd-sub" id="nd-raw-state" style="text-transform:none; letter-spacing:0; font-weight:400;"></span>
+            </div>
+            <div class="nd-panel-b">
+              <div class="nd-raw-gps" id="nd-raw-gps"></div>
+              <div class="nd-raw-actions">
+                <select id="nd-raw-minutes" class="nd-survey-rings nd-write" title="How long the node logs for. It stops by itself.">
+                  <option value="15">15 minutes</option>
+                  <option value="60" selected>1 hour</option>
+                  <option value="120">2 hours</option>
+                  <option value="240">4 hours</option>
+                </select>
+                <button class="btn btn-secondary btn-sm nd-write" id="nd-raw-toggle" onclick="_ndRawToggle()"
+                  title="Has this node log every message it receives, on its control, voice and data channels, and upload the logs here. Its channels restart once when the capture starts and once when it ends.">
+                  <i class="fas fa-circle-dot"></i> Start capture
+                </button>
+                <button class="btn btn-secondary btn-sm" onclick="_ndRawFetch()" title="Check for newly uploaded files"><i class="fas fa-rotate"></i> Refresh</button>
+                <span class="nd-spacer"></span>
+                <button class="btn btn-secondary btn-sm nd-write" id="nd-raw-clear" onclick="_ndRawClear()" title="Delete every stored log file for this node" style="display:none;"><i class="fas fa-trash"></i> Delete files</button>
+              </div>
+              <div class="nd-raw-files" id="nd-raw-files"></div>
+            </div>
+          </div>
+
           <!-- Component logs (sdrtrunk / rdio) — last 20 lines on demand -->
           <div class="nd-panel nd-span-all nd-radio-only nd-write">
             <div class="nd-panel-h"><i class="fas fa-file-lines"></i> Component logs</div>
@@ -4894,34 +4923,6 @@
               <button class="btn btn-secondary btn-sm" onclick="_ndCfgReload()" title="Discard unsaved edits and reload the saved config"><i class="fas fa-rotate"></i> Revert</button>
               <span class="nd-spacer"></span>
               <button class="btn btn-primary btn-sm" onclick="_ndCfgSave()" title="Save the config and sync it to the node — the agent re-renders the playlist, reloads it, and restarts channels so the change goes live"><i class="fas fa-floppy-disk"></i> Save &amp; sync</button>
-            </div>
-          </div>
-
-          <!-- Raw message capture + decoded radio positions (radio only) -->
-          <div class="nd-panel nd-span-all nd-radio-only">
-            <div class="nd-panel-h">
-              <i class="fas fa-file-waveform"></i> Raw message capture
-              <span class="nd-h-spacer"></span>
-              <span class="nd-sub" id="nd-raw-state" style="text-transform:none; letter-spacing:0; font-weight:400;"></span>
-            </div>
-            <div class="nd-panel-b">
-              <div class="nd-raw-gps" id="nd-raw-gps"></div>
-              <div class="nd-raw-actions">
-                <select id="nd-raw-minutes" class="nd-survey-rings nd-write" title="How long the node logs for. It stops by itself.">
-                  <option value="15">15 minutes</option>
-                  <option value="60" selected>1 hour</option>
-                  <option value="120">2 hours</option>
-                  <option value="240">4 hours</option>
-                </select>
-                <button class="btn btn-secondary btn-sm nd-write" id="nd-raw-toggle" onclick="_ndRawToggle()"
-                  title="Has this node log every message it receives, on its control, voice and data channels, and upload the logs here. Its channels restart once when the capture starts and once when it ends.">
-                  <i class="fas fa-circle-dot"></i> Start capture
-                </button>
-                <button class="btn btn-secondary btn-sm" onclick="_ndRawFetch()" title="Check for newly uploaded files"><i class="fas fa-rotate"></i> Refresh</button>
-                <span class="nd-spacer"></span>
-                <button class="btn btn-secondary btn-sm nd-write" id="nd-raw-clear" onclick="_ndRawClear()" title="Delete every stored log file for this node" hidden><i class="fas fa-trash"></i> Delete files</button>
-              </div>
-              <div class="nd-raw-files" id="nd-raw-files"></div>
             </div>
           </div>
 
@@ -11839,6 +11840,7 @@
 
       const drawer = document.getElementById('node-drawer');
       drawer.classList.add('open');
+      document.documentElement.classList.add('nd-drawer-open');
       drawer.dataset.kind = node.kind || 'radio'; // toggles radio-only vs pager-only panels
       document.getElementById('nd-name').textContent = node.name || 'Node';
       // Repurpose the event-log panel header for pager nodes (it shows pages).
@@ -14336,7 +14338,7 @@
         : '<i class="fas fa-circle-dot"></i> Start capture';
       if (minsEl) minsEl.disabled = on;
       const files = (_ndRaw && Array.isArray(_ndRaw.files)) ? _ndRaw.files : [];
-      if (clearEl) clearEl.hidden = files.length === 0;
+      if (clearEl) clearEl.style.display = files.length === 0 ? 'none' : '';
       if (!files.length) {
         filesEl.textContent = on
           ? 'No files yet. A log is uploaded a couple of minutes after its channel goes quiet.'
@@ -15621,6 +15623,7 @@
       _ndAuthed = false;
       _ndStopNpTicker();
       drawer.classList.remove('open');
+      document.documentElement.classList.remove('nd-drawer-open');
     }
 
     // === Global node settings (P3) =====================================
