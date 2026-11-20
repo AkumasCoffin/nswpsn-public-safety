@@ -88,6 +88,9 @@ type Status struct {
 	// vce's JSON forwarded verbatim). Absent on non-radio kinds and older
 	// agents.
 	ChannelManager any `json:"channelManager,omitempty"`
+	// GPS is the position watcher's state: how many radio positions the
+	// runtime has decoded and the most recent ones. Radio nodes only.
+	GPS any `json:"gps,omitempty"`
 	// SiteSurvey is the RF site survey's progress while one is running. A
 	// survey replaces the node's channel set with test channels for minutes
 	// at a time, so staff watching the node need to see that is what they are

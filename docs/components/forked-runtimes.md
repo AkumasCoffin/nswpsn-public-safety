@@ -181,6 +181,7 @@ What the fork added beyond the port, and why each matters here:
 |---|---|
 | `GET /activity/events` — cursor-paged feed of reception, data and page activity | **This is the source of `node_radio_events`.** `internal/activityship` polls it every ~4s. It carries the real P25 identity — system id, talkgroup, source radio, site, encryption flag — which is how a reception is recorded even when the talkgroup is encrypted and there is no audio |
 | `GET /site/snapshots` — per-P25-site metadata, including active patch groups | `internal/siteship` ships it every ~60s. It is what `/api/radio/monitored-sites` and the map's repeater badges are built on |
+| `GET /gps?after=<seq>` — the radio positions the decoders reported, with coordinates, plus a `gps` count block on `/status` | The activity log stores a GPS event without its coordinates. `internal/gpswatch` polls this every 15s and reports the counts and the latest positions in the agent's status frame (`status.gps`). It only watches: nothing is stored by the backend yet. Held in memory; the sequence restarts with the process |
 | `systemName` + talker `sourceAlias` on the activity feed | identity that would otherwise have to be re-derived |
 | Patched-reception member talkgroups on the activity feed | a patched transmission reports which talkgroups actually carried it |
 | Per-channel decode health and signal level (`syncPercent`, `signalDbfs`) | the measurement `internal/chanmgr` and `internal/decodeprobe` judge a channel on. Without it, automatic channel management has nothing to act on |

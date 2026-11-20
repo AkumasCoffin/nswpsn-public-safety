@@ -38,6 +38,7 @@ import (
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/activityship"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/agentcfg"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/chanmgr"
+	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/gpswatch"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/localweb"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/queue"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/rdioctl"
@@ -471,6 +472,13 @@ func runAgent(ctx context.Context, configPath string) error {
 		})
 		ws.SetChanMgrSnapshot(mgr.Snapshot)
 		go mgr.Run(ctx)
+
+		// Position watcher (radio kind only): reports whether the runtime is
+		// decoding any radio positions, and the latest ones, in the status
+		// frame. Watches only; idles when the runtime has no /gps.
+		gps := gpswatch.New(gpswatch.Options{Fetch: sdr.GPS})
+		ws.SetGPSSnapshot(gps.Snapshot)
+		go gps.Run(ctx)
 
 		// RF site survey (radio kind only): on command from the backend,
 		// measure decode on a list of candidate GRN control frequencies and

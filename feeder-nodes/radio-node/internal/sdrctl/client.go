@@ -481,6 +481,44 @@ func (c *Client) ActivityEvents(sinceID int64, limit int) ([]ActivityEvent, int6
 // and re-serialized unchanged, keeping the agent tolerant of vce contract
 // additions. An older control server without the endpoint returns an error
 // (non-200), which the caller treats as "nothing to ship this tick".
+// GPSPosition is one position the decoders reported, from GET /gps.
+type GPSPosition struct {
+	Seq         int64   `json:"seq"`
+	At          int64   `json:"at"`
+	Lat         float64 `json:"lat"`
+	Lon         float64 `json:"lon"`
+	Type        string  `json:"type,omitempty"`
+	Protocol    string  `json:"protocol,omitempty"`
+	From        string  `json:"from,omitempty"`
+	FromAlias   string  `json:"fromAlias,omitempty"`
+	To          string  `json:"to,omitempty"`
+	ToAlias     string  `json:"toAlias,omitempty"`
+	Channel     string  `json:"channel,omitempty"`
+	FrequencyHz int64   `json:"frequencyHz,omitempty"`
+}
+
+// GPSSummary is the position buffer's counts since sdrtrunk started.
+type GPSSummary struct {
+	StartedAtMs int64 `json:"startedAtMs"`
+	LastSeq     int64 `json:"lastSeq"`
+	Invalid     int64 `json:"invalid"`
+	LastAtMs    int64 `json:"lastAtMs"`
+}
+
+// GPSResponse is the body of GET /gps.
+type GPSResponse struct {
+	Positions []GPSPosition `json:"positions"`
+	Summary   GPSSummary    `json:"summary"`
+}
+
+// GPS returns the positions decoded after a sequence number, oldest first. A
+// runtime that predates the endpoint answers 404 ("status 404" in the error).
+func (c *Client) GPS(after int64, limit int) (GPSResponse, error) {
+	var out GPSResponse
+	err := c.get(fmt.Sprintf("/gps?after=%d&limit=%d", after, limit), &out)
+	return out, err
+}
+
 func (c *Client) SiteSnapshots() ([]json.RawMessage, error) {
 	var r struct {
 		Sites []json.RawMessage `json:"sites"`

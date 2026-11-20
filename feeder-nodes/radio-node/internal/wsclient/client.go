@@ -143,6 +143,7 @@ type Client struct {
 	chanPolMu sync.Mutex
 	chanPol   chanmgr.Policy
 	chanSnap  func() any
+	gpsSnap   func() any
 
 	// RF site survey: at most one at a time, cancellable by staff. The
 	// running flag is also what pauses the channel manager — a survey owns
@@ -206,6 +207,9 @@ func (c *Client) SetDropProvider(d dropProvider) { c.drops = d }
 
 // SetChanMgrSnapshot supplies the channel manager's status-frame snapshot.
 func (c *Client) SetChanMgrSnapshot(fn func() any) { c.chanSnap = fn }
+
+// SetGPSSnapshot supplies the position watcher's status-frame snapshot.
+func (c *Client) SetGPSSnapshot(fn func() any) { c.gpsSnap = fn }
 
 // surveyRunner is the slice of the site-survey runner the client drives.
 type surveyRunner interface {
@@ -733,6 +737,9 @@ func (c *Client) sendStatus(conn *websocket.Conn) error {
 	}
 	if c.chanSnap != nil {
 		st.ChannelManager = c.chanSnap()
+	}
+	if c.gpsSnap != nil {
+		st.GPS = c.gpsSnap()
 	}
 	if c.surveySnap != nil {
 		st.SiteSurvey = c.surveySnap()
