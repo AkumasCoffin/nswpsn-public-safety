@@ -544,3 +544,27 @@ func TestBuildVceConfigRawLogging(t *testing.T) {
 		t.Fatalf("unexpected loggers: %v", loggers)
 	}
 }
+
+// Uplink monitoring reaches SDR-Trunk as monitorUplinks on a P25 channel's
+// decode configuration, and only when it is on: off or unset must leave the
+// config exactly as a runtime without the feature expects it.
+func TestBuildVceConfigMonitorUplinks(t *testing.T) {
+	decode := func(decoder string, cfg *DecoderConfig) map[string]any {
+		payload := ConfigPayload{
+			Channels: []ChannelPlan{{Name: "Site", Frequency: 420000000, Decoder: decoder, AutoStart: true, DecoderConfig: cfg}},
+		}
+		ch := arr(t, marshalState(t, payload, nil), "channels")[0].(map[string]any)
+		return ch["decodeConfiguration"].(map[string]any)
+	}
+	for _, decoder := range []string{"p25p1", "p25p2"} {
+		if _, has := decode(decoder, nil)["monitorUplinks"]; has {
+			t.Fatalf("%s: unset must not send monitorUplinks", decoder)
+		}
+		if _, has := decode(decoder, &DecoderConfig{MonitorUplinks: ptrBool(false)})["monitorUplinks"]; has {
+			t.Fatalf("%s: false must not send monitorUplinks", decoder)
+		}
+		if got := decode(decoder, &DecoderConfig{MonitorUplinks: ptrBool(true)})["monitorUplinks"]; got != true {
+			t.Fatalf("%s: on must send monitorUplinks=true, got %v", decoder, got)
+		}
+	}
+}

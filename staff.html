@@ -4903,6 +4903,9 @@
               <label class="nd-am-toggle" title="Automatic channel management for this node: a trunked channel decoding below 60% for 10 continuous minutes — or below 40% for 5 — is stopped, then retested after 10 minutes and every 30 minutes thereafter, and restored when it recovers. Analog channels and channels without a decode metric are never touched.">
                 <input type="checkbox" id="nd-cfg-automanage" checked> Auto channel management
               </label>
+              <label class="nd-am-toggle" title="Uplink monitoring for this node: whenever the network hands a radio a data channel, the node also listens on the frequency the radio transmits on, where its GPS position reports are. It takes a tuner while it listens and gives it back when the channel goes quiet, so it competes with voice for SDRs: leave it off on a node with one SDR. Only radios within range of this node's antenna can be heard. Saved with the config.">
+                <input type="checkbox" id="nd-cfg-uplinkmon"> Uplink monitoring (GPS)
+              </label>
               <button class="btn btn-secondary btn-sm" onclick="_ndCfgAddChannel()"><i class="fas fa-plus"></i> Add channel</button>
               <button class="btn btn-secondary btn-sm nd-write" onclick="_ndSitePickerOpen()"
                 title="Pick GRN sites from the dataset — their control frequencies are filled in for you. Nearest first.">
@@ -15365,6 +15368,8 @@
       }).join('');
       const amEl = document.getElementById('nd-cfg-automanage');
       if (amEl) amEl.checked = !(_ndConfig.channelManagement && _ndConfig.channelManagement.enabled === false);
+      const umEl = document.getElementById('nd-cfg-uplinkmon');
+      if (umEl) umEl.checked = _ndConfig.uplinkMonitor === true;
       el.innerHTML = `<table class="nd-ch-table">
         <thead><tr>
           <th title="Auto-start this channel when the node comes up">Auto-start</th><th title="Automatic channel management: stop below 60% for 10 min or below 40% for 5 min; first retest after 10 min, then every 30">Auto-manage</th><th>Name</th><th>System</th><th>Site</th><th>Decoder</th><th title="The trunked control-channel frequency this channel decodes">Control Freq (MHz)</th><th>SDR</th><th>State</th><th></th>
@@ -15451,6 +15456,13 @@
         if (amEl) {
           if (amEl.checked) delete _ndConfig.channelManagement;
           else _ndConfig.channelManagement = { enabled: false };
+        }
+        // Uplink monitoring is the other way round: absent = OFF, and only the
+        // on state is stored.
+        const umEl = document.getElementById('nd-cfg-uplinkmon');
+        if (umEl) {
+          if (umEl.checked) _ndConfig.uplinkMonitor = true;
+          else delete _ndConfig.uplinkMonitor;
         }
       }
       try {

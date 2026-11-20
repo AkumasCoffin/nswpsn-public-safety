@@ -93,6 +93,9 @@ type DecoderConfig struct {
 	// shared: p25p1 / p25p2 / dmr
 	IgnoreDataCalls *bool `json:"ignoreDataCalls"`
 	TrafficPoolSize *int  `json:"trafficPoolSize"`
+	// p25p1 / p25p2: also follow each data channel grant onto the uplink (the
+	// frequency the radios transmit on). nil/false = off, the default.
+	MonitorUplinks *bool `json:"monitorUplinks"`
 	// p25p2
 	AutoDetectScramble *bool     `json:"autoDetectScramble"`
 	Scramble           *Scramble `json:"scramble"`

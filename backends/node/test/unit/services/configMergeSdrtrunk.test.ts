@@ -161,6 +161,38 @@ describe('buildConfigPayload keeps a node its channels', () => {
   });
 });
 
+describe('buildConfigPayload uplink monitoring', () => {
+  const empty = () => globalWith({ aliasLists: [], aliases: [], streams: [] });
+  const channels = [
+    { name: 'GRN Site', frequency: 420_000_000, decoder: 'p25p2', decoderConfig: { trafficPoolSize: 12 } },
+    { name: 'Old Site', frequency: 421_000_000, decoder: 'p25p1' },
+    { name: 'Airband', frequency: 124_000_000, decoder: 'am' },
+  ];
+
+  it('is off unless the node switch is on, and then the config is unchanged', async () => {
+    const plain = await buildConfigPayload(
+      radioNode({ config_override: { channels } as NodeRow['config_override'] }), empty());
+    const off = await buildConfigPayload(
+      radioNode({ config_override: { channels, uplinkMonitor: false } as NodeRow['config_override'] }), empty());
+    expect(plain.channels.every((c) => c.decoderConfig?.monitorUplinks === undefined)).toBe(true);
+    expect(off.configVersion).toEqual(plain.configVersion);
+  });
+
+  it('turns it on for every P25 channel and leaves the others alone', async () => {
+    const plain = await buildConfigPayload(
+      radioNode({ config_override: { channels } as NodeRow['config_override'] }), empty());
+    const on = await buildConfigPayload(
+      radioNode({ config_override: { channels, uplinkMonitor: true } as NodeRow['config_override'] }), empty());
+    const by = (name: string) => on.channels.find((c) => c.name === name)!;
+    expect(by('GRN Site').decoderConfig).toEqual({ trafficPoolSize: 12, monitorUplinks: true });
+    expect(by('Old Site').decoderConfig).toEqual({ monitorUplinks: true });
+    expect(by('Airband').decoderConfig).toBeUndefined();
+    // The node keeps all its channels, and is re-synced because the config changed.
+    expect(on.channels.map((c) => c.name)).toEqual(['GRN Site', 'Old Site', 'Airband']);
+    expect(on.configVersion).not.toEqual(plain.configVersion);
+  });
+});
+
 describe('buildConfigPayload channelManagement plumbing', () => {
   const empty = () => globalWith({ aliasLists: [], aliases: [], streams: [] });
 

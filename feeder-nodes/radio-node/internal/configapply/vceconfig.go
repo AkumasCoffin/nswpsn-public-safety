@@ -167,6 +167,9 @@ type vceDecodeConfig struct {
 	// also used by DMR (DecodeConfigDMR.java).
 	IgnoreDataCalls        *bool `json:"ignoreDataCalls,omitempty"`
 	TrafficChannelPoolSize *int  `json:"trafficChannelPoolSize,omitempty"`
+	// p25 (DecodeConfigP25.java): uplink monitoring. Sent only when on, so a
+	// runtime that predates it never sees the key and configs hash as before.
+	MonitorUplinks *bool `json:"monitorUplinks,omitempty"`
 	// p25 (DecodeConfigP25.java, shared by phase1/phase2): learn the alternate
 	// control channels announced on the current one, so only ONE control freq
 	// needs configuring and the node follows the site as it rotates.
@@ -597,6 +600,7 @@ func buildDecodeConfig(decoder string, cfg *DecoderConfig) (vceDecodeConfig, boo
 			LearnAnnouncedControlChannels: boolPtrOr(cfg.LearnControlChannels, true),
 			IgnoreDataCalls:               boolPtrOr(cfg.IgnoreDataCalls, false),
 			TrafficChannelPoolSize:        intPtrOr(cfg.TrafficPoolSize, 20),
+			MonitorUplinks:                trueOrNil(cfg.MonitorUplinks),
 		}, true
 
 	case "p25p2":
@@ -611,6 +615,7 @@ func buildDecodeConfig(decoder string, cfg *DecoderConfig) (vceDecodeConfig, boo
 			LearnAnnouncedControlChannels: boolPtrOr(cfg.LearnControlChannels, true),
 			IgnoreDataCalls:               boolPtrOr(cfg.IgnoreDataCalls, false),
 			TrafficChannelPoolSize:        intPtrOr(cfg.TrafficPoolSize, 20),
+			MonitorUplinks:                trueOrNil(cfg.MonitorUplinks),
 		}
 		if cfg.Scramble != nil {
 			dc.ScrambleParameters = &vceScramble{
@@ -683,6 +688,14 @@ func talkgroupPtrOr(p *int, def int) *int {
 }
 
 // boolPtrOr returns p when set, else a pointer to def.
+// trueOrNil keeps an optional switch out of the JSON unless it is on.
+func trueOrNil(p *bool) *bool {
+	if p != nil && *p {
+		return p
+	}
+	return nil
+}
+
 func boolPtrOr(p *bool, def bool) *bool {
 	if p != nil {
 		return p

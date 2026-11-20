@@ -482,7 +482,15 @@ function deriveChannels(override: ConfigOverride, _node: NodeRow): ChannelPlan[]
   // one (with its control frequency) manually, so no phantom/default channel is
   // ever pushed to sdrtrunk.
   if (override.channels && override.channels.length > 0) {
-    return override.channels.map((c) => ({ ...c }));
+    return override.channels.map((c) => {
+      // The node's uplink monitoring switch reaches SDR-Trunk as a setting on
+      // each P25 channel. Added only when on, so a node that never used it
+      // keeps the config (and version) it always had.
+      if (override.uplinkMonitor === true && (c.decoder === 'p25p1' || c.decoder === 'p25p2')) {
+        return { ...c, decoderConfig: { ...(c.decoderConfig ?? {}), monitorUplinks: true } };
+      }
+      return { ...c };
+    });
   }
   return [];
 }

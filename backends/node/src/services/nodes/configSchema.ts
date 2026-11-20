@@ -61,6 +61,11 @@ export const DecoderConfigSchema = z
     // without every frequency being configured by hand. The agent has always
     // sent this (defaulting to true); it just had no way to be set from here.
     learnControlChannels: z.boolean().optional(),
+    // p25p1 / p25p2. Also follow each data channel grant onto the uplink (the
+    // frequency the radios transmit on), where their packets are. Normally set
+    // for every channel of a node by its uplinkMonitor switch (configMerge),
+    // not per channel.
+    monitorUplinks: z.boolean().optional(),
     // p25p2
     autoDetectScramble: z.boolean().optional(),
     scramble: z
@@ -207,6 +212,10 @@ export const ConfigOverrideSchema = z
     // is strict, and a key it does not know makes the whole override fail,
     // which configMerge used to answer by sending the node an empty config.
     rawLoggingUntil: z.number().optional(),
+    // Uplink monitoring for this node: every P25 channel also follows data
+    // channel grants onto the uplink. Absent = off. Per node because it needs
+    // a tuner to spare, and a node with one SDR has none.
+    uplinkMonitor: z.boolean().optional(),
   })
   .strict();
 
