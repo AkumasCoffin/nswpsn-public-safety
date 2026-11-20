@@ -202,7 +202,20 @@ type vceChannel struct {
 	AutoStartOrder      *int            `json:"autoStartOrder,omitempty"`
 	SourceConfiguration vceSourceConfig `json:"sourceConfiguration"`
 	DecodeConfiguration vceDecodeConfig `json:"decodeConfiguration"`
+	// EventLogConfiguration mirrors module/log/config/EventLogConfiguration.java.
+	// Omitted (no loggers, vce's default) unless a raw capture is running.
+	EventLogConfiguration *vceEventLog `json:"eventLogConfiguration,omitempty"`
 }
+
+// vceEventLog lists the EventLogType names a channel logs.
+type vceEventLog struct {
+	Loggers []string `json:"loggers"`
+}
+
+// rawLoggers are the logs a raw message capture turns on: every decoded
+// message on the channel itself, and on the traffic and data channels it
+// spawns (a traffic channel inherits its parent's log configuration).
+var rawLoggers = []string{"DECODED_MESSAGE", "TRAFFIC_DECODED_MESSAGE"}
 
 // vceBroadcast mirrors audio/broadcast/rdioscanner/RdioScannerConfiguration.java.
 type vceBroadcast struct {
@@ -494,6 +507,9 @@ func buildVceConfig(payload ConfigPayload, localKeys map[int]string, presetList 
 		if ch.Order > 0 {
 			order := ch.Order
 			vch.AutoStartOrder = &order
+		}
+		if payload.RawLogging != nil && *payload.RawLogging {
+			vch.EventLogConfiguration = &vceEventLog{Loggers: rawLoggers}
 		}
 		// Alias lists are protocol-family-owned in vce; a channel may only
 		// reference a list of its own family (a mismatch is rejected by vce's

@@ -211,6 +211,10 @@ type ConfigPayload struct {
 	// nil (older payloads / never configured) = enabled, same pointer logic
 	// as capture/feed above.
 	ChannelManagement *ChannelManagement `json:"channelManagement"`
+	// RawLogging is true while staff have a raw message capture running on
+	// this node: every channel then writes SDR-Trunk's decoded-message log,
+	// which internal/rawlogship uploads. nil/false = no logging.
+	RawLogging *bool `json:"rawLogging"`
 }
 
 // ChannelManagement is the per-node automatic channel management policy.

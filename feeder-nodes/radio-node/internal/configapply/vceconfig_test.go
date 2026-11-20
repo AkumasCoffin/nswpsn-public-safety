@@ -514,3 +514,33 @@ func TestSourceConfigFor(t *testing.T) {
 		}
 	})
 }
+
+// A raw message capture turns SDR-Trunk's decoded-message logs on for every
+// channel; without one a channel carries no log configuration at all, so the
+// config is byte-identical to what it was before the feature existed.
+func TestBuildVceConfigRawLogging(t *testing.T) {
+	payload := ConfigPayload{
+		Channels: []ChannelPlan{{Name: "Metro CC", Frequency: 142658000, Decoder: "p25p1", AutoStart: true}},
+	}
+	off := arr(t, marshalState(t, payload, nil), "channels")[0].(map[string]any)
+	if _, has := off["eventLogConfiguration"]; has {
+		t.Fatalf("no capture: channel must not carry eventLogConfiguration, got %v", off["eventLogConfiguration"])
+	}
+
+	payload.RawLogging = ptrBool(false)
+	stillOff := arr(t, marshalState(t, payload, nil), "channels")[0].(map[string]any)
+	if _, has := stillOff["eventLogConfiguration"]; has {
+		t.Fatal("rawLogging=false must not turn logging on")
+	}
+
+	payload.RawLogging = ptrBool(true)
+	on := arr(t, marshalState(t, payload, nil), "channels")[0].(map[string]any)
+	cfg, ok := on["eventLogConfiguration"].(map[string]any)
+	if !ok {
+		t.Fatalf("capture on: expected eventLogConfiguration, got %v", on["eventLogConfiguration"])
+	}
+	loggers, _ := cfg["loggers"].([]any)
+	if len(loggers) != 2 || loggers[0] != "DECODED_MESSAGE" || loggers[1] != "TRAFFIC_DECODED_MESSAGE" {
+		t.Fatalf("unexpected loggers: %v", loggers)
+	}
+}

@@ -496,6 +496,24 @@ export async function setPagerTesting(
 }
 
 /**
+ * Set when a radio node's raw message capture ends (epoch ms). The key is
+ * kept after it passes: uploads of the last files are accepted for a while
+ * after the end, which needs the end time. Guarded to kind='radio'.
+ */
+export async function setRawLoggingUntil(id: string, untilMs: number): Promise<NodeRow | null> {
+  const pool = await getPool();
+  if (!pool) return null;
+  const res = await pool.query<NodeRow>(
+    `UPDATE nodes
+       SET config_override = COALESCE(config_override, '{}'::jsonb) || $2::jsonb
+     WHERE id = $1 AND kind = 'radio'
+     RETURNING ${NODE_COLS}`,
+    [id, JSON.stringify({ rawLoggingUntil: Math.round(untilMs) })],
+  );
+  return res.rows[0] ?? null;
+}
+
+/**
  * Set (or clear) an ADS-B node's gain / ppm overrides, merged into the JSONB
  * config_override so they persist across restarts/updates without touching
  * other keys. Pass a value to set it, `null` to clear it, or `undefined` to

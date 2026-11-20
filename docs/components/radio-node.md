@@ -394,6 +394,7 @@ shipper pause.
 | `sdrctl` | SDR-Trunk control-server client (REST + spectrum WS) |
 | `siteship` | ships P25 site snapshots |
 | `gpswatch` | watches the control server's `/gps` for decoded radio positions and reports them in the status frame (`status.gps`: counts since sdrtrunk started, and the newest 25). Logs each one. Idles when the runtime has no `/gps` |
+| `rawlogship` | uploads SDR-Trunk decoded-message logs during a staff-started raw message capture. The node config (`rawLogging`) turns the logs on for every channel; each finished file in `<app root>/event_logs` is gzipped, POSTed to `/api/node-ingest/raw-log` and deleted. The backend keeps the files under `STATE_DIR/raw-logs/<nodeId>/` (2 GB per node, oldest dropped) for staff to download from the node drawer. Captures are timed, 4 hours at most |
 | `sitesurvey` | measures candidate GRN sites |
 | `supervise` | child-process supervision, stale-process reaping |
 | `update` | manifest fetch, component install, self-update |

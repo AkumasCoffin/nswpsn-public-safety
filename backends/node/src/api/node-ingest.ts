@@ -31,6 +31,14 @@ import { resolveNodeToken } from '../services/auth/nodeToken.js';
 import { ingestSurveyResults } from '../services/siteSurvey.js';
 import { bumpNodeCallStat, getNode, touchNodeSeenThrottled, type NodeRow } from '../services/nodes/registry.js';
 import { pagerTestingOf } from '../services/nodes/configMerge.js';
+import { pushConfigToNode } from '../services/nodes/configPush.js';
+import {
+  rawLogUploadAllowed,
+  rawLoggingActive,
+  rawLoggingUntilOf,
+  saveRawLog,
+  RAW_LOG_MAX_FILE_BYTES,
+} from '../services/nodes/rawLogs.js';
 import { getPagerIngest } from '../services/nodes/globalConfig.js';
 import { hub } from '../services/nodes/hub.js';
 import { markNodeSeen } from '../services/nodes/nodeUptime.js';
@@ -576,6 +584,75 @@ const SiteBodySchema = z.union([
   z.array(SiteSnapshotSchema).max(256),
   z.object({ sites: z.array(SiteSnapshotSchema).max(256) }),
 ]);
+
+// ---------------------------------------------------------------------------
+// POST /api/node-ingest/raw-log?name=<file> — a RADIO node's agent uploads one
+// finished, gzipped SDR-Trunk decoded-message log while staff have a raw
+// message capture running on it (services/nodes/rawLogs.ts). The body is the
+// gzip file itself, streamed to disk; nothing is parsed or stored in the
+// database. Auth mirrors /site-snapshots.
+//
+// 409 means "no capture is running and none just ended": the agent discards
+// the file instead of retrying it forever.
+// ---------------------------------------------------------------------------
+const rawLogRateOk = makeNodeRateLimiter(120, 60_000);
+/** Captures whose "turn logging off" push has been sent since this process
+ *  started, keyed node:until. An upload after the end is what triggers the
+ *  push when the timer that should have did not survive a restart. */
+const rawLogOffPushed = new Set<string>();
+
+nodeIngestRouter.post('/api/node-ingest/raw-log', async (c) => {
+  const token = c.req.header('X-Node-Token');
+  const installId = c.req.header('X-Node-Install');
+  if (!token || !installId) {
+    return c.json({ error: 'missing node credentials' }, 401);
+  }
+  const r = await resolveNodeToken(token);
+  if (!r.ok) {
+    if (r.reason === 'no_role') return c.json({ error: 'contributor role removed' }, 403);
+    if (r.reason === 'unavailable') return c.json({ error: 'node registry unavailable' }, 503);
+    return c.json({ error: 'unauthorized' }, 401);
+  }
+  if (r.installId && r.installId !== installId) {
+    return c.json({ error: 'install mismatch' }, 401);
+  }
+  if (r.kind !== 'radio') {
+    return c.json({ error: 'not a radio node' }, 403);
+  }
+  if (!rawLogRateOk(r.nodeId)) {
+    return c.json({ ok: false, error: 'rate limit' }, 429);
+  }
+  const node = await getNode(r.nodeId);
+  if (!node) return c.json({ error: 'node registry unavailable' }, 503);
+  if (!rawLogUploadAllowed(node)) {
+    return c.json({ ok: false, error: 'no capture running' }, 409);
+  }
+  // The capture is over but the node is still logging: its config was never
+  // told. Push the one that turns it off, once per capture.
+  if (!rawLoggingActive(node)) {
+    const key = `${r.nodeId}:${rawLoggingUntilOf(node)}`;
+    if (!rawLogOffPushed.has(key)) {
+      rawLogOffPushed.add(key);
+      void pushConfigToNode(r.nodeId).catch(() => {});
+    }
+  }
+  const lenHeader = c.req.header('content-length');
+  const len = Number(lenHeader ?? '');
+  if (lenHeader === undefined || !Number.isFinite(len)) {
+    return c.json({ error: 'length required' }, 411);
+  }
+  if (len > RAW_LOG_MAX_FILE_BYTES) {
+    return c.json({ error: 'file too large' }, 413);
+  }
+  const saved = await saveRawLog(r.nodeId, c.req.query('name') ?? '', c.req.raw.body);
+  if (!saved.ok) {
+    if (saved.reason === 'bad_name') return c.json({ error: 'bad name' }, 400);
+    if (saved.reason === 'too_large') return c.json({ error: 'file too large' }, 413);
+    return c.json({ error: 'could not store the file' }, 500);
+  }
+  log.info({ nodeId: r.nodeId, name: saved.name, bytes: saved.bytes }, 'raw message log stored');
+  return c.json({ ok: true, name: saved.name, bytes: saved.bytes });
+});
 
 // ---------------------------------------------------------------------------
 // POST /api/node-ingest/site-survey — the agent reports a finished (or

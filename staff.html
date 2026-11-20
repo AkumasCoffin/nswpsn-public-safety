@@ -814,6 +814,14 @@
     }
     .nd-enc-toggle input { accent-color: var(--accent); cursor: pointer; margin: 0; }
     .nd-panel-b { padding: 0.65rem 0.75rem; }
+    .nd-raw-gps { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.6rem; }
+    .nd-raw-gps b { color: var(--text-main); font-weight: 600; }
+    .nd-raw-actions { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+    .nd-raw-files { margin-top: 0.6rem; font-size: 0.78rem; color: var(--text-muted); max-height: 220px; overflow-y: auto; }
+    .nd-raw-file { display: flex; gap: 0.75rem; align-items: baseline; padding: 0.2rem 0; border-top: 1px solid rgba(148, 163, 184, 0.1); }
+    .nd-raw-file:first-child { border-top: none; }
+    .nd-raw-file a { flex: 1; min-width: 0; overflow-wrap: anywhere; cursor: pointer; }
+    .nd-raw-file span { white-space: nowrap; color: var(--text-soft); }
     .nd-panel-b.flush { padding: 0; }
     /* Empty-state cards inside flush (table) panels keep some breathing room. */
     .nd-panel-b.flush .nd-empty { margin: 0.85rem; }
@@ -4886,6 +4894,34 @@
               <button class="btn btn-secondary btn-sm" onclick="_ndCfgReload()" title="Discard unsaved edits and reload the saved config"><i class="fas fa-rotate"></i> Revert</button>
               <span class="nd-spacer"></span>
               <button class="btn btn-primary btn-sm" onclick="_ndCfgSave()" title="Save the config and sync it to the node — the agent re-renders the playlist, reloads it, and restarts channels so the change goes live"><i class="fas fa-floppy-disk"></i> Save &amp; sync</button>
+            </div>
+          </div>
+
+          <!-- Raw message capture + decoded radio positions (radio only) -->
+          <div class="nd-panel nd-span-all nd-radio-only">
+            <div class="nd-panel-h">
+              <i class="fas fa-file-waveform"></i> Raw message capture
+              <span class="nd-h-spacer"></span>
+              <span class="nd-sub" id="nd-raw-state" style="text-transform:none; letter-spacing:0; font-weight:400;"></span>
+            </div>
+            <div class="nd-panel-b">
+              <div class="nd-raw-gps" id="nd-raw-gps"></div>
+              <div class="nd-raw-actions">
+                <select id="nd-raw-minutes" class="nd-survey-rings nd-write" title="How long the node logs for. It stops by itself.">
+                  <option value="15">15 minutes</option>
+                  <option value="60" selected>1 hour</option>
+                  <option value="120">2 hours</option>
+                  <option value="240">4 hours</option>
+                </select>
+                <button class="btn btn-secondary btn-sm nd-write" id="nd-raw-toggle" onclick="_ndRawToggle()"
+                  title="Has this node log every message it receives, on its control, voice and data channels, and upload the logs here. Its channels restart once when the capture starts and once when it ends.">
+                  <i class="fas fa-circle-dot"></i> Start capture
+                </button>
+                <button class="btn btn-secondary btn-sm" onclick="_ndRawFetch()" title="Check for newly uploaded files"><i class="fas fa-rotate"></i> Refresh</button>
+                <span class="nd-spacer"></span>
+                <button class="btn btn-secondary btn-sm nd-write" id="nd-raw-clear" onclick="_ndRawClear()" title="Delete every stored log file for this node" hidden><i class="fas fa-trash"></i> Delete files</button>
+              </div>
+              <div class="nd-raw-files" id="nd-raw-files"></div>
             </div>
           </div>
 
@@ -11821,6 +11857,8 @@
       _ndCfgFetch(); // pull current config_override for the tuner-persist + channel editor
       _ndMgrLogFetch(); // auto-management audit log (radio only)
       _ndSurveyFetch(); // RF site survey history (radio only)
+      _ndRaw = null; _ndRawRender(); _ndRawGpsRender(null);
+      _ndRawFetch();    // raw message capture state + stored files (radio only)
       _ndRenderSurveyBtn(); // banner up front if one is already running
       // Warm the GRN site list in the background: tagging the dataset against
       // the boundary layers is the slow part, and doing it while the drawer
@@ -11926,6 +11964,7 @@
         st.events.forEach(_ndIngestEvent);
       }
       _ndChanMgr = st.channelManager || null;
+      _ndRawGpsRender(st.gps || null);
       // A running survey means this node is off the air on purpose. Show that
       // the moment it starts rather than leaving staff to wonder why every
       // channel went quiet.
@@ -14267,6 +14306,149 @@
     // The backend's view: a survey row is open for this node. True from the
     // moment it is commanded, which is before the node reports any progress.
     let _ndSurveyOpen = false;
+
+    // ---- Raw message capture (radio nodes) --------------------------------
+    // A timed capture: the node logs every message SDR-Trunk decodes and the
+    // agent uploads the finished log files, listed here to download.
+    let _ndRaw = null; // { until, files: [{name, bytes, at}], bytes } | null
+
+    function _ndRawBytes(n) {
+      if (!Number.isFinite(n)) return '';
+      if (n >= 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB';
+      if (n >= 1024) return Math.round(n / 1024) + ' kB';
+      return n + ' B';
+    }
+
+    function _ndRawRender() {
+      const stateEl = document.getElementById('nd-raw-state');
+      const btn = document.getElementById('nd-raw-toggle');
+      const filesEl = document.getElementById('nd-raw-files');
+      const clearEl = document.getElementById('nd-raw-clear');
+      const minsEl = document.getElementById('nd-raw-minutes');
+      if (!stateEl || !btn || !filesEl) return;
+      const until = _ndRaw && _ndRaw.until ? Number(_ndRaw.until) : null;
+      const on = until != null && until > Date.now();
+      stateEl.textContent = on
+        ? 'capturing until ' + new Date(until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : 'not capturing';
+      btn.innerHTML = on
+        ? '<i class="fas fa-stop"></i> Stop capture'
+        : '<i class="fas fa-circle-dot"></i> Start capture';
+      if (minsEl) minsEl.disabled = on;
+      const files = (_ndRaw && Array.isArray(_ndRaw.files)) ? _ndRaw.files : [];
+      if (clearEl) clearEl.hidden = files.length === 0;
+      if (!files.length) {
+        filesEl.textContent = on
+          ? 'No files yet. A log is uploaded a couple of minutes after its channel goes quiet.'
+          : 'No stored files.';
+        return;
+      }
+      filesEl.innerHTML =
+        '<div style="margin-bottom:0.3rem;">' + files.length + ' file' + (files.length === 1 ? '' : 's')
+        + ', ' + _ndRawBytes(_ndRaw.bytes) + ' compressed</div>'
+        + files.map(f =>
+          '<div class="nd-raw-file"><a data-raw-name="' + escapeHtml(f.name) + '">' + escapeHtml(f.name) + '</a>'
+          + '<span>' + _ndRawBytes(f.bytes) + '</span>'
+          + '<span>' + new Date(f.at).toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) + '</span></div>'
+        ).join('');
+      filesEl.querySelectorAll('a[data-raw-name]').forEach(a => {
+        a.addEventListener('click', () => _ndRawDownload(a.getAttribute('data-raw-name')));
+      });
+    }
+
+    // What the node's runtime has decoded as radio positions since it started
+    // (status.gps, from the agent's position watcher).
+    function _ndRawGpsRender(gps) {
+      const el = document.getElementById('nd-raw-gps');
+      if (!el) return;
+      if (!gps) { el.textContent = ''; return; }
+      if (!gps.supported) { el.textContent = 'Radio positions: this node\'s runtime does not report them.'; return; }
+      const n = Number(gps.positions) || 0;
+      const bad = Number(gps.invalid) || 0;
+      const since = gps.sinceMs ? new Date(gps.sinceMs).toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : null;
+      let html = 'Radio positions decoded' + (since ? ' since ' + escapeHtml(since) : '') + ': <b>' + n.toLocaleString() + '</b>';
+      if (bad) html += ' (' + bad.toLocaleString() + ' more sent without a fix)';
+      const last = Array.isArray(gps.recent) && gps.recent.length ? gps.recent[gps.recent.length - 1] : null;
+      if (last) {
+        html += '. Latest: ' + Number(last.lat).toFixed(5) + ', ' + Number(last.lon).toFixed(5)
+          + (last.from ? ' from ' + escapeHtml(String(last.from)) : '')
+          + ' at ' + new Date(last.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      }
+      el.innerHTML = html;
+    }
+
+    async function _ndRawFetch() {
+      if (((_ndNode && _ndNode.kind) || 'radio') !== 'radio') return;
+      const id = _ndNodeId;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${id}/raw-logs`, {
+          headers: { 'Authorization': await authHeader() }
+        });
+        if (res.ok && String(id) === String(_ndNodeId)) _ndRaw = await res.json();
+      } catch (e) { /* keep what is shown */ }
+      _ndRawRender();
+    }
+
+    async function _ndRawToggle() {
+      const on = _ndRaw && _ndRaw.until && Number(_ndRaw.until) > Date.now();
+      const minutes = Number(document.getElementById('nd-raw-minutes')?.value || 60);
+      if (!on) {
+        const ok = await uiConfirm(
+          `Log every message this node receives for ${minutes} minutes?
+
+`
+          + `Its channels restart once now and once when the capture ends, so it misses a few seconds of traffic each time. `
+          + `The log files are uploaded here as they finish.`,
+          { title: 'Start a raw message capture?', okText: 'Start capture' },
+        );
+        if (!ok) return;
+      }
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${_ndNodeId}/raw-logging`, {
+          method: 'PUT',
+          headers: { 'Authorization': await authHeader(), 'Content-Type': 'application/json' },
+          body: JSON.stringify(on ? { enabled: false } : { enabled: true, minutes }),
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        showToast(on ? 'Capture stopped' : 'Capture started');
+      } catch (e) {
+        showToast('Could not change the capture: ' + e.message, 'error');
+      }
+      _ndRawFetch();
+    }
+
+    async function _ndRawDownload(name) {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${_ndNodeId}/raw-logs/${encodeURIComponent(name)}`, {
+          headers: { 'Authorization': await authHeader() }
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const url = URL.createObjectURL(await res.blob());
+        const a = document.createElement('a');
+        a.href = url; a.download = name;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+      } catch (e) {
+        showToast('Download failed: ' + e.message, 'error');
+      }
+    }
+
+    async function _ndRawClear() {
+      const n = (_ndRaw && Array.isArray(_ndRaw.files)) ? _ndRaw.files.length : 0;
+      const ok = await uiConfirm(`Delete all ${n} stored log file${n === 1 ? '' : 's'} for this node? This cannot be undone.`,
+        { title: 'Delete raw message logs?', okText: 'Delete files' });
+      if (!ok) return;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/nodes/${_ndNodeId}/raw-logs`, {
+          method: 'DELETE', headers: { 'Authorization': await authHeader() }
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        showToast('Files deleted');
+      } catch (e) {
+        showToast('Could not delete the files: ' + e.message, 'error');
+      }
+      _ndRawFetch();
+    }
 
     async function _ndSurveyFetch() {
       if (((_ndNode && _ndNode.kind) || 'radio') !== 'radio') return;

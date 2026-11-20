@@ -39,6 +39,7 @@ import (
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/agentcfg"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/chanmgr"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/gpswatch"
+	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/rawlogship"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/localweb"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/queue"
 	"github.com/AkumasCoffin/nswpsn-node/radio-node/internal/rdioctl"
@@ -479,6 +480,18 @@ func runAgent(ctx context.Context, configPath string) error {
 		gps := gpswatch.New(gpswatch.Options{Fetch: sdr.GPS})
 		ws.SetGPSSnapshot(gps.Snapshot)
 		go gps.Run(ctx)
+
+		// Raw message log uploader (radio kind only): while staff have a raw
+		// capture running, SDR-Trunk writes decoded-message logs; this sends
+		// each finished one to the backend and deletes it. Idle otherwise.
+		rawLogs := rawlogship.New(rawlogship.Options{
+			Dir:       filepath.Join(cfg.SDRTrunkAppRoot, "event_logs"),
+			TempDir:   cfg.DataDir,
+			ServerURL: cfg.ServerURL,
+			NodeToken: cfg.NodeToken,
+			InstallID: cfg.InstallID,
+		})
+		go rawLogs.Run(ctx)
 
 		// RF site survey (radio kind only): on command from the backend,
 		// measure decode on a list of candidate GRN control frequencies and

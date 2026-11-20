@@ -40,6 +40,7 @@ import {
   updateNode,
   deleteNode,
   getNodeStats,
+  setRawLoggingUntil,
   type NodeRow,
   type NodePatch,
 } from '../services/nodes/registry.js';
@@ -66,7 +67,19 @@ import {
   adsbGainOf,
   adsbPpmOf,
 } from '../services/nodes/configMerge.js';
+import { createReadStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
+import { Readable } from 'node:stream';
 import { AU_STATES } from '../lib/stateMask.js';
+import {
+  clearRawLogs,
+  listRawLogs,
+  rawLogPath,
+  rawLoggingActive,
+  rawLoggingUntilOf,
+  RAW_LOG_DEFAULT_MINUTES,
+  RAW_LOG_MAX_MINUTES,
+} from '../services/nodes/rawLogs.js';
 import { isValidZone } from '../services/nodes/rfsZones.js';
 import { pushConfigToNode, pushConfigToAllNodes } from '../services/nodes/configPush.js';
 import {
@@ -167,6 +180,9 @@ function toApi(node: NodeRow, usernames?: Map<string, string>, surveying?: Map<s
         ? pagerTestFrequenciesOf(node).map((f) => ({ ...f, service: null }))
         : pagerPlanWithServicesFor(node.state))
       : null,
+    // Raw message capture (radio): when it ends, epoch ms, or null when one
+    // is not running.
+    rawLoggingUntil: node.kind === 'radio' && rawLoggingActive(node) ? rawLoggingUntilOf(node) : null,
     // Testing mode: the state plan replaced by pagerTestFrequencies, pages kept
     // out of Pagermon. The list is kept while off, for the drawer's editor.
     pagerTesting: node.kind === 'pager' ? pagerTestingOf(node) : null,
@@ -677,6 +693,107 @@ nodesRouter.put('/api/nodes/:id/pager-testing', requireRole(canManageNodes), asy
     log.error({ err, id }, 'Error setting pager testing mode');
     return c.json({ error: 'Failed to set testing mode' }, 500);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Raw message capture (radio nodes). Staff start a timed capture; for that
+// long the node's SDR-Trunk writes its decoded-message logs and the agent
+// uploads them (POST /api/node-ingest/raw-log). See services/nodes/rawLogs.ts.
+//
+//   PUT    /api/nodes/:id/raw-logging   { enabled, minutes? }  start / stop
+//   GET    /api/nodes/:id/raw-logs                              stored files
+//   GET    /api/nodes/:id/raw-logs/:name                        download one
+//   DELETE /api/nodes/:id/raw-logs                              delete them all
+// ---------------------------------------------------------------------------
+const RawLoggingSchema = z.object({
+  enabled: z.boolean(),
+  minutes: z.number().int().min(5).max(RAW_LOG_MAX_MINUTES).optional(),
+});
+
+/** One pending "capture is over, push the config that turns logging off" per
+ *  node. In memory: after a restart the node's next upload triggers the push
+ *  instead (api/node-ingest.ts). */
+const rawLoggingTimers = new Map<string, NodeJS.Timeout>();
+
+function armRawLoggingEnd(id: string, untilMs: number): void {
+  const old = rawLoggingTimers.get(id);
+  if (old) clearTimeout(old);
+  const timer = setTimeout(() => {
+    rawLoggingTimers.delete(id);
+    void pushConfigToNode(id).catch(() => {});
+  }, Math.max(0, untilMs - Date.now()) + 1000);
+  timer.unref();
+  rawLoggingTimers.set(id, timer);
+}
+
+nodesRouter.put('/api/nodes/:id/raw-logging', requireRole(canManageNodes), async (c) => {
+  const id = c.req.param('id');
+  try {
+    const node = await getNode(id);
+    if (!node) return c.json({ error: 'node not found' }, 404);
+    if (node.kind !== 'radio') return c.json({ error: 'not a radio node' }, 400);
+    const parsed = RawLoggingSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ error: 'invalid capture settings' }, 400);
+
+    // Stopping sets the end to now rather than removing it, so the files the
+    // node has not sent yet are still accepted.
+    const until = parsed.data.enabled
+      ? Date.now() + (parsed.data.minutes ?? RAW_LOG_DEFAULT_MINUTES) * 60_000
+      : Date.now();
+    const updated = await setRawLoggingUntil(id, until);
+    if (!updated) return c.json({ error: 'update failed' }, 500);
+    if (parsed.data.enabled) armRawLoggingEnd(id, until);
+    else {
+      const old = rawLoggingTimers.get(id);
+      if (old) clearTimeout(old);
+      rawLoggingTimers.delete(id);
+    }
+    await pushConfigToNode(id).catch(() => {}); // apply live if online
+    return c.json(toApi(updated));
+  } catch (err) {
+    log.error({ err, id }, 'Error setting raw message capture');
+    return c.json({ error: 'Failed to set raw message capture' }, 500);
+  }
+});
+
+nodesRouter.get('/api/nodes/:id/raw-logs', requireRole(canManageNodes), async (c) => {
+  const id = c.req.param('id');
+  const node = await getNode(id);
+  if (!node) return c.json({ error: 'node not found' }, 404);
+  const files = await listRawLogs(id);
+  return c.json({
+    until: rawLoggingActive(node) ? rawLoggingUntilOf(node) : null,
+    files,
+    bytes: files.reduce((n, f) => n + f.bytes, 0),
+  });
+});
+
+nodesRouter.get('/api/nodes/:id/raw-logs/:name', requireRole(canManageNodes), async (c) => {
+  const file = rawLogPath(c.req.param('id'), c.req.param('name'));
+  if (!file) return c.json({ error: 'not found' }, 404);
+  let size: number;
+  try {
+    const st = await stat(file);
+    if (!st.isFile()) return c.json({ error: 'not found' }, 404);
+    size = st.size;
+  } catch {
+    return c.json({ error: 'not found' }, 404);
+  }
+  return new Response(Readable.toWeb(createReadStream(file)) as ReadableStream, {
+    headers: {
+      'Content-Type': 'application/gzip',
+      'Content-Length': String(size),
+      'Content-Disposition': `attachment; filename="${c.req.param('name')}"`,
+      'Cache-Control': 'no-store',
+    },
+  });
+});
+
+nodesRouter.delete('/api/nodes/:id/raw-logs', requireRole(canManageNodes), async (c) => {
+  const id = c.req.param('id');
+  const node = await getNode(id);
+  if (!node) return c.json({ error: 'node not found' }, 404);
+  return c.json({ ok: true, removed: await clearRawLogs(id) });
 });
 
 // ---------------------------------------------------------------------------

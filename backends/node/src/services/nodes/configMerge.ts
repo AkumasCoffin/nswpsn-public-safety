@@ -21,6 +21,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { rawLoggingActive } from './rawLogs.js';
 import { config } from '../../config.js';
 import { log } from '../../lib/log.js';
 import type { NodeRow } from './registry.js';
@@ -166,6 +167,10 @@ export interface ConfigPayload {
    *  has never touched the toggle (absent = enabled on the agent), so legacy
    *  configs hash identically and don't re-apply on deploy. */
   channelManagement?: { enabled?: boolean };
+  /** True while staff have a raw message capture running on this radio node:
+   *  the agent then has SDR-Trunk write its decoded-message logs and uploads
+   *  them. Omitted otherwise, so configs hash as before. */
+  rawLogging?: boolean;
 }
 
 // Fixed pager plans (decided with the operator), one per Australian state —
@@ -614,6 +619,12 @@ export async function buildConfigPayload(
   // Only when the operator has actually set it - absent must hash like before.
   if (override.channelManagement !== undefined) {
     payloadNoVersion.channelManagement = override.channelManagement;
+  }
+  // Timed: true only until the capture's end. Nothing re-builds this when the
+  // end passes, so whoever starts a capture arranges the push that ends it
+  // (api/nodes.ts), and an upload after the end triggers one too.
+  if (rawLoggingActive(node)) {
+    payloadNoVersion.rawLogging = true;
   }
   const configVersion = sha256Hex(JSON.stringify(canonicalize(payloadNoVersion)));
 
