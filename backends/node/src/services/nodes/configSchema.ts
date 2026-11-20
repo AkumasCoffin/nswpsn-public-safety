@@ -202,6 +202,11 @@ export const ConfigOverrideSchema = z
       })
       .strict()
       .optional(),
+    // When the node's raw message capture ends, epoch ms (services/nodes/
+    // rawLogs.ts). Kept after it passes. It MUST be listed here: this object
+    // is strict, and a key it does not know makes the whole override fail,
+    // which configMerge used to answer by sending the node an empty config.
+    rawLoggingUntil: z.number().optional(),
   })
   .strict();
 

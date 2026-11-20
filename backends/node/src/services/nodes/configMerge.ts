@@ -442,10 +442,31 @@ function sha256Hex(s: string): string {
   return createHash('sha256').update(s).digest('hex');
 }
 
-/** Parse+validate a stored override; a malformed one degrades to empty. */
+/**
+ * Parse+validate a stored override; a malformed one degrades to empty.
+ *
+ * A top-level key the schema does not know is dropped and the rest is kept.
+ * "Empty" means a config with no channels, which stops a live node, so a
+ * stray key (one written by a newer feature, or by hand) must not cost a node
+ * its channels: that happened once, with rawLoggingUntil.
+ */
 function parseOverride(raw: Record<string, unknown> | null | undefined): ConfigOverride {
   const parsed = ConfigOverrideSchema.safeParse(raw ?? {});
   if (parsed.success) return parsed.data;
+  const unknown = new Set<string>();
+  for (const issue of parsed.error.issues) {
+    if (issue.code === 'unrecognized_keys' && issue.path.length === 0) {
+      for (const k of issue.keys) unknown.add(k);
+    }
+  }
+  if (unknown.size > 0) {
+    const kept = Object.fromEntries(Object.entries(raw ?? {}).filter(([k]) => !unknown.has(k)));
+    const again = ConfigOverrideSchema.safeParse(kept);
+    if (again.success) {
+      log.warn({ keys: [...unknown] }, 'node config_override has keys the schema does not know; ignoring those keys');
+      return again.data;
+    }
+  }
   log.warn({ issues: parsed.error.issues }, 'node config_override failed schema; ignoring');
   return {};
 }

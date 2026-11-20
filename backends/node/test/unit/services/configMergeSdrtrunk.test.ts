@@ -121,6 +121,46 @@ describe('buildConfigPayload (radio) uses the imported sdrtrunk config', () => {
   });
 });
 
+describe('buildConfigPayload keeps a node its channels', () => {
+  const empty = () => globalWith({ aliasLists: [], aliases: [], streams: [] });
+  const channels = [{ name: 'GRN Site', frequency: 420_000_000, decoder: 'p25p1' }];
+
+  it('a raw capture end time does not cost the node its channels', async () => {
+    // rawLoggingUntil was missing from the strict override schema, so the whole
+    // override was thrown away and the node was sent a config with no channels.
+    const plain = await buildConfigPayload(
+      radioNode({ config_override: { channels } as NodeRow['config_override'] }), empty());
+    const ended = await buildConfigPayload(
+      radioNode({ config_override: { channels, rawLoggingUntil: Date.now() - 60_000 } as NodeRow['config_override'] }), empty());
+    expect(ended.channels.map((c) => c.name)).toEqual(['GRN Site']);
+    expect('rawLogging' in ended).toBe(false);
+    // A capture that is over leaves the config exactly as it was before.
+    expect(ended.configVersion).toEqual(plain.configVersion);
+  });
+
+  it('a running capture adds rawLogging and nothing else', async () => {
+    const plain = await buildConfigPayload(
+      radioNode({ config_override: { channels } as NodeRow['config_override'] }), empty());
+    const running = await buildConfigPayload(
+      radioNode({ config_override: { channels, rawLoggingUntil: Date.now() + 60_000 } as NodeRow['config_override'] }), empty());
+    expect(running.rawLogging).toBe(true);
+    expect(running.channels).toEqual(plain.channels);
+    expect(running.configVersion).not.toEqual(plain.configVersion);
+  });
+
+  it('a key the schema does not know is dropped, not the whole override', async () => {
+    const p = await buildConfigPayload(
+      radioNode({ config_override: { channels, somethingNew: { a: 1 } } as unknown as NodeRow['config_override'] }), empty());
+    expect(p.channels.map((c) => c.name)).toEqual(['GRN Site']);
+  });
+
+  it('an override that is wrong inside a known key still degrades to empty', async () => {
+    const p = await buildConfigPayload(
+      radioNode({ config_override: { channels: 'nope' } as unknown as NodeRow['config_override'] }), empty());
+    expect(p.channels).toEqual([]);
+  });
+});
+
 describe('buildConfigPayload channelManagement plumbing', () => {
   const empty = () => globalWith({ aliasLists: [], aliases: [], streams: [] });
 
