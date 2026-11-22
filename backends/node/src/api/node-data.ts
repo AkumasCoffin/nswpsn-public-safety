@@ -57,6 +57,15 @@ import {
   liveHour,
   rollupEdgeSql,
   outcomeSql,
+  heardWindowSql,
+  type TalkgroupsQuery,
+  type BuiltCountPage,
+  TALKGROUPS_ORDER_COL,
+  buildTalkgroupsRollup,
+  buildTalkgroupsRaw,
+  type RadiosQuery,
+  buildRadiosRollup,
+  buildRadiosRaw,
 } from '../services/nodeEventsQuery.js';
 // Re-export the pure builder helpers that pre-existing unit tests import from
 // this module, so moving them into nodeEventsQuery.ts stays source-compatible.
@@ -2533,44 +2542,9 @@ type HeardGroup = {
   last_seen: Date;
 };
 
-/**
- * node_radio_hourly_heard over the window, plus the hour in progress from
- * detail grouped to the same grain — (hour, node, system, site, talkgroup,
- * radio) with receptions and last_heard — and `where` applied to both halves.
- *
- * The live half files each reception under the one radio that keyed it, as
- * the rollup does (see nodeHourlyRollup.ts), so the two halves sum alike.
- * `where` sees the rollup's column names and its sentinels (0 for no system,
- * talkgroup or radio; -1 for no site), and is applied after that grouping, so
- * a radio filter picks receptions by their filed radio in both halves.
- *
- * Expects $1 to be the window interval (rollupHours).
- */
-function heardWindowSql(seam: string, where: string): string {
-  return `
-    SELECT hour, node_id, system, site_rfss, site_id, talkgroup, source_unit,
-           receptions, last_heard
-      FROM node_radio_hourly_heard
-     WHERE ${rollupHours(seam)} AND ${where}
-    UNION ALL
-    SELECT hour, node_id, system, site_rfss, site_id, talkgroup, source_unit,
-           COUNT(*)::int, MAX(last_heard)
-      FROM (
-        SELECT date_trunc('hour', MIN(received_at)) AS hour, node_id,
-               COALESCE(system, 0) AS system,
-               COALESCE(site_rfss, -1) AS site_rfss,
-               COALESCE(site_id, -1) AS site_id,
-               COALESCE(talkgroup, 0) AS talkgroup,
-               COALESCE((array_agg(source_unit ORDER BY id)
-                           FILTER (WHERE source_unit IS NOT NULL))[1], 0) AS source_unit,
-               MAX(received_at) AS last_heard
-          FROM node_radio_events
-         WHERE ${liveHour(seam)} AND ${CALL_GROUP}
-         GROUP BY logical_call_id, node_id, 3, 4, 5, 6
-      ) rx
-     WHERE ${where}
-     GROUP BY 1, 2, 3, 4, 5, 6, 7`;
-}
+// heardWindowSql — the fleet-wide rollup+live union emitter — now lives in
+// services/nodeEventsQuery.ts (imported above), the one definition every
+// reception read on this page builds on.
 
 /**
  * A drill-down's rows at the two rollup grains, over the window: hourly rollup
@@ -3813,84 +3787,51 @@ nodeDataRouter.get(
       // client filter would punch holes in pages and break the total.
       const encHide = url.searchParams.get('enc') === 'hide';
 
+      // Agency is a property of the talkgroup's alias group, not of the events,
+      // so it resolves to the id set for that agency (empty set = no rows).
+      const agencyFilter = (url.searchParams.get('agency') ?? '').trim();
+
       // Everything below is the cached unit. Validation has already passed,
       // so a cached entry can never be a 400 wearing a 200.
       const cacheKey = url.search;
       const compute = async () => {
 
-      const params: unknown[] = [WINDOW_INTERVAL[window]];
-      // CALL_GROUP restricts to talkgroup voice calls; TG_VALID additionally
-      // drops NULL talkgroups and excludes out-of-range radio ids.
-      const conds = ['received_at >= now() - $1::interval', CALL_GROUP, TG_VALID];
-      if (system !== null) {
-        params.push(system);
-        conds.push(`system = $${params.length}`);
-      }
-      if (scope.rfss !== null) {
-        params.push(scope.rfss);
-        conds.push(`site_rfss = $${params.length}`);
-        params.push(scope.site);
-        conds.push(`site_id = $${params.length}`);
-      }
-      if (nodeId !== null) {
-        params.push(nodeId);
-        conds.push(`node_id = $${params.length}`);
-      }
-      if (qRaw) {
-        params.push(`${qRaw}%`);
-        conds.push(`talkgroup::text LIKE $${params.length}`);
-      }
-      if (encHide) {
-        // Playlist-declared ENC talkgroups go regardless of what their events
-        // were flagged — the HAVING below only sees the per-event flag, which
-        // lags the start of a call and so never reaches 100% for them.
-        const encTgs = await encryptedTalkgroupIds();
-        if (encTgs.length) {
-          params.push(encTgs);
-          conds.push(`talkgroup <> ALL($${params.length}::int[])`);
-        }
-      }
-      // Agency is a property of the talkgroup's alias group, not of the events,
-      // so it resolves to the id set for that agency (empty set = no rows).
-      const agencyFilter = (url.searchParams.get('agency') ?? '').trim();
+      // Resolve the impure inputs ONCE (each a catalog/database read), then hand
+      // them to the pure builder in services/nodeEventsQuery.ts. Playlist-
+      // declared ENC talkgroups are dropped regardless of their per-event flag,
+      // which lags the start of a call and never reaches 100% for them.
+      const encTgs = encHide ? await encryptedTalkgroupIds() : [];
+      let agencyIds: number[] | null = null;
       if (agencyFilter) {
         const tgAgencyMap = await talkgroupAgencies();
-        const ids: number[] = [];
-        for (const [tg, ag] of tgAgencyMap) if (ag === agencyFilter) ids.push(tg);
-        params.push(ids);
-        conds.push(`talkgroup = ANY($${params.length}::int[])`);
+        agencyIds = [];
+        for (const [tg, ag] of tgAgencyMap) if (ag === agencyFilter) agencyIds.push(tg);
       }
       // This table is what was RECEIVED in the window, not what is programmed
-      // (Global settings owns that), so every talkgroup heard is listed —
-      // programmed or not. The only exclusion is ids that cannot be talkgroups,
-      // with the standing exception for configured ones (AirBand). Same
-      // predicate the embedded "top talkgroups" columns use, so a talkgroup
-      // can't be filtered out of the list yet still appear inside a row.
-      conds.push(await tgValidConfigured());
-      const where = conds.join(' AND ');
-      // Whitelisted keys → the grouped expression each sorts on. `talkgroup`
-      // is the tie-breaker everywhere so paging stays stable when the primary
-      // key ties (very common on calls/enc).
-      const orderCol = ({
-        calls: 'calls',
-        lastSeen: 'last_seen',
-        talkgroup: 'talkgroup',
-        enc: 'enc',
-        logical: 'logical',
-      } as const)[sort];
-      // "Always encrypted" = no clear call at all. A talkgroup that carries
-      // BOTH stays listed — hiding it would lose its clear traffic too.
-      // Applied to the OUTER aggregate of the two-level rollup below, where a
-      // reception's counts have already been folded per logical call.
-      const having = encHide ? 'HAVING SUM(g.enc) < SUM(g.calls)' : '';
-      // The count query groups per talkgroup only, so it keeps the flat form.
-      const countHaving = encHide ? 'HAVING COUNT(*) FILTER (WHERE encrypted) < COUNT(*)' : '';
-
-      const pageParams = [...params];
-      pageParams.push(limit);
-      const limIdx = pageParams.length;
-      pageParams.push(offset);
-      const offIdx = pageParams.length;
+      // (Global settings owns that), so every talkgroup heard is listed. The
+      // only exclusion is ids that cannot be talkgroups, with the standing
+      // exception for configured ones (AirBand) — same predicate the embedded
+      // "top talkgroups" columns use.
+      const tgConfiguredSql = await tgValidConfigured();
+      // Whitelisted keys → the grouped expression each sorts on. `talkgroup` is
+      // the tie-breaker everywhere so paging stays stable when the primary key
+      // ties (very common on calls/enc).
+      const tgQuery: TalkgroupsQuery = {
+        windowInterval: WINDOW_INTERVAL[window],
+        system,
+        rfss: scope.rfss,
+        site: scope.site,
+        nodeId,
+        qRaw,
+        encHide,
+        encTgs,
+        agencyIds,
+        tgConfiguredSql,
+        orderCol: TALKGROUPS_ORDER_COL[sort],
+        dir,
+        limit,
+        offset,
+      };
 
       type PageRow = {
         wacn: number | null;
@@ -3902,149 +3843,25 @@ nodeDataRouter.get(
         last_seen: Date;
       };
 
-      // Fleet-wide windows read the hourly rollups plus the hour in progress.
-      // The raw-event grouping over a 7-day window measured 68 s against the
-      // live database; the rollups answer the same question from 13 MB. The
-      // node-scoped view keeps the raw path — the rollups have no node, and
-      // the (node, time) index makes that path cheap anyway.
-      //
-      // Row filters (system, site) apply to both halves; talkgroup filters
-      // (range, prefix, encrypted list, agency) apply once, on the union. The
-      // live hour counts encrypted LOGICAL calls to match the rollup's
-      // encrypted_calls, so the sum is in one unit.
-      // Kept for the page's enrichment below, so the whole request reads one.
+      // Fleet-wide windows read the hourly rollups plus the hour in progress
+      // (buildTalkgroupsRollup); the node-scoped view keeps the raw two-level
+      // scan (buildTalkgroupsRaw). The seam is resolved here and kept for the
+      // page's enrichment below, so the whole request reads one Rollup edge.
       let tgSeam: string | null = null;
-      const rollupTalkgroups = async (): Promise<[{ rows: { n: unknown }[] }, { rows: PageRow[] }]> => {
-        // One seam for the count and the page, as a literal — see
-        // ROLLUP_EDGE_EXPR.
-        const seam = rollupEdgeSql(await resolveRollupEdge(pool));
-        tgSeam = seam;
-        const ROLLUP_HOURS = rollupHours(seam);
-        const LIVE_HOUR = liveHour(seam);
-        const rowConds: string[] = [];
-        const rp: unknown[] = [WINDOW_INTERVAL[window]];
-        if (system !== null) {
-          rp.push(system);
-          rowConds.push(`system = $${rp.length}`);
-        }
-        if (scope.rfss !== null) {
-          rp.push(scope.rfss);
-          rowConds.push(`site_rfss = $${rp.length}`);
-          rp.push(scope.site);
-          rowConds.push(`site_id = $${rp.length}`);
-        }
-        const tgConds: string[] = [TG_VALID];
-        if (qRaw) {
-          rp.push(`${qRaw}%`);
-          tgConds.push(`talkgroup::text LIKE $${rp.length}`);
-        }
-        if (encHide) {
-          const encTgs = await encryptedTalkgroupIds();
-          if (encTgs.length) {
-            rp.push(encTgs);
-            tgConds.push(`talkgroup <> ALL($${rp.length}::int[])`);
-          }
-        }
-        if (agencyFilter) {
-          const tgAgencyMap = await talkgroupAgencies();
-          const ids: number[] = [];
-          for (const [tg, ag] of tgAgencyMap) if (ag === agencyFilter) ids.push(tg);
-          rp.push(ids);
-          tgConds.push(`talkgroup = ANY($${rp.length}::int[])`);
-        }
-        tgConds.push(await tgValidConfigured());
-        const rowWhere = rowConds.length ? ' AND ' + rowConds.join(' AND ') : '';
-        const liveWhere = [LIVE_HOUR, CALL_GROUP, 'talkgroup IS NOT NULL', ...rowConds].join(' AND ');
-        const tgWhere = tgConds.join(' AND ');
-        const cte = `WITH r AS (
-               SELECT system, talkgroup, calls,
-                      logical_calls_tg AS logical, encrypted_calls AS enc, hour AS last_seen
-                 FROM node_radio_hourly_sys
-                WHERE ${ROLLUP_HOURS} AND talkgroup <> 0${rowWhere}
-               UNION ALL
-               SELECT COALESCE(system, 0), talkgroup,
-                      COUNT(*)::int,
-                      COUNT(DISTINCT logical_call_id)::int,
-                      (COUNT(DISTINCT logical_call_id) FILTER (WHERE encrypted))::int,
-                      MAX(received_at)
-                 FROM node_radio_events
-                WHERE ${liveWhere}
-                GROUP BY 1, 2
-             )`;
-        const rollupHaving = encHide ? 'HAVING SUM(enc) < SUM(logical)' : '';
-        return Promise.all([
-          pool.query<{ n: unknown }>(
-            `${cte}
-             SELECT COUNT(*)::int AS n FROM (
-               SELECT 1 FROM r WHERE ${tgWhere}
-                GROUP BY system, talkgroup ${rollupHaving}
-             ) g`,
-            rp,
-          ),
-          pool.query<PageRow>(
-            `${cte}
-             SELECT NULL::int AS wacn, NULLIF(system, 0) AS system, talkgroup,
-                    SUM(calls)::int AS calls,
-                    SUM(logical)::int AS logical,
-                    SUM(enc)::int AS enc,
-                    MAX(last_seen) AS last_seen
-               FROM r
-              WHERE ${tgWhere}
-              GROUP BY system, talkgroup ${rollupHaving}
-              ORDER BY ${orderCol} ${dir}, talkgroup ASC
-              LIMIT $${rp.length + 1} OFFSET $${rp.length + 2}`,
-            [...rp, limit, offset],
-          ),
+      const run = async (b: BuiltCountPage): Promise<[{ rows: { n: unknown }[] }, { rows: PageRow[] }]> =>
+        Promise.all([
+          pool.query<{ n: unknown }>(b.countSql, b.countParams),
+          pool.query<PageRow>(b.pageSql, b.pageParams),
         ]);
-      };
 
-      const rawTalkgroups = (): Promise<[{ rows: { n: unknown }[] }, { rows: PageRow[] }]> => Promise.all([
-        pool.query<{ n: unknown }>(
-          // With enc=hide the predicate is per-GROUP, so the count has to
-          // group first and count the surviving groups.
-          encHide
-            ? `SELECT COUNT(*)::int AS n FROM (
-                 SELECT 1 FROM node_radio_events WHERE ${where}
-                  GROUP BY wacn, system, talkgroup ${countHaving}
-               ) g`
-            // Grouped subquery, NOT COUNT(DISTINCT (row)): a DISTINCT over a
-            // composite forces a sort of every row in the window, where the
-            // group-then-count hash-aggregates. Same answer; measured on a
-            // live 7-day window, 413ms against 1711ms.
-            : `SELECT COUNT(*)::int AS n FROM (
-                 SELECT 1 FROM node_radio_events WHERE ${where}
-                  GROUP BY wacn, system, talkgroup
-               ) g`,
-          params,
-        ),
-        pool.query<PageRow>(
-          // Two levels, so nothing has to sort the window. The inner group
-          // folds each logical call's receptions together; the outer one then
-          // gets `logical` as a plain COUNT(*) of those groups rather than a
-          // COUNT(DISTINCT), which was forcing a sort of all 567k rows.
-          // Measured on a live 7-day window: 759ms against 1138ms.
-          `SELECT wacn, system, talkgroup,
-                  SUM(g.calls)::int AS calls,
-                  COUNT(*)::int AS logical,
-                  SUM(g.enc)::int AS enc,
-                  MAX(g.last_seen) AS last_seen
-             FROM (
-               SELECT wacn, system, talkgroup, logical_call_id,
-                      COUNT(*)::int AS calls,
-                      (COUNT(*) FILTER (WHERE encrypted))::int AS enc,
-                      MAX(received_at) AS last_seen
-                 FROM node_radio_events
-                WHERE ${where}
-                GROUP BY wacn, system, talkgroup, logical_call_id
-             ) g
-            GROUP BY wacn, system, talkgroup ${having}
-            ORDER BY ${orderCol} ${dir}, talkgroup ASC
-            LIMIT $${limIdx} OFFSET $${offIdx}`,
-          pageParams,
-        ),
-      ]);
-
-      const [countQ, pageQ] = await (nodeId === null ? rollupTalkgroups() : rawTalkgroups());
+      let built: BuiltCountPage;
+      if (nodeId === null) {
+        tgSeam = rollupEdgeSql(await resolveRollupEdge(pool));
+        built = buildTalkgroupsRollup(tgQuery, tgSeam);
+      } else {
+        built = buildTalkgroupsRaw(tgQuery);
+      }
+      const [countQ, pageQ] = await run(built);
       timer.mark('main');
       const total = num(countQ.rows[0]?.n);
       const page = pageQ.rows;
@@ -4291,33 +4108,10 @@ nodeDataRouter.get(
       const nodeId = qpNode(url);
       const scope = qpSiteScope(url);
       if (scope.error) return c.json({ error: scope.error }, 400);
-      const params: unknown[] = [WINDOW_INTERVAL[window]];
-      // CALL_GROUP: a radio here = a unit that made talkgroup voice calls
-      // (source_unit of CALL_GROUP% events), not one merely seen in signaling.
-      // RID_VALID, not just NOT NULL: this is the Radios list itself, so a
-      // corrupted decode here becomes a row claiming to be a radio.
-      const conds = ['received_at >= now() - $1::interval', CALL_GROUP, RID_VALID];
-      if (system !== null) {
-        params.push(system);
-        conds.push(`system = $${params.length}`);
-      }
-      if (scope.rfss !== null) {
-        params.push(scope.rfss);
-        conds.push(`site_rfss = $${params.length}`);
-        params.push(scope.site);
-        conds.push(`site_id = $${params.length}`);
-      }
-      if (nodeId !== null) {
-        params.push(nodeId);
-        conds.push(`node_id = $${params.length}`);
-      }
-      if (qRaw) {
-        params.push(`${qRaw}%`);
-        conds.push(`source_unit::text LIKE $${params.length}`);
-      }
       // Agency and "has a configured alias" are both properties of the UID, not
       // of the events, so they resolve to a set of unit ids from the config and
-      // filter as a plain WHERE. Both together = the intersection.
+      // filter as a plain WHERE. Both together = the intersection; an empty set
+      // matches nothing, not everything.
       const agencyFilter = (url.searchParams.get('agency') ?? '').trim();
       const hasFilter = url.searchParams.get('has'); // 'ota' | 'alias' | null
       let unitIds: number[] | null = null;
@@ -4330,35 +4124,28 @@ nodeDataRouter.get(
         } else {
           ids = [...disp.labels.keys()];
         }
-        // An empty set must match nothing, not everything.
         unitIds = ids;
-        params.push(ids);
-        conds.push(`source_unit = ANY($${params.length}::bigint[])`);
       }
-      const where = conds.join(' AND ');
-      // Whitelisted key -> grouped expression. `alias` is the OTA aggregate the
-      // row shows; NULLS LAST keeps unnamed radios out of the way when sorting
-      // by it. `radio` is the tie-breaker so paging stays stable on ties.
-      const orderCol = ({
-        calls: 'calls',
-        lastSeen: 'last_seen',
-        radio: 'radio',
-        ota: 'alias',
-      } as const)[sort];
-      const orderNulls = sort === 'ota' ? ' NULLS LAST' : '';
-      // Only radios that have transmitted an over-the-air alias. Applied as a
-      // HAVING rather than a WHERE because the alias is an aggregate over the
-      // radio's calls — most calls from a named radio carry no alias, so
-      // filtering rows would drop nearly all of its traffic and wreck the
-      // counts alongside it.
+      // Only radios that have transmitted an over-the-air alias; a HAVING, not a
+      // WHERE, because the alias is an aggregate over the radio's calls — most
+      // calls from a named radio carry no alias, so a row filter would drop
+      // nearly all of its traffic and wreck the counts alongside it.
       const namedOnly = url.searchParams.get('named') === '1' || hasFilter === 'ota';
-      const having = namedOnly ? 'HAVING COUNT(source_alias) > 0' : '';
-
-      const pageParams = [...params];
-      pageParams.push(limit);
-      const limIdx = pageParams.length;
-      pageParams.push(offset);
-      const offIdx = pageParams.length;
+      // Resolved inputs → the pure builder in services/nodeEventsQuery.ts.
+      const radQuery: RadiosQuery = {
+        windowInterval: WINDOW_INTERVAL[window],
+        system,
+        rfss: scope.rfss,
+        site: scope.site,
+        nodeId,
+        qRaw,
+        unitIds,
+        namedOnly,
+        sort,
+        dir,
+        limit,
+        offset,
+      };
 
       type RadioRow = {
         wacn: number | null;
@@ -4391,56 +4178,12 @@ nodeDataRouter.get(
         // receptions, as every rollup read counts them; and the OTA used to
         // sort and to filter named radios is the radio's LIFETIME alias, the
         // one the row has always displayed, rather than one sent in-window.
+        // One seam for count, page and the enrichment below (see ROLLUP_EDGE_EXPR).
         const seam = rollupEdgeSql(await resolveRollupEdge(pool));
-        const rp: unknown[] = [WINDOW_INTERVAL[window]];
-        const rowConds: string[] = [];
-        if (system !== null) {
-          rp.push(system);
-          rowConds.push(`system = $${rp.length}`);
-        }
-        if (scope.rfss !== null) {
-          rp.push(scope.rfss);
-          rowConds.push(`site_rfss = $${rp.length}`);
-          rp.push(scope.site);
-          rowConds.push(`site_id = $${rp.length}`);
-        }
-        const unitConds: string[] = [RID_VALID];
-        if (qRaw) {
-          rp.push(`${qRaw}%`);
-          unitConds.push(`source_unit::text LIKE $${rp.length}`);
-        }
-        if (unitIds !== null) {
-          rp.push(unitIds);
-          unitConds.push(`source_unit = ANY($${rp.length}::bigint[])`);
-        }
-        const h = heardWindowSql(seam, [...rowConds, ...unitConds].join(' AND '));
-        // One row per radio, lifetime OTA joined on: collapsed per radio as
-        // the Units list does, echoed ids dropped first.
-        const grouped = `(SELECT system, source_unit AS radio,
-                                SUM(receptions)::int AS calls, MAX(last_heard) AS last_seen
-                           FROM h GROUP BY system, source_unit) g
-                   LEFT JOIN (SELECT radio_id, (array_agg(alias ORDER BY last_seen DESC))[1] AS alias
-                                FROM node_radio_aliases
-                               WHERE alias <> radio_id::text
-                               GROUP BY radio_id) a ON a.radio_id = g.radio${
-                     namedOnly ? ' WHERE a.alias IS NOT NULL' : ''}`;
-        const rollupOrder = ({
-          calls: 'g.calls',
-          lastSeen: 'g.last_seen',
-          radio: 'g.radio',
-          ota: 'a.alias',
-        } as const)[sort];
+        const built = buildRadiosRollup(radQuery, seam);
         const [countQ, pageQ] = await Promise.all([
-          pool.query<{ n: unknown }>(`WITH h AS (${h}) SELECT COUNT(*)::int AS n FROM ${grouped}`, rp),
-          pool.query<RadioRow>(
-            `WITH h AS (${h})
-             SELECT NULL::int AS wacn, NULLIF(g.system, 0) AS system, g.radio, a.alias,
-                    g.calls, g.last_seen
-               FROM ${grouped}
-              ORDER BY ${rollupOrder} ${dir}${orderNulls}, g.radio ASC
-              LIMIT $${rp.length + 1} OFFSET $${rp.length + 2}`,
-            [...rp, limit, offset],
-          ),
+          pool.query<{ n: unknown }>(built.countSql, built.countParams),
+          pool.query<RadioRow>(built.pageSql, built.pageParams),
         ]);
         total = num(countQ.rows[0]?.n);
         page = pageQ.rows;
@@ -4559,39 +4302,10 @@ nodeDataRouter.get(
           });
         }
       } else {
+        const built = buildRadiosRaw(radQuery);
         const [countQ, pageQ] = await Promise.all([
-          pool.query<{ n: unknown }>(
-            namedOnly
-              ? `SELECT COUNT(*)::int AS n FROM (
-                   SELECT 1 FROM node_radio_events WHERE ${where}
-                    GROUP BY wacn, system, source_unit ${having}) t`
-              : `SELECT COUNT(DISTINCT (wacn, system, source_unit))::int AS n
-                   FROM node_radio_events WHERE ${where}`,
-            params,
-          ),
-          pool.query<{
-            wacn: number | null;
-            system: number | null;
-            radio: number;
-            alias: string | null;
-            calls: unknown;
-            last_seen: Date;
-          }>(
-            // alias: the most-recent non-null OTA/talker alias for this radio
-            // (source_alias from vce); null when none was ever captured.
-            `SELECT wacn, system, source_unit AS radio,
-                    (array_agg(source_alias ORDER BY received_at DESC)
-                       FILTER (WHERE source_alias IS NOT NULL AND source_alias <> source_unit::text))[1] AS alias,
-                    COUNT(*)::int AS calls,
-                    MAX(received_at) AS last_seen
-               FROM node_radio_events
-              WHERE ${where}
-              GROUP BY wacn, system, source_unit
-              ${having}
-              ORDER BY ${orderCol} ${dir}${orderNulls}, radio ASC
-              LIMIT $${limIdx} OFFSET $${offIdx}`,
-            pageParams,
-          ),
+          pool.query<{ n: unknown }>(built.countSql, built.countParams),
+          pool.query<RadioRow>(built.pageSql, built.pageParams),
         ]);
         total = num(countQ.rows[0]?.n);
         page = pageQ.rows;
