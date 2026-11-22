@@ -43,6 +43,25 @@ import { learnedAliasMap } from '../services/capcodeAliasSync.js';
 import { requireRole, canViewNodeData } from '../services/auth/roles.js';
 import { hub } from '../services/nodes/hub.js';
 import {
+  type Windows,
+  WINDOW_INTERVAL,
+  TG_MIN,
+  TG_MAX,
+  tgValid,
+  TG_VALID,
+  ridValid,
+  RID_VALID,
+  callGroup,
+  CALL_GROUP,
+  rollupHours,
+  liveHour,
+  rollupEdgeSql,
+  outcomeSql,
+} from '../services/nodeEventsQuery.js';
+// Re-export the pure builder helpers that pre-existing unit tests import from
+// this module, so moving them into nodeEventsQuery.ts stays source-compatible.
+export { outcomeSql, rollupEdgeSql };
+import {
   blockedCapcodeList,
   pagerFilterReasonSql,
   PAGER_FILTER_REASONS,
@@ -323,13 +342,7 @@ async function capcodeAliasLookup(
 
 export const nodeDataRouter = new Hono();
 
-type Windows = '24h' | '7d' | '30d' | 'all';
-
-const WINDOW_INTERVAL: Record<Exclude<Windows, 'all'>, string> = {
-  '24h': '24 hours',
-  '7d': '7 days',
-  '30d': '30 days',
-};
+// Windows / WINDOW_INTERVAL now live in services/nodeEventsQuery.ts (imported above).
 
 /**
  * A real P25 talkgroup id is 16-bit (1..65535). Ingest stores every event's
@@ -355,11 +368,7 @@ const WINDOW_INTERVAL: Record<Exclude<Windows, 'all'>, string> = {
 //
 // A configured talkgroup outside this band is still honoured — see
 // tgValidConfigured, which reads the agencies' own lists.
-const TG_MIN = 10000;
-const TG_MAX = 30500;
-const tgValid = (prefix = ''): string =>
-  `${prefix}talkgroup BETWEEN ${TG_MIN} AND ${TG_MAX}`;
-const TG_VALID = tgValid();
+// TG_MIN/TG_MAX/tgValid/TG_VALID now live in services/nodeEventsQuery.ts (imported above).
 
 /**
  * "This is a real radio id." The RID half of tgValid, and it did not exist:
@@ -376,9 +385,7 @@ const TG_VALID = tgValid();
  * Counts of CALLS stay unfiltered, exactly as tgValid's do: a call whose source
  * decoded badly is still a call. This gates who appears in a list of radios.
  */
-const ridValid = (prefix = ''): string =>
-  `${prefix}source_unit BETWEEN 100000 AND 9999999`;
-const RID_VALID = ridValid();
+// ridValid/RID_VALID now live in services/nodeEventsQuery.ts (imported above).
 
 /**
  * The same rule, plus the operator's deliberate exceptions: AirBand carries
@@ -540,10 +547,7 @@ function radioReceptionsSql(
  * this network transmits arrives on a patch call, so the rollups excluded all
  * of them.
  */
-const callGroup = (prefix = ''): string =>
-  `(${prefix}event_type LIKE 'CALL_GROUP%'` +
-  ` OR ${prefix}event_type LIKE 'CALL_PATCH_GROUP%')`;
-const CALL_GROUP = callGroup();
+// callGroup/CALL_GROUP now live in services/nodeEventsQuery.ts (imported above).
 
 /**
  * The talkgroup table, cached per exact query string.
@@ -838,12 +842,7 @@ export interface RadioTotals {
  * ingested, and cardinality() = 0 means "we could not ask rdio" rather than
  * "nothing is programmed" — the same guard, for the same reason.
  */
-export function outcomeSql(homeCol: string, encParam: string, progParam: string) {
-  const isEnc = `${homeCol} = ANY(${encParam}::int[])`;
-  const isNoTgid =
-    `cardinality(${progParam}::int[]) > 0 AND ${homeCol} <> ALL(${progParam}::int[])`;
-  return { isEnc, isNoTgid };
-}
+// outcomeSql now lives in services/nodeEventsQuery.ts (imported + re-exported above).
 
 /**
  * The seam between stored history and live detail: how far the hourly rollup
@@ -919,9 +918,7 @@ export async function resolveRollupEdge(pool: Pick<Pool, 'query'>): Promise<Date
  * Date#toISOString() output — a fixed ISO-8601 format — of a Date built from
  * our own database's answer, never from request input.
  */
-export function rollupEdgeSql(edge: Date): string {
-  return `'${edge.toISOString()}'::timestamptz`;
-}
+// rollupEdgeSql now lives in services/nodeEventsQuery.ts (imported + re-exported above).
 
 /**
  * The tiles, summed from node_radio_hourly_rx plus the hour in progress.
@@ -1043,9 +1040,7 @@ export interface RadioLists {
  * every poll. See ROLLUP_EDGE_EXPR for why the seam is read rather than
  * assumed, and why it arrives as a literal rather than a subquery.
  */
-const rollupHours = (seam: string) =>
-  `hour >= date_trunc('hour', now()) - $1::interval AND hour < ${seam}`;
-const liveHour = (seam: string) => `received_at >= ${seam}`;
+// rollupHours/liveHour now live in services/nodeEventsQuery.ts (imported above).
 
 /**
  * The five lists, from the hourly rollups plus the hour in progress.
