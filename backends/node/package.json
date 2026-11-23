@@ -24,23 +24,23 @@
     "openapi": "tsx scripts/generate-openapi.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1164.0",
-    "@aws-sdk/s3-request-presigner": "^3.1164.0",
-    "@hono/node-server": "^2.1.6",
+    "@aws-sdk/client-s3": "^3.1173.0",
+    "@aws-sdk/s3-request-presigner": "^3.1173.0",
+    "@hono/node-server": "^2.1.11",
     "dictionary-en-au": "^3.0.0",
-    "fast-xml-parser": "^5.12.0",
+    "fast-xml-parser": "^5.12.1",
     "ffmpeg-static": "^5.3.0",
     "gtfs-realtime-bindings": "^2.2.0",
-    "hono": "^4.13.17",
-    "hono-openapi": "^1.5.0",
-    "jose": "^6.2.15",
+    "hono": "^4.13.19",
+    "hono-openapi": "^1.6.0",
+    "jose": "^6.2.18",
     "nspell": "^2.1.5",
     "pg": "^8.23.1",
     "pino": "^10.4.0",
     "pino-pretty": "^13.2.0",
-    "playwright": "^1.65.0",
+    "playwright": "^1.65.1",
     "undici": "^7.30.2",
-    "ws": "^8.22.1",
+    "ws": "^8.23.0",
     "zod": "^4.6.2"
   },
   "devDependencies": {
@@ -50,7 +50,7 @@
     "@types/ws": "^8.18.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vitest": "^5.1.0"
+    "vitest": "^5.1.1"
   },
   "optionalDependencies": {
     "playwright-extra": "^4.3.6",
