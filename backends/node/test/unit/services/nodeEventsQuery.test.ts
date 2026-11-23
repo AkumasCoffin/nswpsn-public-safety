@@ -39,6 +39,18 @@ import {
   buildRadiosRaw,
   buildRadiosRollup,
   type RadiosQuery,
+  buildOverviewTotals,
+  buildOverviewPerNode,
+  buildOverviewTopTalkgroups,
+  buildOverviewTopUnits,
+  buildOverviewTopSites,
+  buildOverviewSeries,
+  overviewTotalsRollupSql,
+  overviewTopTalkgroupsRollupSql,
+  overviewTopSitesRollupSql,
+  overviewTopUnitsRollupSql,
+  overviewSeriesRollupSql,
+  overviewPerNodeRollupSql,
 } from '../../../src/services/nodeEventsQuery.js';
 
 describe('WINDOW_INTERVAL', () => {
@@ -467,5 +479,159 @@ describe('buildRadiosRollup — fleet-wide across the Rollup edge', () => {
     expect(b.pageSql).toContain('a ON a.radio_id = g.radio WHERE a.alias IS NOT NULL');
     expect(b.pageSql).toContain('ORDER BY a.alias DESC NULLS LAST, g.radio ASC');
     expect(b.pageSql).toContain('LIMIT $7 OFFSET $8');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Overview route (batch 2). The detail builders unify the windowed and
+// window=all code paths: 24h/7d/30d bind the interval as $1 and bucket the
+// series by hour; `all` inlines the 30-day retention cap as a literal floor and
+// buckets by day. The optional node scope threads in as the next $N. The rollup
+// emitters split on the Rollup-edge seam literal. These pin the SQL the overview
+// route used to inline, so the migration provably changed behaviour nowhere.
+// ---------------------------------------------------------------------------
+
+describe('overview detail builders', () => {
+  it('buildOverviewPerNode: windowed binds $1; all inlines the 30-day cap + node $1', () => {
+    expect(buildOverviewPerNode('7d', null)).toEqual({
+      sql: `SELECT node_id, COUNT(*)::int AS calls\n     FROM node_radio_events\n    WHERE received_at >= now() - $1::interval AND ${CALL_GROUP} GROUP BY node_id`,
+      params: ['7 days'],
+    });
+    expect(buildOverviewPerNode('all', 'n1')).toEqual({
+      sql: `SELECT node_id, COUNT(*)::int AS calls\n     FROM node_radio_events\n    WHERE received_at >= now() - interval '30 days' AND node_id = $1 AND ${CALL_GROUP} GROUP BY node_id`,
+      params: ['n1'],
+    });
+  });
+
+  it('buildOverviewTopTalkgroups: node scope is $2, TG_VALID gate, LIMIT 15', () => {
+    expect(buildOverviewTopTalkgroups('7d', 'n1')).toEqual({
+      sql:
+        `SELECT system, talkgroup,\n` +
+        `          COUNT(DISTINCT (logical_call_id, node_id,\n` +
+        `            COALESCE(site_rfss, -1), COALESCE(site_id, -1)))::int AS receptions,\n` +
+        `          COUNT(DISTINCT logical_call_id)::int AS logical,\n` +
+        `          NULL::text AS label\n` +
+        `     FROM node_radio_events\n` +
+        `    WHERE received_at >= now() - $1::interval AND node_id = $2 AND ${CALL_GROUP} AND ${TG_VALID}\n` +
+        `    GROUP BY system, talkgroup\n` +
+        `    ORDER BY receptions DESC LIMIT 15`,
+      params: ['7 days', 'n1'],
+    });
+  });
+
+  it('buildOverviewTopUnits: all path uses the 30-day floor + RID_VALID, no params', () => {
+    expect(buildOverviewTopUnits('all', null)).toEqual({
+      sql:
+        `SELECT source_unit AS unit,\n` +
+        `          (array_agg(source_alias ORDER BY received_at DESC)\n` +
+        `             FILTER (WHERE source_alias IS NOT NULL AND source_alias <> source_unit::text))[1] AS alias,\n` +
+        `          COUNT(DISTINCT (logical_call_id, node_id,\n` +
+        `            COALESCE(site_rfss, -1), COALESCE(site_id, -1), talkgroup))::int AS receptions\n` +
+        `     FROM node_radio_events\n` +
+        `    WHERE received_at >= now() - interval '30 days' AND ${CALL_GROUP} AND ${RID_VALID}\n` +
+        `    GROUP BY source_unit ORDER BY receptions DESC LIMIT 15`,
+      params: [],
+    });
+  });
+
+  it('buildOverviewTopSites: site-not-null guard, LIMIT 15', () => {
+    expect(buildOverviewTopSites('7d', null)).toEqual({
+      sql:
+        `SELECT site_rfss, site_id,\n` +
+        `          COUNT(DISTINCT (logical_call_id, node_id, talkgroup))::int AS receptions\n` +
+        `     FROM node_radio_events\n` +
+        `    WHERE received_at >= now() - $1::interval AND ${CALL_GROUP} AND site_rfss IS NOT NULL AND site_id IS NOT NULL\n` +
+        `    GROUP BY site_rfss, site_id ORDER BY receptions DESC LIMIT 15`,
+      params: ['7 days'],
+    });
+  });
+
+  it('buildOverviewSeries: hour bucket windowed, day bucket for all', () => {
+    expect(buildOverviewSeries('7d', null).sql).toBe(
+      `SELECT date_trunc('hour', received_at) AS bucket, COUNT(*)::int AS n\n     FROM node_radio_events\n    WHERE received_at >= now() - $1::interval AND ${CALL_GROUP} GROUP BY 1 ORDER BY 1`,
+    );
+    expect(buildOverviewSeries('all', null).sql).toBe(
+      `SELECT date_trunc('day', received_at) AS bucket, COUNT(*)::int AS n\n     FROM node_radio_events\n    WHERE received_at >= now() - interval '30 days' AND ${CALL_GROUP} GROUP BY 1 ORDER BY 1`,
+    );
+  });
+
+  it('buildOverviewTotals: param order + enc/prog placeholder numbering per path', () => {
+    // windowed fleet: $1 interval, enc $2, prog $3
+    const wf = buildOverviewTotals('7d', null, [1, 2], [3], false);
+    expect(wf.params).toEqual(['7 days', [1, 2], [3]]);
+    expect(wf.sql).toContain('received_at >= now() - $1::interval AND ' + CALL_GROUP);
+    expect(wf.sql).toContain('t.home = ANY($2::int[])');
+    expect(wf.sql).toContain('cardinality($3::int[]) > 0');
+    expect(wf.sql).not.toContain(`WHERE outcome <> 'enc'`);
+    // windowed node + hideEnc: $1 interval, $2 node, enc $3, prog $4, enc suffix
+    const wn = buildOverviewTotals('7d', 'n1', [1, 2], [3], true);
+    expect(wn.params).toEqual(['7 days', 'n1', [1, 2], [3]]);
+    expect(wn.sql).toContain('node_id = $2 AND ' + CALL_GROUP);
+    expect(wn.sql).toContain('t.home = ANY($3::int[])');
+    expect(wn.sql.endsWith(`FROM k WHERE outcome <> 'enc'`)).toBe(true);
+    // all fleet: no interval param, enc $1, prog $2
+    const af = buildOverviewTotals('all', null, [1, 2], [3], false);
+    expect(af.params).toEqual([[1, 2], [3]]);
+    expect(af.sql).toContain(`received_at >= now() - interval '30 days' AND ` + CALL_GROUP);
+    expect(af.sql).toContain('t.home = ANY($1::int[])');
+    // all node: $1 node, enc $2, prog $3
+    const an = buildOverviewTotals('all', 'n1', [1, 2], [3], false);
+    expect(an.params).toEqual(['n1', [1, 2], [3]]);
+    expect(an.sql).toContain(`received_at >= now() - interval '30 days' AND node_id = $1`);
+    expect(an.sql).toContain('t.home = ANY($2::int[])');
+  });
+});
+
+describe('overview rollup emitters', () => {
+  const SEAM = rollupEdgeSql(new Date('2026-01-01T00:00:00.000Z'));
+
+  it('overviewTopTalkgroupsRollupSql: completed hours UNION the live hour, split on the seam', () => {
+    expect(overviewTopTalkgroupsRollupSql(SEAM)).toBe(
+      `WITH r AS (\n` +
+        `         SELECT system, talkgroup, receptions, logical_calls_tg AS logical\n` +
+        `           FROM node_radio_hourly_sys\n` +
+        `          WHERE ${rollupHours(SEAM)} AND ${TG_VALID}\n` +
+        `         UNION ALL\n` +
+        `         SELECT COALESCE(system, 0), talkgroup,\n` +
+        `                COUNT(DISTINCT (logical_call_id, node_id,\n` +
+        `                  COALESCE(site_rfss, -1), COALESCE(site_id, -1)))::int,\n` +
+        `                COUNT(DISTINCT logical_call_id)::int\n` +
+        `           FROM node_radio_events\n` +
+        `          WHERE ${liveHour(SEAM)} AND ${CALL_GROUP} AND ${TG_VALID}\n` +
+        `          GROUP BY 1, 2\n` +
+        `       )\n` +
+        `       SELECT NULLIF(system, 0) AS system, talkgroup,\n` +
+        `              SUM(receptions)::int AS receptions,\n` +
+        `              SUM(logical)::int AS logical,\n` +
+        `              NULL::text AS label\n` +
+        `         FROM r GROUP BY r.system, r.talkgroup\n` +
+        `        ORDER BY receptions DESC LIMIT 15`,
+    );
+  });
+
+  it('overviewSeriesRollupSql: bucket literal flows into both halves', () => {
+    expect(overviewSeriesRollupSql(SEAM, 'day')).toContain(`SELECT date_trunc('day', hour) AS bucket, calls AS n`);
+    expect(overviewSeriesRollupSql(SEAM, 'day')).toContain(`SELECT date_trunc('day', now()), COUNT(*)::int`);
+    expect(overviewSeriesRollupSql(SEAM, 'hour')).toContain(`date_trunc('hour', hour)`);
+    expect(overviewSeriesRollupSql(SEAM, 'day')).toContain(rollupHours(SEAM));
+    expect(overviewSeriesRollupSql(SEAM, 'day')).toContain(liveHour(SEAM));
+  });
+
+  it('overviewTotalsRollupSql: $1 interval + seam window; hideEnc adds the NOT-enc filter', () => {
+    const plain = overviewTotalsRollupSql(SEAM, false);
+    expect(plain).toContain('FROM node_radio_hourly_rx');
+    expect(plain).toContain(`WHERE hour >= date_trunc('hour', now()) - $1::interval`);
+    expect(plain).toContain(`AND hour <  ${SEAM}`);
+    expect(plain).not.toContain('AND NOT (home_talkgroup = ANY($2::int[]))');
+    expect(overviewTotalsRollupSql(SEAM, true)).toContain('AND NOT (home_talkgroup = ANY($2::int[]))');
+  });
+
+  it('overviewTopSitesRollupSql / overviewTopUnitsRollupSql / overviewPerNodeRollupSql: seam-split unions', () => {
+    expect(overviewTopSitesRollupSql(SEAM)).toContain('FROM node_radio_hourly_sys');
+    expect(overviewTopSitesRollupSql(SEAM)).toContain('site_rfss <> -1 AND site_id <> -1');
+    expect(overviewTopUnitsRollupSql(SEAM)).toContain('FROM node_radio_hourly_unit');
+    expect(overviewTopUnitsRollupSql(SEAM)).toContain(RID_VALID);
+    expect(overviewPerNodeRollupSql(SEAM)).toContain('FROM node_radio_hourly WHERE ' + rollupHours(SEAM));
+    expect(overviewPerNodeRollupSql(SEAM)).toContain('SELECT node_id, SUM(calls)::int AS calls');
   });
 });

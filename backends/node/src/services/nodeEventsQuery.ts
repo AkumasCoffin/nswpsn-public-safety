@@ -591,3 +591,355 @@ SELECT NULL::int AS wacn, NULLIF(g.system, 0) AS system, g.radio, a.alias,
 
   return { countSql, countParams: rp, pageSql, pageParams: [...rp, q.limit, q.offset] };
 }
+
+// ===========================================================================
+// Overview route (batch 2) — totals, per-node, top-lists, series.
+//
+// Same pure-in/impure-out boundary as the pilot: the route resolves the Rollup
+// edge, the encrypted/programmed talkgroup id sets, and the enc=hide flag, then
+// these builders emit SQL (+ params for the detail path). The route keeps the
+// SWR/in-flight caches, edge resolution, label/alias/colour lookups and JSON
+// shaping. Radio only — the three pager aggregates stay inline for the future
+// pager batch.
+//
+// DETAIL path: one window-parameterised builder per query. Each binds the
+// window interval as $1 for 24h/7d/30d; `all` inlines the 30-day retention cap
+// as a literal floor (the detail table is pruned at 30 days, so `all` is the
+// 30-day window — radioWindowCapped says so on the response) and buckets the
+// series by day rather than hour. The optional node scope ($N) threads through
+// every detail query. The emitted SQL is semantically identical to the route's
+// prior inline SQL (golden tests pin it; params are byte-identical).
+// ===========================================================================
+
+/** A single built statement: SQL plus its ordered params. */
+export interface BuiltQuery {
+  sql: string;
+  params: unknown[];
+}
+
+/**
+ * The one definition of the overview **totals**: received / transmissions /
+ * ingested and the four drop buckets (no_tgid, enc, dropped_patch,
+ * dropped_site), which partition `received` exactly. `encParam` / `progParam`
+ * are the $N placeholders holding the encrypted and programmed talkgroup id
+ * arrays; `hideEnc` drops encrypted calls from every figure rather than zeroing
+ * one tile, so the buckets still partition. Pure: `where` is supplied by the
+ * caller (it carries the window floor, CALL_GROUP, and any node scope). Moved
+ * here from api/node-data.ts so the totals CTE has one home.
+ */
+export function radioReceptionsSql(
+  where: string,
+  encParam: string,
+  progParam: string,
+  hideEnc: boolean,
+): string {
+  return `WITH ev AS MATERIALIZED (
+            SELECT id, logical_call_id, talkgroup, patch_members, node_id,
+                   COALESCE(site_rfss, -1) AS rfss, COALESCE(site_id, -1) AS site
+              FROM node_radio_events
+             WHERE ${where}
+          ), tx AS (
+            -- Per-transmission facts, in ONE pass over the events. home is the
+            -- talkgroup of the EARLIEST event, taken from the event's own column
+            -- rather than from the expanded pair set: an unnested patch member
+            -- inherits its parent row's id, so ordering the expanded set by id
+            -- leaves ties that resolve arbitrarily, and home -- with it the
+            -- whole patch/site split -- would differ run to run.
+            SELECT logical_call_id,
+                   (array_agg(talkgroup ORDER BY id))[1] AS home
+              FROM ev GROUP BY logical_call_id
+          ), expanded AS (
+            SELECT logical_call_id, node_id, rfss, site, talkgroup AS tg FROM ev
+            UNION ALL
+            SELECT logical_call_id, node_id, rfss, site, unnest(patch_members)
+              FROM ev WHERE patch_members IS NOT NULL
+          ), pairs AS (
+            SELECT DISTINCT logical_call_id, node_id, rfss, site, tg FROM expanded
+          ), agg AS (
+            SELECT p.logical_call_id,
+                   COUNT(*)::int AS receptions,
+                   (COUNT(*) FILTER (WHERE p.tg IS DISTINCT FROM t.home))::int AS d_patch,
+                   (COUNT(*) FILTER (WHERE p.tg IS NOT DISTINCT FROM t.home) - 1)::int AS d_site
+              FROM pairs p JOIN tx t USING (logical_call_id)
+             GROUP BY 1
+          ), k AS (
+            SELECT a.*, CASE
+                     WHEN t.home = ANY(${encParam}::int[]) THEN 'enc'
+                     -- An EMPTY programmed list means "rdio unreachable", not
+                     -- "nothing is programmed", so it must not condemn the whole
+                     -- network to no_tgid. cardinality() = 0 skips the test.
+                     WHEN cardinality(${progParam}::int[]) > 0
+                          AND t.home <> ALL(${progParam}::int[]) THEN 'no_tgid'
+                     ELSE 'ingested' END AS outcome
+              FROM agg a JOIN tx t USING (logical_call_id)
+          )
+          SELECT COALESCE(SUM(receptions), 0)::int AS received,
+                 COUNT(*)::int AS transmissions,
+                 (COUNT(*) FILTER (WHERE outcome = 'ingested'))::int AS ingested,
+                 (COUNT(*) FILTER (WHERE outcome = 'no_tgid'))::int AS no_tgid,
+                 (COUNT(*) FILTER (WHERE outcome = 'enc'))::int AS enc,
+                 COALESCE(SUM(d_patch), 0)::int AS dropped_patch,
+                 COALESCE(SUM(d_site), 0)::int AS dropped_site
+            FROM k${hideEnc ? ` WHERE outcome <> 'enc'` : ''}`;
+}
+
+/**
+ * The detail-path floor + optional node scope + their params, window-aware.
+ * 24h/7d/30d bind the interval as `$1`; `all` inlines the 30-day cap as a
+ * literal so the range index can bound the scan. A node scope appends ` AND
+ * node_id = $N` with N following the interval param when present.
+ */
+function overviewDetailBase(
+  window: Windows,
+  nodeId: string | null,
+): { floor: string; node: string; params: unknown[] } {
+  const params: unknown[] = window === 'all' ? [] : [WINDOW_INTERVAL[window]];
+  const floor =
+    window === 'all'
+      ? `received_at >= now() - interval '30 days'`
+      : `received_at >= now() - $1::interval`;
+  let node = '';
+  if (nodeId !== null) {
+    params.push(nodeId);
+    node = ` AND node_id = $${params.length}`;
+  }
+  return { floor, node, params };
+}
+
+/** The shared detail WHERE: window floor + node scope + the CALL_GROUP gate. */
+function overviewDetailWhere(base: { floor: string; node: string }): string {
+  return `${base.floor}${base.node} AND ${CALL_GROUP}`;
+}
+
+/** Overview totals (detail path): the receptions CTE over the window. */
+export function buildOverviewTotals(
+  window: Windows,
+  nodeId: string | null,
+  encTgs: number[],
+  progTgs: number[],
+  hideEnc: boolean,
+): BuiltQuery {
+  const base = overviewDetailBase(window, nodeId);
+  const where = overviewDetailWhere(base);
+  const sql = radioReceptionsSql(
+    where,
+    `$${base.params.length + 1}`,
+    `$${base.params.length + 2}`,
+    hideEnc,
+  );
+  return { sql, params: [...base.params, encTgs, progTgs] };
+}
+
+/** Per-node reception volume (detail path). */
+export function buildOverviewPerNode(window: Windows, nodeId: string | null): BuiltQuery {
+  const base = overviewDetailBase(window, nodeId);
+  return {
+    sql: `SELECT node_id, COUNT(*)::int AS calls
+     FROM node_radio_events
+    WHERE ${overviewDetailWhere(base)} GROUP BY node_id`,
+    params: base.params,
+  };
+}
+
+/** Top talkgroups by receptions (detail path); label resolves in the route. */
+export function buildOverviewTopTalkgroups(window: Windows, nodeId: string | null): BuiltQuery {
+  const base = overviewDetailBase(window, nodeId);
+  return {
+    sql: `SELECT system, talkgroup,
+          COUNT(DISTINCT (logical_call_id, node_id,
+            COALESCE(site_rfss, -1), COALESCE(site_id, -1)))::int AS receptions,
+          COUNT(DISTINCT logical_call_id)::int AS logical,
+          NULL::text AS label
+     FROM node_radio_events
+    WHERE ${overviewDetailWhere(base)} AND ${TG_VALID}
+    GROUP BY system, talkgroup
+    ORDER BY receptions DESC LIMIT 15`,
+    params: base.params,
+  };
+}
+
+/** Top radios by receptions (detail path), newest OTA alias in-window. */
+export function buildOverviewTopUnits(window: Windows, nodeId: string | null): BuiltQuery {
+  const base = overviewDetailBase(window, nodeId);
+  return {
+    sql: `SELECT source_unit AS unit,
+          (array_agg(source_alias ORDER BY received_at DESC)
+             FILTER (WHERE source_alias IS NOT NULL AND source_alias <> source_unit::text))[1] AS alias,
+          COUNT(DISTINCT (logical_call_id, node_id,
+            COALESCE(site_rfss, -1), COALESCE(site_id, -1), talkgroup))::int AS receptions
+     FROM node_radio_events
+    WHERE ${overviewDetailWhere(base)} AND ${RID_VALID}
+    GROUP BY source_unit ORDER BY receptions DESC LIMIT 15`,
+    params: base.params,
+  };
+}
+
+/** Top sites by receptions carried (detail path). */
+export function buildOverviewTopSites(window: Windows, nodeId: string | null): BuiltQuery {
+  const base = overviewDetailBase(window, nodeId);
+  return {
+    sql: `SELECT site_rfss, site_id,
+          COUNT(DISTINCT (logical_call_id, node_id, talkgroup))::int AS receptions
+     FROM node_radio_events
+    WHERE ${overviewDetailWhere(base)} AND site_rfss IS NOT NULL AND site_id IS NOT NULL
+    GROUP BY site_rfss, site_id ORDER BY receptions DESC LIMIT 15`,
+    params: base.params,
+  };
+}
+
+/** Activity series (detail path): hourly, or daily for window=all. */
+export function buildOverviewSeries(window: Windows, nodeId: string | null): BuiltQuery {
+  const base = overviewDetailBase(window, nodeId);
+  const bucket = window === 'all' ? 'day' : 'hour';
+  return {
+    sql: `SELECT date_trunc('${bucket}', received_at) AS bucket, COUNT(*)::int AS n
+     FROM node_radio_events
+    WHERE ${overviewDetailWhere(base)} GROUP BY 1 ORDER BY 1`,
+    params: base.params,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Overview ROLLUP path — pure SQL-string emitters. The impure runners
+// (radioTotalsFromRollup / radioListsFromRollup, in api/node-data.ts) keep the
+// pool.query + merge + null-fallback; they just call these for the SQL. All
+// split on the Rollup-edge `seam` literal: completed hours from the rollup
+// tables UNION the in-progress hour folded from detail.
+// ---------------------------------------------------------------------------
+
+/**
+ * Overview totals from `node_radio_hourly_rx` (completed hours only; the live
+ * tail is added by the caller via `radioReceptionsSql`). Binds $1=interval,
+ * $2=encrypted ids, $3=programmed ids.
+ */
+export function overviewTotalsRollupSql(seam: string, hideEnc: boolean): string {
+  const { isEnc, isNoTgid } = outcomeSql('home_talkgroup', '$2', '$3');
+  const encFilter = hideEnc ? ` AND NOT (${isEnc})` : '';
+  return `SELECT
+       COALESCE(SUM(receptions), 0)::int                       AS received,
+       COALESCE(SUM(transmissions), 0)::int                    AS transmissions,
+       COALESCE(SUM(receptions - receptions_home), 0)::int      AS dropped_patch,
+       COALESCE(SUM(receptions_home - transmissions), 0)::int   AS dropped_site,
+       COALESCE(SUM(transmissions) FILTER (WHERE ${isEnc}), 0)::int AS enc,
+       COALESCE(SUM(transmissions) FILTER (
+         WHERE NOT (${isEnc}) AND (${isNoTgid})), 0)::int       AS no_tgid,
+       COALESCE(SUM(transmissions) FILTER (
+         WHERE NOT (${isEnc}) AND NOT (${isNoTgid})), 0)::int   AS ingested
+     FROM node_radio_hourly_rx
+    WHERE hour >= date_trunc('hour', now()) - $1::interval
+      AND hour <  ${seam}${encFilter}`;
+}
+
+/** Top talkgroups, rollup+live union. Binds $1=interval. */
+export function overviewTopTalkgroupsRollupSql(seam: string): string {
+  const ROLLUP_HOURS = rollupHours(seam);
+  const LIVE_HOUR = liveHour(seam);
+  const tgBand = tgValid();
+  return `WITH r AS (
+         SELECT system, talkgroup, receptions, logical_calls_tg AS logical
+           FROM node_radio_hourly_sys
+          WHERE ${ROLLUP_HOURS} AND ${tgBand}
+         UNION ALL
+         SELECT COALESCE(system, 0), talkgroup,
+                COUNT(DISTINCT (logical_call_id, node_id,
+                  COALESCE(site_rfss, -1), COALESCE(site_id, -1)))::int,
+                COUNT(DISTINCT logical_call_id)::int
+           FROM node_radio_events
+          WHERE ${LIVE_HOUR} AND ${CALL_GROUP} AND ${tgBand}
+          GROUP BY 1, 2
+       )
+       SELECT NULLIF(system, 0) AS system, talkgroup,
+              SUM(receptions)::int AS receptions,
+              SUM(logical)::int AS logical,
+              NULL::text AS label
+         FROM r GROUP BY r.system, r.talkgroup
+        ORDER BY receptions DESC LIMIT 15`;
+}
+
+/** Top sites, rollup+live union. Binds $1=interval. */
+export function overviewTopSitesRollupSql(seam: string): string {
+  const ROLLUP_HOURS = rollupHours(seam);
+  const LIVE_HOUR = liveHour(seam);
+  return `WITH r AS (
+         SELECT site_rfss, site_id, receptions
+           FROM node_radio_hourly_sys
+          WHERE ${ROLLUP_HOURS} AND site_rfss <> -1 AND site_id <> -1
+         UNION ALL
+         SELECT site_rfss, site_id,
+                COUNT(DISTINCT (logical_call_id, node_id, talkgroup))::int
+           FROM node_radio_events
+          WHERE ${LIVE_HOUR} AND ${CALL_GROUP}
+            AND site_rfss IS NOT NULL AND site_id IS NOT NULL
+          GROUP BY 1, 2
+       )
+       SELECT site_rfss, site_id, SUM(receptions)::int AS receptions
+         FROM r GROUP BY site_rfss, site_id
+        ORDER BY receptions DESC LIMIT 15`;
+}
+
+/** Top units, rollup+live union; alias carried with its hour. Binds $1=interval. */
+export function overviewTopUnitsRollupSql(seam: string): string {
+  const ROLLUP_HOURS = rollupHours(seam);
+  const LIVE_HOUR = liveHour(seam);
+  return `WITH r AS (
+         SELECT hour, source_unit AS unit, receptions, alias
+           FROM node_radio_hourly_unit
+          WHERE ${ROLLUP_HOURS} AND ${ridValid()}
+         UNION ALL
+         SELECT date_trunc('hour', now()), source_unit,
+                COUNT(DISTINCT (logical_call_id, node_id,
+                  COALESCE(site_rfss, -1), COALESCE(site_id, -1), talkgroup))::int,
+                (array_agg(source_alias ORDER BY received_at DESC)
+                   FILTER (WHERE source_alias IS NOT NULL
+                             AND source_alias <> source_unit::text))[1]
+           FROM node_radio_events
+          WHERE ${LIVE_HOUR} AND ${CALL_GROUP} AND ${RID_VALID}
+          GROUP BY source_unit
+       )
+       SELECT unit, SUM(receptions)::int AS receptions,
+              (array_agg(alias ORDER BY hour DESC)
+                 FILTER (WHERE alias IS NOT NULL))[1] AS alias
+         FROM r GROUP BY unit ORDER BY receptions DESC LIMIT 15`;
+}
+
+/** Activity series, rollup+live union; `bucket` is 'hour' or 'day'. Binds $1=interval. */
+export function overviewSeriesRollupSql(seam: string, bucket: 'hour' | 'day'): string {
+  const ROLLUP_HOURS = rollupHours(seam);
+  const LIVE_HOUR = liveHour(seam);
+  return `WITH r AS (
+         SELECT date_trunc('${bucket}', hour) AS bucket, calls AS n
+           FROM node_radio_hourly WHERE ${ROLLUP_HOURS}
+         UNION ALL
+         SELECT date_trunc('${bucket}', now()), COUNT(*)::int
+           FROM (
+             SELECT DISTINCT logical_call_id, node_id,
+                    COALESCE(system, 0) AS system, COALESCE(talkgroup, 0) AS talkgroup,
+                    COALESCE(site_rfss, -1) AS rfss, COALESCE(site_id, -1) AS site
+               FROM node_radio_events
+              WHERE ${LIVE_HOUR} AND ${CALL_GROUP}
+           ) d
+       )
+       SELECT bucket, SUM(n)::int AS n FROM r GROUP BY 1 ORDER BY 1`;
+}
+
+/** Per-node reception volume, rollup+live union. Binds $1=interval. */
+export function overviewPerNodeRollupSql(seam: string): string {
+  const ROLLUP_HOURS = rollupHours(seam);
+  const LIVE_HOUR = liveHour(seam);
+  return `WITH r AS (
+         SELECT node_id, calls
+           FROM node_radio_hourly WHERE ${ROLLUP_HOURS}
+         UNION ALL
+         SELECT node_id, COUNT(*)::int
+           FROM (
+             SELECT DISTINCT logical_call_id, node_id,
+                    COALESCE(system, 0) AS system, COALESCE(talkgroup, 0) AS talkgroup,
+                    COALESCE(site_rfss, -1) AS rfss, COALESCE(site_id, -1) AS site
+               FROM node_radio_events
+              WHERE ${LIVE_HOUR} AND ${CALL_GROUP}
+           ) d
+          GROUP BY node_id
+       )
+       SELECT node_id, SUM(calls)::int AS calls
+         FROM r GROUP BY node_id`;
+}

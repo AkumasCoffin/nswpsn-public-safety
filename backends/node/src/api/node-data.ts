@@ -66,6 +66,19 @@ import {
   type RadiosQuery,
   buildRadiosRollup,
   buildRadiosRaw,
+  radioReceptionsSql,
+  buildOverviewTotals,
+  buildOverviewPerNode,
+  buildOverviewTopTalkgroups,
+  buildOverviewTopUnits,
+  buildOverviewTopSites,
+  buildOverviewSeries,
+  overviewTotalsRollupSql,
+  overviewTopTalkgroupsRollupSql,
+  overviewTopSitesRollupSql,
+  overviewTopUnitsRollupSql,
+  overviewSeriesRollupSql,
+  overviewPerNodeRollupSql,
 } from '../services/nodeEventsQuery.js';
 // Re-export the pure builder helpers that pre-existing unit tests import from
 // this module, so moving them into nodeEventsQuery.ts stays source-compatible.
@@ -463,61 +476,9 @@ async function tgValidConfigured(prefix = ''): Promise<string> {
  * filter — an identity, not a rounding artefact. Both are measured
  * independently now.
  */
-function radioReceptionsSql(
-  where: string,
-  encParam: string,
-  progParam: string,
-  hideEnc: boolean,
-): string {
-  return `WITH ev AS MATERIALIZED (
-            SELECT id, logical_call_id, talkgroup, patch_members, node_id,
-                   COALESCE(site_rfss, -1) AS rfss, COALESCE(site_id, -1) AS site
-              FROM node_radio_events
-             WHERE ${where}
-          ), tx AS (
-            -- Per-transmission facts, in ONE pass over the events. home is the
-            -- talkgroup of the EARLIEST event, taken from the event's own column
-            -- rather than from the expanded pair set: an unnested patch member
-            -- inherits its parent row's id, so ordering the expanded set by id
-            -- leaves ties that resolve arbitrarily, and home -- with it the
-            -- whole patch/site split -- would differ run to run.
-            SELECT logical_call_id,
-                   (array_agg(talkgroup ORDER BY id))[1] AS home
-              FROM ev GROUP BY logical_call_id
-          ), expanded AS (
-            SELECT logical_call_id, node_id, rfss, site, talkgroup AS tg FROM ev
-            UNION ALL
-            SELECT logical_call_id, node_id, rfss, site, unnest(patch_members)
-              FROM ev WHERE patch_members IS NOT NULL
-          ), pairs AS (
-            SELECT DISTINCT logical_call_id, node_id, rfss, site, tg FROM expanded
-          ), agg AS (
-            SELECT p.logical_call_id,
-                   COUNT(*)::int AS receptions,
-                   (COUNT(*) FILTER (WHERE p.tg IS DISTINCT FROM t.home))::int AS d_patch,
-                   (COUNT(*) FILTER (WHERE p.tg IS NOT DISTINCT FROM t.home) - 1)::int AS d_site
-              FROM pairs p JOIN tx t USING (logical_call_id)
-             GROUP BY 1
-          ), k AS (
-            SELECT a.*, CASE
-                     WHEN t.home = ANY(${encParam}::int[]) THEN 'enc'
-                     -- An EMPTY programmed list means "rdio unreachable", not
-                     -- "nothing is programmed", so it must not condemn the whole
-                     -- network to no_tgid. cardinality() = 0 skips the test.
-                     WHEN cardinality(${progParam}::int[]) > 0
-                          AND t.home <> ALL(${progParam}::int[]) THEN 'no_tgid'
-                     ELSE 'ingested' END AS outcome
-              FROM agg a JOIN tx t USING (logical_call_id)
-          )
-          SELECT COALESCE(SUM(receptions), 0)::int AS received,
-                 COUNT(*)::int AS transmissions,
-                 (COUNT(*) FILTER (WHERE outcome = 'ingested'))::int AS ingested,
-                 (COUNT(*) FILTER (WHERE outcome = 'no_tgid'))::int AS no_tgid,
-                 (COUNT(*) FILTER (WHERE outcome = 'enc'))::int AS enc,
-                 COALESCE(SUM(d_patch), 0)::int AS dropped_patch,
-                 COALESCE(SUM(d_site), 0)::int AS dropped_site
-            FROM k${hideEnc ? ` WHERE outcome <> 'enc'` : ''}`;
-}
+// radioReceptionsSql now lives in services/nodeEventsQuery.ts (imported above),
+// the single home for the overview totals CTE. The rollup totals runner and the
+// overview detail-totals builder both consume it from there.
 
 /**
  * "This row is a talkgroup VOICE call." node_radio_events stores EVERY P25
@@ -967,26 +928,12 @@ export async function radioTotalsFromRollup(
 ): Promise<RadioTotals | null> {
   const iv = WINDOW_INTERVAL[window];
   const seam = rollupEdgeSql(edge);
-  const { isEnc, isNoTgid } = outcomeSql('home_talkgroup', '$2', '$3');
   // Hiding encrypted traffic drops those calls from every figure rather than
   // zeroing one tile, so the buckets still partition `received` — the same
-  // treatment the detail path gives it.
-  const encFilter = hideEnc ? ` AND NOT (${isEnc})` : '';
-
+  // treatment the detail path gives it. The aggregate SQL is the overview
+  // totals-rollup emitter; the live tail below is the receptions CTE.
   const rollup = await pool.query<Record<string, unknown>>(
-    `SELECT
-       COALESCE(SUM(receptions), 0)::int                       AS received,
-       COALESCE(SUM(transmissions), 0)::int                    AS transmissions,
-       COALESCE(SUM(receptions - receptions_home), 0)::int      AS dropped_patch,
-       COALESCE(SUM(receptions_home - transmissions), 0)::int   AS dropped_site,
-       COALESCE(SUM(transmissions) FILTER (WHERE ${isEnc}), 0)::int AS enc,
-       COALESCE(SUM(transmissions) FILTER (
-         WHERE NOT (${isEnc}) AND (${isNoTgid})), 0)::int       AS no_tgid,
-       COALESCE(SUM(transmissions) FILTER (
-         WHERE NOT (${isEnc}) AND NOT (${isNoTgid})), 0)::int   AS ingested
-     FROM node_radio_hourly_rx
-    WHERE hour >= date_trunc('hour', now()) - $1::interval
-      AND hour <  ${seam}${encFilter}`,
+    overviewTotalsRollupSql(seam, hideEnc),
     [iv, encTgIds, progTgIds],
   );
 
@@ -1100,12 +1047,13 @@ export async function radioListsFromRollup(
   const iv = window === 'all' ? '30 days' : WINDOW_INTERVAL[window];
   const bucket = window === 'all' ? 'day' : 'hour';
   const seam = rollupEdgeSql(edge);
-  const ROLLUP_HOURS = rollupHours(seam);
-  const LIVE_HOUR = liveHour(seam);
-  const tgBand = tgValid();
   const q = <R extends Record<string, unknown>>(sql: string) =>
     pool.query<R>(sql, [iv]);
 
+  // Each list is one rollup+live union statement — the pure emitters in
+  // nodeEventsQuery.ts. The band predicates (tgValid/ridValid) and the live-hour
+  // dedup live inside them; the merge, LIMIT-after-merge and null-fallback stay
+  // here. See the emitters for the per-list sourcing notes.
   const [tg, si, un, sr, pn] = await inFlightLimit(OVERVIEW_CONCURRENCY, [
     () => q<{
       system: number | null;
@@ -1113,119 +1061,15 @@ export async function radioListsFromRollup(
       receptions: unknown;
       logical: unknown;
       label: string | null;
-    }>(
-      // system 0 is the rollup's "unknown" sentinel; NULLIF puts the NULL back
-      // so the card keeps rendering an em dash rather than a system called 0.
-      // label deliberately NULL: activity-event ingest stores no labels.
-      `WITH r AS (
-         SELECT system, talkgroup, receptions, logical_calls_tg AS logical
-           FROM node_radio_hourly_sys
-          WHERE ${ROLLUP_HOURS} AND ${tgBand}
-         UNION ALL
-         SELECT COALESCE(system, 0), talkgroup,
-                COUNT(DISTINCT (logical_call_id, node_id,
-                  COALESCE(site_rfss, -1), COALESCE(site_id, -1)))::int,
-                COUNT(DISTINCT logical_call_id)::int
-           FROM node_radio_events
-          WHERE ${LIVE_HOUR} AND ${CALL_GROUP} AND ${tgBand}
-          GROUP BY 1, 2
-       )
-       SELECT NULLIF(system, 0) AS system, talkgroup,
-              SUM(receptions)::int AS receptions,
-              SUM(logical)::int AS logical,
-              NULL::text AS label
-         FROM r GROUP BY r.system, r.talkgroup
-        ORDER BY receptions DESC LIMIT 15`,
-    ),
+    }>(overviewTopTalkgroupsRollupSql(seam)),
     () => q<{ site_rfss: number; site_id: number; receptions: unknown }>(
-      // -1 is the rollup's unknown-site sentinel and stands in for the detail
-      // path's IS NOT NULL guard.
-      `WITH r AS (
-         SELECT site_rfss, site_id, receptions
-           FROM node_radio_hourly_sys
-          WHERE ${ROLLUP_HOURS} AND site_rfss <> -1 AND site_id <> -1
-         UNION ALL
-         SELECT site_rfss, site_id,
-                COUNT(DISTINCT (logical_call_id, node_id, talkgroup))::int
-           FROM node_radio_events
-          WHERE ${LIVE_HOUR} AND ${CALL_GROUP}
-            AND site_rfss IS NOT NULL AND site_id IS NOT NULL
-          GROUP BY 1, 2
-       )
-       SELECT site_rfss, site_id, SUM(receptions)::int AS receptions
-         FROM r GROUP BY site_rfss, site_id
-        ORDER BY receptions DESC LIMIT 15`,
+      overviewTopSitesRollupSql(seam),
     ),
     () => q<{ unit: number; alias: string | null; receptions: unknown }>(
-      // The alias is the newest one seen anywhere in the window, so it is
-      // carried with its hour and picked after the merge rather than summed.
-      `WITH r AS (
-         SELECT hour, source_unit AS unit, receptions, alias
-           FROM node_radio_hourly_unit
-          WHERE ${ROLLUP_HOURS} AND ${ridValid()}
-         UNION ALL
-         SELECT date_trunc('hour', now()), source_unit,
-                COUNT(DISTINCT (logical_call_id, node_id,
-                  COALESCE(site_rfss, -1), COALESCE(site_id, -1), talkgroup))::int,
-                (array_agg(source_alias ORDER BY received_at DESC)
-                   FILTER (WHERE source_alias IS NOT NULL
-                             AND source_alias <> source_unit::text))[1]
-           FROM node_radio_events
-          WHERE ${LIVE_HOUR} AND ${CALL_GROUP} AND ${RID_VALID}
-          GROUP BY source_unit
-       )
-       SELECT unit, SUM(receptions)::int AS receptions,
-              (array_agg(alias ORDER BY hour DESC)
-                 FILTER (WHERE alias IS NOT NULL))[1] AS alias
-         FROM r GROUP BY unit ORDER BY receptions DESC LIMIT 15`,
+      overviewTopUnitsRollupSql(seam),
     ),
-    () => q<{ bucket: Date; n: unknown }>(
-      // The live tail's contribution is deduped to the same tuple the rollup
-      // stores, so the last bar is measured the way every bar before it was.
-      //
-      // It is drawn on the bucket containing now(), not on the bucket of each
-      // reception. In steady state the seam IS the top of the current hour —
-      // the rollup tick is aligned to it — so the two are the same thing. In
-      // the seconds after an hour closes, or while a cold-start backfill is
-      // still running, the tail can reach further back and its receptions ride
-      // the current bar: a momentarily fat last bar, where bucketing the
-      // deduped set by its own time would mean carrying a per-call hour
-      // through the DISTINCT and changing what a reception is.
-      `WITH r AS (
-         SELECT date_trunc('${bucket}', hour) AS bucket, calls AS n
-           FROM node_radio_hourly WHERE ${ROLLUP_HOURS}
-         UNION ALL
-         SELECT date_trunc('${bucket}', now()), COUNT(*)::int
-           FROM (
-             SELECT DISTINCT logical_call_id, node_id,
-                    COALESCE(system, 0) AS system, COALESCE(talkgroup, 0) AS talkgroup,
-                    COALESCE(site_rfss, -1) AS rfss, COALESCE(site_id, -1) AS site
-               FROM node_radio_events
-              WHERE ${LIVE_HOUR} AND ${CALL_GROUP}
-           ) d
-       )
-       SELECT bucket, SUM(n)::int AS n FROM r GROUP BY 1 ORDER BY 1`,
-    ),
-    () => q<{ node_id: string; calls: unknown }>(
-      // One per deduped reception, matching the rollup: the same call can
-      // arrive as several event rows.
-      `WITH r AS (
-         SELECT node_id, calls
-           FROM node_radio_hourly WHERE ${ROLLUP_HOURS}
-         UNION ALL
-         SELECT node_id, COUNT(*)::int
-           FROM (
-             SELECT DISTINCT logical_call_id, node_id,
-                    COALESCE(system, 0) AS system, COALESCE(talkgroup, 0) AS talkgroup,
-                    COALESCE(site_rfss, -1) AS rfss, COALESCE(site_id, -1) AS site
-               FROM node_radio_events
-              WHERE ${LIVE_HOUR} AND ${CALL_GROUP}
-           ) d
-          GROUP BY node_id
-       )
-       SELECT node_id, SUM(calls)::int AS calls
-         FROM r GROUP BY node_id`,
-    ),
+    () => q<{ bucket: Date; n: unknown }>(overviewSeriesRollupSql(seam, bucket)),
+    () => q<{ node_id: string; calls: unknown }>(overviewPerNodeRollupSql(seam)),
   ]);
 
   if (!tg || !si || !un || !sr || !pn) return null;
@@ -1388,20 +1232,20 @@ nodeDataRouter.get(
         // derived tables, which filter CALL_GROUP exactly as these do.)
         //
         // Optional node scope ($1) applies via nAllAnd.
-        const nAllAnd = nodeId !== null ? ` AND node_id = $1` : '';
-        const nAllParams: unknown[] = nodeId !== null ? [nodeId] : [];
-        // The 30-day cap is now IN the predicate, not merely implied by
-        // retention. It was implied — the detail table is pruned at 30 days,
-        // so an unbounded scan read the same rows — but the planner could not
-        // know that, so every one of these was a full scan of the table with
-        // no usable time bound. Stating it costs nothing semantically
-        // (radioWindowCapped already tells the client) and lets the range
-        // index do its job.
-        const nAllFloor = `received_at >= now() - interval '30 days' AND `;
         const rollupTotalsAll = edge
           ? await radioTotalsFromRollup(pool, '30d', encTgIds, progTgIds, hideEnc, edge)
           : null;
         if (rollupTotalsAll) pt.mark('totals-rollup');
+        // Radio detail builders (node-scoped fallback; fleet-wide `all` took the
+        // rollup above). window='all' inlines the 30-day retention cap as a
+        // literal floor and buckets the series by day; the node scope threads in
+        // as $1. Built once here (pure, cheap); run conditionally below.
+        const oTot = buildOverviewTotals('all', nodeId, encTgIds, progTgIds, hideEnc);
+        const oPerNode = buildOverviewPerNode('all', nodeId);
+        const oTg = buildOverviewTopTalkgroups('all', nodeId);
+        const oUn = buildOverviewTopUnits('all', nodeId);
+        const oSi = buildOverviewTopSites('all', nodeId);
+        const oSr = buildOverviewSeries('all', nodeId);
         const [radioTotQ, pagerTotQ, pnR, pnP, tg, un, si, sr, sp] =
           await inFlightLimit(OVERVIEW_CONCURRENCY, [
             () => wantRadio && !rollupTotalsAll
@@ -1413,18 +1257,7 @@ nodeDataRouter.get(
                   enc: unknown;
                   dropped_patch: unknown;
                   dropped_site: unknown;
-                }>(
-                  // Node-scoped only (fleet-wide `all` took the rollup above).
-                  // Every bucket rides along on this one scan — they are all
-                  // FILTERs over rows already being walked.
-                  radioReceptionsSql(
-                    `${nAllFloor}${CALL_GROUP}${nAllAnd}`,
-                    `$${nAllParams.length + 1}`,
-                    `$${nAllParams.length + 2}`,
-                    hideEnc,
-                  ),
-                  [...nAllParams, encTgIds, progTgIds],
-                )
+                }>(oTot.sql, oTot.params)
               : null,
             () => wantPager
               ? pool.query<{ raw: unknown; logical: unknown }>(
@@ -1434,12 +1267,7 @@ nodeDataRouter.get(
                 )
               : null,
             () => wantRadioDetail
-              ? pool.query<{ node_id: string; calls: unknown }>(
-                  `SELECT node_id, COUNT(*)::int AS calls
-                     FROM node_radio_events
-                    WHERE ${nAllFloor}${CALL_GROUP}${nAllAnd} GROUP BY node_id`,
-                  nAllParams,
-                )
+              ? pool.query<{ node_id: string; calls: unknown }>(oPerNode.sql, oPerNode.params)
               : null,
             () => wantPager
               ? pool.query<{ node_id: string; pages: unknown }>(
@@ -1454,62 +1282,22 @@ nodeDataRouter.get(
                   receptions: unknown;
                   logical: unknown;
                   label: string | null;
-                }>(
-                  // Receptions = a distinct (logical call, node, site) that
-                  // heard the call — NOT raw rows (the vce feed emits GRANT+CALL
-                  // per site, so COUNT(*) over-counts ~2x and by site). Sourced
-                  // from node_radio_events even for window=all (no interval) so
-                  // the distinct-count is expressible; cheap at LIMIT 15.
-                  // label deliberately NULL: activity-event ingest stores no
-                  // labels (they'll resolve from the agencies config later).
-                  `SELECT system, talkgroup,
-                          COUNT(DISTINCT (logical_call_id, node_id,
-                            COALESCE(site_rfss, -1), COALESCE(site_id, -1)))::int AS receptions,
-                          COUNT(DISTINCT logical_call_id)::int AS logical,
-                          NULL::text AS label
-                     FROM node_radio_events
-                    WHERE ${nAllFloor}${CALL_GROUP} AND ${TG_VALID}${nAllAnd}
-                    GROUP BY system, talkgroup
-                    ORDER BY receptions DESC LIMIT 15`,
-                  nAllParams,
-                )
+                }>(oTg.sql, oTg.params)
               : null,
             () => wantRadioDetail
               ? pool.query<{ unit: number; alias: string | null; receptions: unknown }>(
-                  // Receptions, same tuple as the talkgroup card — see the
-                  // detail-path twin for why COUNT(*) was wrong here.
-                  `SELECT source_unit AS unit,
-                          (array_agg(source_alias ORDER BY received_at DESC)
-                             FILTER (WHERE source_alias IS NOT NULL AND source_alias <> source_unit::text))[1] AS alias,
-                          COUNT(DISTINCT (logical_call_id, node_id,
-                            COALESCE(site_rfss, -1), COALESCE(site_id, -1), talkgroup))::int AS receptions
-                     FROM node_radio_events
-                    WHERE received_at >= now() - interval '30 days'
-                      AND ${CALL_GROUP}
-                      AND ${RID_VALID}${nAllAnd}
-                    GROUP BY source_unit ORDER BY receptions DESC LIMIT 15`,
-                  nAllParams,
+                  oUn.sql,
+                  oUn.params,
                 )
               : null,
             () => wantRadioDetail
               ? pool.query<{ site_rfss: number; site_id: number; receptions: unknown }>(
-                  // Receptions this site carried — see the detail-path twin.
-                  `SELECT site_rfss, site_id,
-                          COUNT(DISTINCT (logical_call_id, node_id, talkgroup))::int AS receptions
-                     FROM node_radio_events
-                    WHERE ${nAllFloor}${CALL_GROUP}
-                      AND site_rfss IS NOT NULL AND site_id IS NOT NULL${nAllAnd}
-                    GROUP BY site_rfss, site_id ORDER BY receptions DESC LIMIT 15`,
-                  nAllParams,
+                  oSi.sql,
+                  oSi.params,
                 )
               : null,
             () => wantRadioDetail
-              ? pool.query<{ bucket: Date; n: unknown }>(
-                  `SELECT date_trunc('day', received_at) AS bucket, COUNT(*)::int AS n
-                     FROM node_radio_events
-                    WHERE ${nAllFloor}${CALL_GROUP}${nAllAnd} GROUP BY 1 ORDER BY 1`,
-                  nAllParams,
-                )
+              ? pool.query<{ bucket: Date; n: unknown }>(oSr.sql, oSr.params)
               : null,
             () => wantPager
               ? pool.query<{ bucket: Date; n: unknown }>(
@@ -1541,10 +1329,6 @@ nodeDataRouter.get(
         // Detail path: exact logical counts via COUNT(DISTINCT logical_*).
         const iv = WINDOW_INTERVAL[window];
         const cond = `received_at >= now() - $1::interval`;
-        // Radio queries additionally scope to the selected node ($2) when set;
-        // pager queries keep the fleet-wide `cond`/`[iv]`.
-        const radioCond = nodeId !== null ? `${cond} AND node_id = $2` : cond;
-        const radioParams: unknown[] = nodeId !== null ? [iv, nodeId] : [iv];
 
         // Fleet-wide totals come from the hourly rollup; a node-scoped request
         // still reads detail.
@@ -1559,6 +1343,15 @@ nodeDataRouter.get(
           ? await radioTotalsFromRollup(pool, window, encTgIds, progTgIds, hideEnc, edge)
           : null;
         if (rollupTotals) pt.mark('totals-rollup');
+        // Radio detail builders: window binds the interval as $1, node scope as
+        // $2. Built once (pure); run conditionally below. The pager aggregates
+        // stay inline (future pager batch) and keep the fleet-wide `cond`/`[iv]`.
+        const oTot = buildOverviewTotals(window, nodeId, encTgIds, progTgIds, hideEnc);
+        const oPerNode = buildOverviewPerNode(window, nodeId);
+        const oTg = buildOverviewTopTalkgroups(window, nodeId);
+        const oUn = buildOverviewTopUnits(window, nodeId);
+        const oSi = buildOverviewTopSites(window, nodeId);
+        const oSr = buildOverviewSeries(window, nodeId);
         const [rTot, pTot, pnR, pnP, tg, un, si, sr, sp] = await inFlightLimit(OVERVIEW_CONCURRENCY, [
           () => wantRadio && !rollupTotals
             ? pool.query<{
@@ -1569,18 +1362,7 @@ nodeDataRouter.get(
                 enc: unknown;
                 dropped_patch: unknown;
                 dropped_site: unknown;
-              }>(
-                // Gated on CALL_GROUP so data/signaling is never counted as
-                // voice. Every bucket comes off this one scan — they are all
-                // FILTERs over rows already being walked.
-                radioReceptionsSql(
-                  `${radioCond} AND ${CALL_GROUP}`,
-                  `$${radioParams.length + 1}`,
-                  `$${radioParams.length + 2}`,
-                  hideEnc,
-                ),
-                [...radioParams, encTgIds, progTgIds],
-              )
+              }>(oTot.sql, oTot.params)
             : null,
           () => wantPager
             ? pool.query<{ raw: unknown; logical: unknown }>(
@@ -1591,12 +1373,7 @@ nodeDataRouter.get(
               )
             : null,
           () => wantRadioDetail
-            ? pool.query<{ node_id: string; calls: unknown }>(
-                `SELECT node_id, COUNT(*)::int AS calls
-                   FROM node_radio_events
-                  WHERE ${radioCond} AND ${CALL_GROUP} GROUP BY node_id`,
-                radioParams,
-              )
+            ? pool.query<{ node_id: string; calls: unknown }>(oPerNode.sql, oPerNode.params)
             : null,
           () => wantPager
             ? pool.query<{ node_id: string; pages: unknown }>(
@@ -1612,61 +1389,22 @@ nodeDataRouter.get(
                 receptions: unknown;
                 logical: unknown;
                 label: string | null;
-              }>(
-                // Receptions = distinct (logical call, node, site) that heard
-                // the call — de-dupes the vce GRANT+CALL double-emit and
-                // counts one per receiving node/site. logical = distinct calls.
-                // label deliberately NULL: activity-event ingest stores no
-                // labels (they'll resolve from the agencies config later).
-                `SELECT e.system, e.talkgroup,
-                        COUNT(DISTINCT (e.logical_call_id, e.node_id,
-                          COALESCE(e.site_rfss, -1), COALESCE(e.site_id, -1)))::int AS receptions,
-                        COUNT(DISTINCT e.logical_call_id)::int AS logical,
-                        NULL::text AS label
-                   FROM node_radio_events e
-                  WHERE ${radioCond} AND ${callGroup('e.')} AND ${tgValid('e.')}
-                  GROUP BY e.system, e.talkgroup
-                  ORDER BY receptions DESC LIMIT 15`,
-                radioParams,
-              )
+              }>(oTg.sql, oTg.params)
             : null,
           () => wantRadioDetail
             ? pool.query<{ unit: number; alias: string | null; receptions: unknown }>(
-                // Receptions, same tuple as the talkgroup card — NOT COUNT(*),
-                // which tallied raw GRANT+CALL event rows and overstated the
-                // busiest radios ~10x against the tiles on the same screen.
-                `SELECT source_unit AS unit,
-                        (array_agg(source_alias ORDER BY received_at DESC)
-                           FILTER (WHERE source_alias IS NOT NULL AND source_alias <> source_unit::text))[1] AS alias,
-                        COUNT(DISTINCT (logical_call_id, node_id,
-                          COALESCE(site_rfss, -1), COALESCE(site_id, -1), talkgroup))::int AS receptions
-                   FROM node_radio_events
-                  WHERE ${radioCond} AND ${CALL_GROUP} AND ${ridValid('')}
-                  GROUP BY source_unit ORDER BY receptions DESC LIMIT 15`,
-                radioParams,
+                oUn.sql,
+                oUn.params,
               )
             : null,
           () => wantRadioDetail
             ? pool.query<{ site_rfss: number; site_id: number; receptions: unknown }>(
-                // Receptions this site carried: distinct (call, node, talkgroup)
-                // — the site itself is the group key. Raw COUNT(*) here made a
-                // single site read larger than the page's whole receptions total.
-                `SELECT site_rfss, site_id,
-                        COUNT(DISTINCT (logical_call_id, node_id, talkgroup))::int AS receptions
-                   FROM node_radio_events
-                  WHERE ${radioCond} AND ${CALL_GROUP}
-                    AND site_rfss IS NOT NULL AND site_id IS NOT NULL
-                  GROUP BY site_rfss, site_id ORDER BY receptions DESC LIMIT 15`,
-                radioParams,
+                oSi.sql,
+                oSi.params,
               )
             : null,
           () => wantRadioDetail
-            ? pool.query<{ bucket: Date; n: unknown }>(
-                `SELECT date_trunc('hour', received_at) AS bucket, COUNT(*)::int AS n
-                   FROM node_radio_events
-                  WHERE ${radioCond} AND ${CALL_GROUP} GROUP BY 1 ORDER BY 1`,
-                radioParams,
-              )
+            ? pool.query<{ bucket: Date; n: unknown }>(oSr.sql, oSr.params)
             : null,
           () => wantPager
             ? pool.query<{ bucket: Date; n: unknown }>(
