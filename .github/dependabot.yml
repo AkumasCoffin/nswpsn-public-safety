@@ -37,3 +37,11 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    groups:
+      # Bundle action updates into one PR. Critically, this keeps the
+      # codeql-action/init and codeql-action/analyze steps on the SAME
+      # version — CodeQL refuses to run if they differ, so splitting them
+      # into separate PRs leaves both red until both merge.
+      actions-all:
+        patterns: ['*']
+        update-types: [minor, patch]
