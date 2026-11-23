@@ -3954,73 +3954,6 @@
         ],
         "additionalProperties": false
       },
-      "HistoryPage": {
-        "type": "object",
-        "properties": {
-          "records": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HistoryRecord"
-            }
-          },
-          "total": {
-            "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991,
-            "description": "How many records match across every page; 0 when they could not be counted, and always 0 on a page fetched by cursor"
-          },
-          "limit": {
-            "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991
-          },
-          "offset": {
-            "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991
-          },
-          "count": {
-            "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991,
-            "description": "Records on this page"
-          },
-          "next_cursor": {
-            "description": "Pass as `cursor` for the next page; null on the last page",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "query": {
-            "type": "object",
-            "properties": {
-              "filters_applied": {
-                "type": "object",
-                "propertyNames": {
-                  "type": "string"
-                },
-                "additionalProperties": {},
-                "description": "The filters given, as understood: lists split on commas, and since/until as ISO 8601 UTC"
-              }
-            },
-            "required": [
-              "filters_applied"
-            ],
-            "additionalProperties": false
-          }
-        },
-        "required": [
-          "records",
-          "total",
-          "limit",
-          "offset",
-          "count",
-          "next_cursor",
-          "query"
-        ],
-        "additionalProperties": false
-      },
       "HistoryRecord": {
         "type": "object",
         "properties": {
@@ -4187,6 +4120,73 @@
           "source_id",
           "state",
           "data"
+        ],
+        "additionalProperties": false
+      },
+      "HistoryPage": {
+        "type": "object",
+        "properties": {
+          "records": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HistoryRecord"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "How many records match across every page; 0 when they could not be counted, and always 0 on a page fetched by cursor"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Records on this page"
+          },
+          "next_cursor": {
+            "description": "Pass as `cursor` for the next page; null on the last page",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "query": {
+            "type": "object",
+            "properties": {
+              "filters_applied": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {},
+                "description": "The filters given, as understood: lists split on commas, and since/until as ISO 8601 UTC"
+              }
+            },
+            "required": [
+              "filters_applied"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "records",
+          "total",
+          "limit",
+          "offset",
+          "count",
+          "next_cursor",
+          "query"
         ],
         "additionalProperties": false
       },
@@ -4898,6 +4898,31 @@
         ],
         "additionalProperties": false
       },
+      "AgencyTable": {
+        "type": "object",
+        "properties": {
+          "headers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "headers",
+          "rows"
+        ],
+        "additionalProperties": false
+      },
       "Agency": {
         "type": "object",
         "properties": {
@@ -4958,31 +4983,6 @@
           "badges",
           "overview",
           "sections"
-        ],
-        "additionalProperties": false
-      },
-      "AgencyTable": {
-        "type": "object",
-        "properties": {
-          "headers": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "rows": {
-            "type": "array",
-            "items": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          }
-        },
-        "required": [
-          "headers",
-          "rows"
         ],
         "additionalProperties": false
       },
@@ -5105,26 +5105,6 @@
         "additionalProperties": {},
         "description": "MarineTraffic's own record for the vessel, as its vessel page loads it: the fields are MarineTraffic's, vary between vessels and are not described here"
       },
-      "RadioLatestSummary": {
-        "type": "object",
-        "properties": {
-          "hourly": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/RadioSummary"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The most recently written summary that has been released, hourly or ad-hoc despite the name; null when there is none"
-          }
-        },
-        "required": [
-          "hourly"
-        ],
-        "additionalProperties": false
-      },
       "RadioSummary": {
         "type": "object",
         "properties": {
@@ -5231,6 +5211,26 @@
           "details",
           "release_at",
           "created_at"
+        ],
+        "additionalProperties": false
+      },
+      "RadioLatestSummary": {
+        "type": "object",
+        "properties": {
+          "hourly": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RadioSummary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The most recently written summary that has been released, hourly or ad-hoc despite the name; null when there is none"
+          }
+        },
+        "required": [
+          "hourly"
         ],
         "additionalProperties": false
       },
@@ -5367,49 +5367,18 @@
         ],
         "additionalProperties": false
       },
-      "TransportVehicles": {
-        "type": "object",
-        "properties": {
-          "vehicles": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/TransportVehicle"
-            }
-          },
-          "count": {
-            "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991,
-            "description": "Number of vehicles"
-          },
-          "network_counts": {
-            "description": "NSW only, and only while this server joins TfNSW positions: vehicles per mode across the whole TfNSW network for the feeds asked for, not just this area",
-            "type": "object",
-            "propertyNames": {
-              "type": "string"
-            },
-            "additionalProperties": {
-              "type": "integer",
-              "minimum": -9007199254740991,
-              "maximum": 9007199254740991
-            }
-          },
-          "fetched_at": {
-            "type": "string",
-            "description": "When AnyTrip was read, ISO 8601 (when switched off, the time of this answer)"
-          },
-          "disabled": {
-            "description": "Present only when transport data is switched off on this server; the answer is then empty",
-            "type": "boolean",
-            "const": true
-          }
-        },
-        "required": [
-          "vehicles",
-          "count",
-          "fetched_at"
+      "TransportMode": {
+        "type": "string",
+        "enum": [
+          "buses",
+          "sydneytrains",
+          "metro",
+          "nswtrains",
+          "ferries",
+          "lightrail",
+          "other"
         ],
-        "additionalProperties": false
+        "description": "One vocabulary for every region: suburban heavy rail anywhere is sydneytrains (Queensland Rail, Adelaide Metro and Metro Trains Melbourne too), regional trains are nswtrains (V/Line too), trams are lightrail and school buses are buses; anything not recognised is other"
       },
       "TransportVehicle": {
         "type": "object",
@@ -5623,18 +5592,49 @@
         ],
         "additionalProperties": false
       },
-      "TransportMode": {
-        "type": "string",
-        "enum": [
-          "buses",
-          "sydneytrains",
-          "metro",
-          "nswtrains",
-          "ferries",
-          "lightrail",
-          "other"
+      "TransportVehicles": {
+        "type": "object",
+        "properties": {
+          "vehicles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransportVehicle"
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Number of vehicles"
+          },
+          "network_counts": {
+            "description": "NSW only, and only while this server joins TfNSW positions: vehicles per mode across the whole TfNSW network for the feeds asked for, not just this area",
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            }
+          },
+          "fetched_at": {
+            "type": "string",
+            "description": "When AnyTrip was read, ISO 8601 (when switched off, the time of this answer)"
+          },
+          "disabled": {
+            "description": "Present only when transport data is switched off on this server; the answer is then empty",
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "vehicles",
+          "count",
+          "fetched_at"
         ],
-        "description": "One vocabulary for every region: suburban heavy rail anywhere is sydneytrains (Queensland Rail, Adelaide Metro and Metro Trains Melbourne too), regional trains are nswtrains (V/Line too), trams are lightrail and school buses are buses; anything not recognised is other"
+        "additionalProperties": false
       },
       "TransportShape": {
         "type": "object",
@@ -5661,6 +5661,178 @@
           "enc"
         ],
         "additionalProperties": false
+      },
+      "TransportTripStop": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "\"Unknown stop\" when the feed names none"
+          },
+          "lat": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "lon": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "seq": {
+            "type": "number",
+            "description": "The stop's sequence number in the trip, or its place in this list when the feed gives none"
+          },
+          "arr": {
+            "description": "Arrival time, unix seconds",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "arrDelay": {
+            "description": "Arrival delay, seconds late; negative is early",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "dep": {
+            "description": "Departure time, unix seconds",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "depDelay": {
+            "description": "Departure delay, seconds late; negative is early",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "platform": {
+            "description": "Platform or stand, as AnyTrip names it",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "locality": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "occupancy": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "One entry per carriage (one for a bus), each on AnyTrip's 0–6 crowding scale: 0–1 space available, 2 limited space, 3–4 standing room only, 5–6 no space, or null; null when not reported"
+          },
+          "pickUp": {
+            "description": "GTFS pickup_type: 1 means passengers cannot board here",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "dropOff": {
+            "description": "GTFS drop_off_type: 1 means passengers cannot get off here",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "lat",
+          "lon",
+          "seq",
+          "arr",
+          "arrDelay",
+          "dep",
+          "depDelay",
+          "platform",
+          "locality",
+          "code",
+          "occupancy",
+          "pickUp",
+          "dropOff"
+        ],
+        "additionalProperties": false
+      },
+      "TransportTripLink": {
+        "type": "object",
+        "properties": {
+          "tripId": {
+            "type": "string"
+          },
+          "startDate": {
+            "type": "string",
+            "description": "YYYYMMDD"
+          },
+          "instanceNumber": {
+            "type": "number"
+          },
+          "routeName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "routeColor": {
+            "description": "#RRGGBB (upper-case hex); null when the feed has no valid colour",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "routeTextColor": {
+            "description": "#RRGGBB (upper-case hex); null when the feed has no valid colour",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "headsign": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "tripId",
+          "startDate",
+          "instanceNumber",
+          "routeName",
+          "routeColor",
+          "routeTextColor",
+          "headsign"
+        ],
+        "additionalProperties": false,
+        "description": "An adjacent trip in the same block, addressed the same way as this one"
       },
       "TransportTrip": {
         "type": "object",
@@ -5838,218 +6010,6 @@
         ],
         "additionalProperties": false
       },
-      "TransportTripStop": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "description": "\"Unknown stop\" when the feed names none"
-          },
-          "lat": {
-            "type": [
-              "number",
-              "null"
-            ]
-          },
-          "lon": {
-            "type": [
-              "number",
-              "null"
-            ]
-          },
-          "seq": {
-            "type": "number",
-            "description": "The stop's sequence number in the trip, or its place in this list when the feed gives none"
-          },
-          "arr": {
-            "description": "Arrival time, unix seconds",
-            "type": [
-              "number",
-              "null"
-            ]
-          },
-          "arrDelay": {
-            "description": "Arrival delay, seconds late; negative is early",
-            "type": [
-              "number",
-              "null"
-            ]
-          },
-          "dep": {
-            "description": "Departure time, unix seconds",
-            "type": [
-              "number",
-              "null"
-            ]
-          },
-          "depDelay": {
-            "description": "Departure delay, seconds late; negative is early",
-            "type": [
-              "number",
-              "null"
-            ]
-          },
-          "platform": {
-            "description": "Platform or stand, as AnyTrip names it",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "locality": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "code": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "occupancy": {
-            "anyOf": [
-              {
-                "type": "array",
-                "items": {
-                  "type": [
-                    "number",
-                    "null"
-                  ]
-                }
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "One entry per carriage (one for a bus), each on AnyTrip's 0–6 crowding scale: 0–1 space available, 2 limited space, 3–4 standing room only, 5–6 no space, or null; null when not reported"
-          },
-          "pickUp": {
-            "description": "GTFS pickup_type: 1 means passengers cannot board here",
-            "type": [
-              "number",
-              "null"
-            ]
-          },
-          "dropOff": {
-            "description": "GTFS drop_off_type: 1 means passengers cannot get off here",
-            "type": [
-              "number",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "name",
-          "lat",
-          "lon",
-          "seq",
-          "arr",
-          "arrDelay",
-          "dep",
-          "depDelay",
-          "platform",
-          "locality",
-          "code",
-          "occupancy",
-          "pickUp",
-          "dropOff"
-        ],
-        "additionalProperties": false
-      },
-      "TransportTripLink": {
-        "type": "object",
-        "properties": {
-          "tripId": {
-            "type": "string"
-          },
-          "startDate": {
-            "type": "string",
-            "description": "YYYYMMDD"
-          },
-          "instanceNumber": {
-            "type": "number"
-          },
-          "routeName": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "routeColor": {
-            "description": "#RRGGBB (upper-case hex); null when the feed has no valid colour",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "routeTextColor": {
-            "description": "#RRGGBB (upper-case hex); null when the feed has no valid colour",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "headsign": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "tripId",
-          "startDate",
-          "instanceNumber",
-          "routeName",
-          "routeColor",
-          "routeTextColor",
-          "headsign"
-        ],
-        "additionalProperties": false,
-        "description": "An adjacent trip in the same block, addressed the same way as this one"
-      },
-      "TransportDepartures": {
-        "type": "object",
-        "properties": {
-          "stopId": {
-            "type": "string",
-            "description": "As asked for"
-          },
-          "stopName": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "departures": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/TransportDeparture"
-            }
-          },
-          "alerts": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Headlines of up to three alerts AnyTrip lists with the departures"
-          },
-          "fetched_at": {
-            "type": "string",
-            "description": "When AnyTrip was read, ISO 8601"
-          }
-        },
-        "required": [
-          "stopId",
-          "stopName",
-          "departures",
-          "alerts",
-          "fetched_at"
-        ],
-        "additionalProperties": false
-      },
       "TransportDeparture": {
         "type": "object",
         "properties": {
@@ -6156,6 +6116,46 @@
         ],
         "additionalProperties": false
       },
+      "TransportDepartures": {
+        "type": "object",
+        "properties": {
+          "stopId": {
+            "type": "string",
+            "description": "As asked for"
+          },
+          "stopName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "departures": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransportDeparture"
+            }
+          },
+          "alerts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Headlines of up to three alerts AnyTrip lists with the departures"
+          },
+          "fetched_at": {
+            "type": "string",
+            "description": "When AnyTrip was read, ISO 8601"
+          }
+        },
+        "required": [
+          "stopId",
+          "stopName",
+          "departures",
+          "alerts",
+          "fetched_at"
+        ],
+        "additionalProperties": false
+      },
       "TransportLines": {
         "type": "object",
         "properties": {
@@ -6177,38 +6177,6 @@
         "required": [
           "type",
           "features"
-        ],
-        "additionalProperties": false
-      },
-      "TransportStops": {
-        "type": "object",
-        "properties": {
-          "stops": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/TransportStop"
-            }
-          },
-          "count": {
-            "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991,
-            "description": "Number of stops"
-          },
-          "fetched_at": {
-            "type": "string",
-            "description": "When AnyTrip was read, ISO 8601 (when switched off, the time of this answer)"
-          },
-          "disabled": {
-            "description": "Present only when transport data is switched off on this server; the answer is then empty",
-            "type": "boolean",
-            "const": true
-          }
-        },
-        "required": [
-          "stops",
-          "count",
-          "fetched_at"
         ],
         "additionalProperties": false
       },
@@ -6268,28 +6236,24 @@
         ],
         "additionalProperties": false
       },
-      "TransportAlerts": {
+      "TransportStops": {
         "type": "object",
         "properties": {
-          "alerts": {
+          "stops": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/TransportAlert"
+              "$ref": "#/components/schemas/TransportStop"
             }
           },
           "count": {
             "type": "integer",
             "minimum": -9007199254740991,
             "maximum": 9007199254740991,
-            "description": "Number of alerts"
-          },
-          "configured": {
-            "type": "boolean",
-            "description": "false when TfNSW alerts are not set up on this server; the list is then empty"
+            "description": "Number of stops"
           },
           "fetched_at": {
-            "description": "The time of this answer, ISO 8601 — not when TfNSW was last read; absent when configured is false",
-            "type": "string"
+            "type": "string",
+            "description": "When AnyTrip was read, ISO 8601 (when switched off, the time of this answer)"
           },
           "disabled": {
             "description": "Present only when transport data is switched off on this server; the answer is then empty",
@@ -6298,9 +6262,9 @@
           }
         },
         "required": [
-          "alerts",
+          "stops",
           "count",
-          "configured"
+          "fetched_at"
         ],
         "additionalProperties": false
       },
@@ -6397,6 +6361,42 @@
           "routes",
           "stops",
           "agencies"
+        ],
+        "additionalProperties": false
+      },
+      "TransportAlerts": {
+        "type": "object",
+        "properties": {
+          "alerts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransportAlert"
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Number of alerts"
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "false when TfNSW alerts are not set up on this server; the list is then empty"
+          },
+          "fetched_at": {
+            "description": "The time of this answer, ISO 8601 — not when TfNSW was last read; absent when configured is false",
+            "type": "string"
+          },
+          "disabled": {
+            "description": "Present only when transport data is switched off on this server; the answer is then empty",
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "alerts",
+          "count",
+          "configured"
         ],
         "additionalProperties": false
       }
