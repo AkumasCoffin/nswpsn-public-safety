@@ -445,3 +445,39 @@ func TestWriteConfigDB_RemovesOrphanSystem(t *testing.T) {
 		t.Errorf("apiKeys = %d, want 1 (key-bbb removed)", n)
 	}
 }
+
+// TestWriteConfigDB_KeylessApiKeysDoNotWipe verifies the Option B guard: a config
+// push whose apiKey rows are all keyless (an upstream system-id resolution
+// failure) must NOT delete the existing keys. Wiping rdioScannerApiKeys would cost
+// the node its loopback upload auth to rdio and silently halt the feed. A
+// genuinely empty section (no rows) still clears.
+func TestWriteConfigDB_KeylessApiKeysDoNotWipe(t *testing.T) {
+	dbPath := newRdioDB(t)
+
+	// Seed one valid key.
+	if err := WriteConfigDB(dbPath, cfgFromJSON(t,
+		`{"apiKeys":[{"_id":1,"disabled":false,"ident":"RFS","key":"key-aaa","order":1,"systems":"*"}]}`)); err != nil {
+		t.Fatalf("seed push: %v", err)
+	}
+
+	db, err := sql.Open("sqlite", "file:"+dbPath)
+	if err != nil {
+		t.Fatalf("open verify: %v", err)
+	}
+	defer db.Close()
+	if n := count(t, db, "select count(*) from `rdioScannerApiKeys`"); n != 1 {
+		t.Fatalf("after seed apiKeys = %d, want 1", n)
+	}
+
+	// A later push whose apiKey row is present but keyless must leave the key in place.
+	if err := WriteConfigDB(dbPath, cfgFromJSON(t,
+		`{"apiKeys":[{"_id":1,"disabled":false,"ident":"RFS","key":"","order":1,"systems":"*"}]}`)); err != nil {
+		t.Fatalf("keyless push: %v", err)
+	}
+	if n := count(t, db, "select count(*) from `rdioScannerApiKeys`"); n != 1 {
+		t.Errorf("after keyless push apiKeys = %d, want 1 (keys must be preserved, not wiped)", n)
+	}
+	if n := count(t, db, "select count(*) from `rdioScannerApiKeys` where `key` = 'key-aaa'"); n != 1 {
+		t.Errorf("key-aaa was wiped by a keyless push")
+	}
+}

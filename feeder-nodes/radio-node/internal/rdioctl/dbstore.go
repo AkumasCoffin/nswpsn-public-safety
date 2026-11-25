@@ -363,8 +363,16 @@ func writeApiKeys(tx *sql.Tx, v any) error {
 		}
 		keep = append(keep, k)
 	}
-	if err := deleteOrphansStr(tx, "rdioScannerApiKeys", "key", keep); err != nil {
-		return err
+	// Option B guard: if the push carried apiKey rows but every one was keyless
+	// (e.g. an unresolved system id upstream), keep is empty. Do NOT read that as
+	// "delete all keys" — wiping rdioScannerApiKeys would stop the node
+	// authenticating its own loopback upload to rdio and silently halt the feed.
+	// Skip the orphan prune and leave existing keys in place; the rest of the
+	// config still applies. A genuinely empty section (no rows) still clears.
+	if len(rows) == 0 || len(keep) > 0 {
+		if err := deleteOrphansStr(tx, "rdioScannerApiKeys", "key", keep); err != nil {
+			return err
+		}
 	}
 	for _, r := range rows {
 		k := asStr(r["key"])
@@ -403,8 +411,13 @@ func writeDownstreams(tx *sql.Tx, v any) error {
 		}
 		keep = append(keep, id)
 	}
-	if err := deleteOrphans(tx, "rdioScannerDownstreams", "_id", keep); err != nil {
-		return err
+	// Same Option B guard as writeApiKeys: a non-empty push that resolves to no
+	// keep ids must not wipe the loopback downstream. A genuinely empty section
+	// (no rows) still clears.
+	if len(rows) == 0 || len(keep) > 0 {
+		if err := deleteOrphans(tx, "rdioScannerDownstreams", "_id", keep); err != nil {
+			return err
+		}
 	}
 	for _, r := range rows {
 		id, ok := asInt(r["_id"])
