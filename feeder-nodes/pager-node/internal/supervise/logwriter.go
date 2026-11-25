@@ -40,6 +40,14 @@ func (w *logWriter) Write(p []byte) (int, error) {
 	if w.size+int64(len(p)) > logMaxBytes {
 		w.rotate()
 	}
+	if w.f == nil {
+		// rotate() could not reopen the log file (e.g. the directory became
+		// unwritable). Discard rather than write to a nil file — keep the child's
+		// stdout pipe healthy; a later rotation attempt re-opens once size crosses
+		// the threshold again.
+		w.size += int64(len(p))
+		return len(p), nil
+	}
 	n, err := w.f.Write(p)
 	w.size += int64(n)
 	return n, err

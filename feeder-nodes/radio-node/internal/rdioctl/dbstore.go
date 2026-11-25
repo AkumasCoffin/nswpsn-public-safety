@@ -648,7 +648,14 @@ func systemsJSON(v any) string {
 		if t == "*" {
 			return `"*"`
 		}
-		return t
+		// A non-wildcard string is a valid grant only if it is already JSON (e.g. a
+		// pre-serialised array). Anything else would be stored as invalid JSON that
+		// rdio fails to parse, silently dropping the grant — fall back to grant-all,
+		// matching this helper's documented contract.
+		if json.Valid([]byte(t)) {
+			return t
+		}
+		return `"*"`
 	case []any:
 		if b, err := json.Marshal(t); err == nil {
 			return string(b)

@@ -567,12 +567,12 @@
                 <label class="form-label">Overall Experience Level <span class="required">*</span></label>
                 <div style="display: flex; align-items: center; gap: 0.75rem; margin-top: 0.5rem;">
                   <span style="color: #64748b; font-size: 0.8rem;">None</span>
-                  <div id="star-rating" style="display: flex; gap: 0.25rem;">
-                    <span class="star" data-value="1" onclick="setRating(1)" style="font-size: 1.5rem; cursor: pointer; color: #475569; transition: color 0.15s;">★</span>
-                    <span class="star" data-value="2" onclick="setRating(2)" style="font-size: 1.5rem; cursor: pointer; color: #475569; transition: color 0.15s;">★</span>
-                    <span class="star" data-value="3" onclick="setRating(3)" style="font-size: 1.5rem; cursor: pointer; color: #475569; transition: color 0.15s;">★</span>
-                    <span class="star" data-value="4" onclick="setRating(4)" style="font-size: 1.5rem; cursor: pointer; color: #475569; transition: color 0.15s;">★</span>
-                    <span class="star" data-value="5" onclick="setRating(5)" style="font-size: 1.5rem; cursor: pointer; color: #475569; transition: color 0.15s;">★</span>
+                  <div id="star-rating" role="radiogroup" aria-label="Overall experience level, 1 (none) to 5 (expert) stars" style="display: flex; gap: 0.25rem;">
+                    <span class="star" role="radio" aria-checked="false" aria-label="1 star — None" data-value="1" tabindex="0" onclick="setRating(1)" onkeydown="onStarKey(event, 1)" style="font-size: 1.5rem; cursor: pointer; color: #475569; transition: color 0.15s;">★</span>
+                    <span class="star" role="radio" aria-checked="false" aria-label="2 stars" data-value="2" tabindex="-1" onclick="setRating(2)" onkeydown="onStarKey(event, 2)" style="font-size: 1.5rem; cursor: pointer; color: #475569; transition: color 0.15s;">★</span>
+                    <span class="star" role="radio" aria-checked="false" aria-label="3 stars" data-value="3" tabindex="-1" onclick="setRating(3)" onkeydown="onStarKey(event, 3)" style="font-size: 1.5rem; cursor: pointer; color: #475569; transition: color 0.15s;">★</span>
+                    <span class="star" role="radio" aria-checked="false" aria-label="4 stars" data-value="4" tabindex="-1" onclick="setRating(4)" onkeydown="onStarKey(event, 4)" style="font-size: 1.5rem; cursor: pointer; color: #475569; transition: color 0.15s;">★</span>
+                    <span class="star" role="radio" aria-checked="false" aria-label="5 stars — Expert" data-value="5" tabindex="-1" onclick="setRating(5)" onkeydown="onStarKey(event, 5)" style="font-size: 1.5rem; cursor: pointer; color: #475569; transition: color 0.15s;">★</span>
                   </div>
                   <span style="color: #64748b; font-size: 0.8rem;">Expert</span>
                   <input type="hidden" id="experience-level" value="">
@@ -1315,14 +1315,37 @@
       5: '⭐⭐⭐⭐⭐ Expert - Very experienced'
     };
     
+    // Keyboard support for the star radiogroup (role=radio): arrows move+select,
+    // Home/End jump to the ends, Enter/Space select the focused star. Keeps a
+    // keyboard/AT user able to complete this required field.
+    function onStarKey(e, value) {
+      let next = value;
+      switch (e.key) {
+        case 'ArrowRight': case 'ArrowUp': next = Math.min(5, value + 1); break;
+        case 'ArrowLeft': case 'ArrowDown': next = Math.max(1, value - 1); break;
+        case 'Home': next = 1; break;
+        case 'End': next = 5; break;
+        case ' ': case 'Enter': next = value; break;
+        default: return;
+      }
+      e.preventDefault();
+      setRating(next);
+      const target = document.querySelector('#star-rating .star[data-value="' + next + '"]');
+      if (target) target.focus();
+    }
+
     function setRating(rating) {
       currentRating = rating;
       document.getElementById('experience-level').value = rating;
       document.getElementById('rating-label').textContent = ratingLabels[rating];
-      
-      // Update star colors
+
+      // Update star colours plus aria-checked + roving tabindex (role=radio), so
+      // the control conveys state to assistive tech, not by colour alone.
       document.querySelectorAll('#star-rating .star').forEach((star, index) => {
+        const isSelected = (index + 1) === rating;
         star.style.color = index < rating ? '#f97316' : '#475569';
+        star.setAttribute('aria-checked', isSelected ? 'true' : 'false');
+        star.tabIndex = isSelected ? 0 : -1;
       });
     }
     
@@ -1449,7 +1472,11 @@
         currentRating = 0;
         document.getElementById('experience-level').value = '';
         document.getElementById('rating-label').textContent = '';
-        document.querySelectorAll('#star-rating .star').forEach(star => star.style.color = '#475569');
+        document.querySelectorAll('#star-rating .star').forEach((star, index) => {
+          star.style.color = '#475569';
+          star.setAttribute('aria-checked', 'false');
+          star.tabIndex = index === 0 ? 0 : -1;
+        });
       }
       // Any function that changes which sections are visible MUST re-sync, or
       // fields revealed here stay disabled from the last sync while they were

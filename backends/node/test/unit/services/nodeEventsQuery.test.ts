@@ -634,4 +634,128 @@ describe('overview rollup emitters', () => {
     expect(overviewPerNodeRollupSql(SEAM)).toContain('FROM node_radio_hourly WHERE ' + rollupHours(SEAM));
     expect(overviewPerNodeRollupSql(SEAM)).toContain('SELECT node_id, SUM(calls)::int AS calls');
   });
+
+  // Full-string goldens for the five rollup emitters that were otherwise only
+  // spot-checked with toContain(). These pin byte-identity (the stated guarantee
+  // of the batch-2 migration) so a future edit to any SELECT list is caught.
+  it('overview rollup emitters: full SQL goldens (byte-identity guard)', () => {
+    expect(overviewTotalsRollupSql(SEAM, false)).toMatchInlineSnapshot(`
+      "SELECT
+             COALESCE(SUM(receptions), 0)::int                       AS received,
+             COALESCE(SUM(transmissions), 0)::int                    AS transmissions,
+             COALESCE(SUM(receptions - receptions_home), 0)::int      AS dropped_patch,
+             COALESCE(SUM(receptions_home - transmissions), 0)::int   AS dropped_site,
+             COALESCE(SUM(transmissions) FILTER (WHERE home_talkgroup = ANY($2::int[])), 0)::int AS enc,
+             COALESCE(SUM(transmissions) FILTER (
+               WHERE NOT (home_talkgroup = ANY($2::int[])) AND (cardinality($3::int[]) > 0 AND home_talkgroup <> ALL($3::int[]))), 0)::int       AS no_tgid,
+             COALESCE(SUM(transmissions) FILTER (
+               WHERE NOT (home_talkgroup = ANY($2::int[])) AND NOT (cardinality($3::int[]) > 0 AND home_talkgroup <> ALL($3::int[]))), 0)::int   AS ingested
+           FROM node_radio_hourly_rx
+          WHERE hour >= date_trunc('hour', now()) - $1::interval
+            AND hour <  '2026-01-01T00:00:00.000Z'::timestamptz"
+    `);
+    expect(overviewTotalsRollupSql(SEAM, true)).toMatchInlineSnapshot(`
+      "SELECT
+             COALESCE(SUM(receptions), 0)::int                       AS received,
+             COALESCE(SUM(transmissions), 0)::int                    AS transmissions,
+             COALESCE(SUM(receptions - receptions_home), 0)::int      AS dropped_patch,
+             COALESCE(SUM(receptions_home - transmissions), 0)::int   AS dropped_site,
+             COALESCE(SUM(transmissions) FILTER (WHERE home_talkgroup = ANY($2::int[])), 0)::int AS enc,
+             COALESCE(SUM(transmissions) FILTER (
+               WHERE NOT (home_talkgroup = ANY($2::int[])) AND (cardinality($3::int[]) > 0 AND home_talkgroup <> ALL($3::int[]))), 0)::int       AS no_tgid,
+             COALESCE(SUM(transmissions) FILTER (
+               WHERE NOT (home_talkgroup = ANY($2::int[])) AND NOT (cardinality($3::int[]) > 0 AND home_talkgroup <> ALL($3::int[]))), 0)::int   AS ingested
+           FROM node_radio_hourly_rx
+          WHERE hour >= date_trunc('hour', now()) - $1::interval
+            AND hour <  '2026-01-01T00:00:00.000Z'::timestamptz AND NOT (home_talkgroup = ANY($2::int[]))"
+    `);
+    expect(overviewTopSitesRollupSql(SEAM)).toMatchInlineSnapshot(`
+      "WITH r AS (
+               SELECT site_rfss, site_id, receptions
+                 FROM node_radio_hourly_sys
+                WHERE hour >= date_trunc('hour', now()) - $1::interval AND hour < '2026-01-01T00:00:00.000Z'::timestamptz AND site_rfss <> -1 AND site_id <> -1
+               UNION ALL
+               SELECT site_rfss, site_id,
+                      COUNT(DISTINCT (logical_call_id, node_id, talkgroup))::int
+                 FROM node_radio_events
+                WHERE received_at >= '2026-01-01T00:00:00.000Z'::timestamptz AND (event_type LIKE 'CALL_GROUP%' OR event_type LIKE 'CALL_PATCH_GROUP%')
+                  AND site_rfss IS NOT NULL AND site_id IS NOT NULL
+                GROUP BY 1, 2
+             )
+             SELECT site_rfss, site_id, SUM(receptions)::int AS receptions
+               FROM r GROUP BY site_rfss, site_id
+              ORDER BY receptions DESC LIMIT 15"
+    `);
+    expect(overviewTopUnitsRollupSql(SEAM)).toMatchInlineSnapshot(`
+      "WITH r AS (
+               SELECT hour, source_unit AS unit, receptions, alias
+                 FROM node_radio_hourly_unit
+                WHERE hour >= date_trunc('hour', now()) - $1::interval AND hour < '2026-01-01T00:00:00.000Z'::timestamptz AND source_unit BETWEEN 100000 AND 9999999
+               UNION ALL
+               SELECT date_trunc('hour', now()), source_unit,
+                      COUNT(DISTINCT (logical_call_id, node_id,
+                        COALESCE(site_rfss, -1), COALESCE(site_id, -1), talkgroup))::int,
+                      (array_agg(source_alias ORDER BY received_at DESC)
+                         FILTER (WHERE source_alias IS NOT NULL
+                                   AND source_alias <> source_unit::text))[1]
+                 FROM node_radio_events
+                WHERE received_at >= '2026-01-01T00:00:00.000Z'::timestamptz AND (event_type LIKE 'CALL_GROUP%' OR event_type LIKE 'CALL_PATCH_GROUP%') AND source_unit BETWEEN 100000 AND 9999999
+                GROUP BY source_unit
+             )
+             SELECT unit, SUM(receptions)::int AS receptions,
+                    (array_agg(alias ORDER BY hour DESC)
+                       FILTER (WHERE alias IS NOT NULL))[1] AS alias
+               FROM r GROUP BY unit ORDER BY receptions DESC LIMIT 15"
+    `);
+    expect(overviewPerNodeRollupSql(SEAM)).toMatchInlineSnapshot(`
+      "WITH r AS (
+               SELECT node_id, calls
+                 FROM node_radio_hourly WHERE hour >= date_trunc('hour', now()) - $1::interval AND hour < '2026-01-01T00:00:00.000Z'::timestamptz
+               UNION ALL
+               SELECT node_id, COUNT(*)::int
+                 FROM (
+                   SELECT DISTINCT logical_call_id, node_id,
+                          COALESCE(system, 0) AS system, COALESCE(talkgroup, 0) AS talkgroup,
+                          COALESCE(site_rfss, -1) AS rfss, COALESCE(site_id, -1) AS site
+                     FROM node_radio_events
+                    WHERE received_at >= '2026-01-01T00:00:00.000Z'::timestamptz AND (event_type LIKE 'CALL_GROUP%' OR event_type LIKE 'CALL_PATCH_GROUP%')
+                 ) d
+                GROUP BY node_id
+             )
+             SELECT node_id, SUM(calls)::int AS calls
+               FROM r GROUP BY node_id"
+    `);
+    expect(overviewSeriesRollupSql(SEAM, 'hour')).toMatchInlineSnapshot(`
+      "WITH r AS (
+               SELECT date_trunc('hour', hour) AS bucket, calls AS n
+                 FROM node_radio_hourly WHERE hour >= date_trunc('hour', now()) - $1::interval AND hour < '2026-01-01T00:00:00.000Z'::timestamptz
+               UNION ALL
+               SELECT date_trunc('hour', now()), COUNT(*)::int
+                 FROM (
+                   SELECT DISTINCT logical_call_id, node_id,
+                          COALESCE(system, 0) AS system, COALESCE(talkgroup, 0) AS talkgroup,
+                          COALESCE(site_rfss, -1) AS rfss, COALESCE(site_id, -1) AS site
+                     FROM node_radio_events
+                    WHERE received_at >= '2026-01-01T00:00:00.000Z'::timestamptz AND (event_type LIKE 'CALL_GROUP%' OR event_type LIKE 'CALL_PATCH_GROUP%')
+                 ) d
+             )
+             SELECT bucket, SUM(n)::int AS n FROM r GROUP BY 1 ORDER BY 1"
+    `);
+    expect(overviewSeriesRollupSql(SEAM, 'day')).toMatchInlineSnapshot(`
+      "WITH r AS (
+               SELECT date_trunc('day', hour) AS bucket, calls AS n
+                 FROM node_radio_hourly WHERE hour >= date_trunc('hour', now()) - $1::interval AND hour < '2026-01-01T00:00:00.000Z'::timestamptz
+               UNION ALL
+               SELECT date_trunc('day', now()), COUNT(*)::int
+                 FROM (
+                   SELECT DISTINCT logical_call_id, node_id,
+                          COALESCE(system, 0) AS system, COALESCE(talkgroup, 0) AS talkgroup,
+                          COALESCE(site_rfss, -1) AS rfss, COALESCE(site_id, -1) AS site
+                     FROM node_radio_events
+                    WHERE received_at >= '2026-01-01T00:00:00.000Z'::timestamptz AND (event_type LIKE 'CALL_GROUP%' OR event_type LIKE 'CALL_PATCH_GROUP%')
+                 ) d
+             )
+             SELECT bucket, SUM(n)::int AS n FROM r GROUP BY 1 ORDER BY 1"
+    `);
+  });
 });
